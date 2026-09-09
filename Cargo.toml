@@ -1,0 +1,23 @@
+[package]
+name = "basr"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "basrd"
+path = "src/bin/barsd/main.rs"
+
+[dependencies]
+anyhow = "1"
+thiserror = { version = "2" };
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["fs", "process", "signal", "user"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+sd-notify = "0.5"
+tracing-journald = "0.3"
