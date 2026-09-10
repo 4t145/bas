@@ -22,6 +22,9 @@ use tracing_subscriber::EnvFilter;
 /// Environment variable used by [`Config::from_env`] to choose a backend.
 pub const BACKEND_ENV: &str = "BASRD_LOG_BACKEND";
 
+/// Identifier the daemon reports to journald by default.
+pub const DEFAULT_SYSLOG_IDENTIFIER: &str = "basrd";
+
 /// A destination for tracing events.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Backend {
@@ -104,6 +107,9 @@ impl Default for Config {
     }
 }
 
+/// The builder covers every logging option even though the daemon sets only a
+/// few; this module's tests exercise the whole facade.
+#[allow(dead_code)]
 impl Config {
     /// Creates a configuration for an explicitly selected backend.
     pub fn new(backend: Backend) -> Self {
@@ -136,6 +142,11 @@ impl Config {
 
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = filter.into();
+        self
+    }
+
+    pub fn with_backend(mut self, backend: Backend) -> Self {
+        self.backend = backend;
         self
     }
 

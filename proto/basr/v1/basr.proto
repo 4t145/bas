@@ -1,0 +1,238 @@
+// The wire protocol between basrd and its clients (basrctl, TUI, GUI).
+//
+// Field values are the daemon's normalized model (see `basr::model`), so
+// clients never learn whether a session is backed by the embedded agent or an
+// external ACP agent.
+
+syntax = "proto3";
+
+package basr.v1;
+
+// Daemon administration and session I/O.
+service Basr {
+  // Lists the agent backends this daemon can launch.
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  // Starts a session on a backend.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  // Lists live sessions.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  // Reads one session's metadata.
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  // Stops a session's backend and forgets it.
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+  // Attaches to a session: replays history, then streams live events until the
+  // client disconnects. Detaching never stops the agent.
+  rpc Attach(AttachRequest) returns (stream Event);
+  // Sends a user turn.
+  rpc Prompt(PromptRequest) returns (PromptResponse);
+  // Cancels the running turn.
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+  // Renames a session.
+  rpc SetTitle(SetTitleRequest) returns (SetTitleResponse);
+  // Loads a page of history by cursor.
+  rpc LoadHistory(LoadHistoryRequest) returns (LoadHistoryResponse);
+}
+
+// One configured agent backend.
+message Agent {
+  string id = 1;
+  // "embedded" or "acp".
+  string kind = 2;
+  // Command line for external backends, empty for the embedded one.
+  string command = 3;
+}
+
+message ListAgentsRequest {}
+
+message ListAgentsResponse {
+  repeated Agent agents = 1;
+}
+
+// Who created a session.
+message Owner {
+  string user = 1;
+  string host = 2;
+}
+
+// Lifecycle of a session.
+enum SessionStatus {
+  SESSION_STATUS_UNSPECIFIED = 0;
+  SESSION_STATUS_STARTING = 1;
+  SESSION_STATUS_IDLE = 2;
+  SESSION_STATUS_WORKING = 3;
+  SESSION_STATUS_STOPPED = 4;
+  SESSION_STATUS_FAILED = 5;
+}
+
+// A session's metadata, without its events.
+message Session {
+  string id = 1;
+  string agent = 2;
+  optional string title = 3;
+  Owner owner = 4;
+  optional string cwd = 5;
+  // Milliseconds since the Unix epoch.
+  uint64 created_at = 6;
+  uint64 updated_at = 7;
+  SessionStatus status = 8;
+}
+
+message CreateSessionRequest {
+  // Backend id, from ListAgents. Defaults to "embedded" when empty.
+  string agent = 1;
+  optional string title = 2;
+  optional string cwd = 3;
+  optional string owner_user = 4;
+  optional string owner_host = 5;
+}
+
+message CreateSessionResponse {
+  Session session = 1;
+}
+
+message ListSessionsRequest {}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+message GetSessionRequest {
+  string session = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message DeleteSessionRequest {
+  string session = 1;
+}
+
+message DeleteSessionResponse {}
+
+// A piece of user or agent content.
+message ContentBlock {
+  oneof block {
+    string text = 1;
+    string thinking = 2;
+    ToolCall tool_call = 3;
+    ResourceLink resource = 4;
+  }
+}
+
+message ResourceLink {
+  string uri = 1;
+  optional string name = 2;
+  optional string mime = 3;
+}
+
+message ToolCall {
+  string id = 1;
+  string title = 2;
+  string kind = 3;
+  ToolCallStatus status = 4;
+  optional string input_json = 5;
+  optional string output_json = 6;
+  repeated string locations = 7;
+}
+
+enum ToolCallStatus {
+  TOOL_CALL_STATUS_UNSPECIFIED = 0;
+  TOOL_CALL_STATUS_PENDING = 1;
+  TOOL_CALL_STATUS_IN_PROGRESS = 2;
+  TOOL_CALL_STATUS_COMPLETED = 3;
+  TOOL_CALL_STATUS_FAILED = 4;
+}
+
+message Message {
+  string id = 1;
+  // "user" or "agent".
+  string role = 2;
+  repeated ContentBlock content = 3;
+  uint64 at = 4;
+}
+
+message Delta {
+  string message = 1;
+  string role = 2;
+  // "text" or "thinking".
+  string kind = 3;
+  string text = 4;
+}
+
+message TurnStarted {
+  string turn = 1;
+}
+
+message TurnFinished {
+  string turn = 1;
+  // "end_turn", "max_tokens", "cancelled", "refusal", or "other".
+  string stop = 2;
+}
+
+message TitleChanged {
+  string title = 1;
+}
+
+message StatusChanged {
+  SessionStatus status = 1;
+}
+
+// One event in a session timeline.
+message Event {
+  string session = 1;
+  // Monotonic position; pass the last one seen back to Attach or LoadHistory.
+  uint64 cursor = 2;
+  uint64 at = 3;
+  oneof kind {
+    Delta delta = 10;
+    Message message = 11;
+    ToolCall tool_call = 12;
+    TurnStarted turn_started = 13;
+    TurnFinished turn_finished = 14;
+    TitleChanged title_changed = 15;
+    StatusChanged status_changed = 16;
+  }
+}
+
+message AttachRequest {
+  string session = 1;
+  // Resume strictly after this cursor. Absent means "the newest replay events".
+  optional uint64 cursor = 2;
+  // Replayable events to deliver first, or the page size when cursor is set.
+  uint32 replay = 3;
+}
+
+message PromptRequest {
+  string session = 1;
+  repeated ContentBlock content = 2;
+}
+
+message PromptResponse {
+  string turn = 1;
+}
+
+message CancelRequest {
+  string session = 1;
+}
+
+message CancelResponse {}
+
+message SetTitleRequest {
+  string session = 1;
+  string title = 2;
+}
+
+message SetTitleResponse {}
+
+message LoadHistoryRequest {
+  string session = 1;
+  optional uint64 after = 2;
+  uint32 limit = 3;
+}
+
+message LoadHistoryResponse {
+  repeated Event events = 1;
+  // Cursor to pass as `after` for the next page; absent at the end of history.
+  optional uint64 next = 2;
+}
