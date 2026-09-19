@@ -1,0 +1,18 @@
+[Unit]
+Description=BASR agent service
+Documentation=https://github.com/4t145/basr
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=@basrd@
+Restart=on-failure
+RestartSec=2s
+WatchdogSec=30s
+Environment=BASRD_LOG_BACKEND=journald
+Environment=BASRD_NOTIFY=auto
+Environment="PATH=%h/.local/bin:%h/.nix-profile/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=-%E/basr/basrd.env
+
+[Install]
+WantedBy=default.target

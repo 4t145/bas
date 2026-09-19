@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use basr::service::{Client, pb};
+use basr::{acp, service::Client};
 
 /// Sends a user turn and prints the turn id.
 ///
@@ -8,15 +8,12 @@ use basr::service::{Client, pb};
 /// Returns an error when the daemon rejects the prompt.
 pub(super) async fn send(client: &mut Client, session: &str, text: Vec<String>) -> Result<()> {
     let response = client
-        .prompt(pb::PromptRequest {
-            session: session.to_owned(),
-            content: vec![pb::ContentBlock {
-                block: Some(pb::content_block::Block::Text(text.join(" "))),
-            }],
-        })
+        .prompt_acp(&acp::PromptRequest::new(
+            session.to_owned(),
+            vec![text.join(" ").into()],
+        ))
         .await
-        .context("prompt failed")?
-        .into_inner();
+        .context("prompt failed")?;
 
     println!("turn {}", response.turn);
     Ok(())
@@ -29,9 +26,7 @@ pub(super) async fn send(client: &mut Client, session: &str, text: Vec<String>) 
 /// Returns an error when the daemon or the backend refuses to cancel.
 pub(super) async fn cancel(client: &mut Client, session: &str) -> Result<()> {
     client
-        .cancel(pb::CancelRequest {
-            session: session.to_owned(),
-        })
+        .cancel_acp(&acp::CancelNotification::new(session.to_owned()))
         .await
         .context("cancel failed")?;
 

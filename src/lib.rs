@@ -1,18 +1,15 @@
 //! BASR — a Basic Agent Service in Rust.
 //!
-//! This crate is the shared implementation behind the `basrd` daemon and the
-//! `basrctl` management tool:
+//! Shared types and client support for `basrd`, `basrctl`, and future frontends:
 //!
-//! * [`model`] — backend-neutral domain types (the `d` layer).
-//! * [`agent`] — agent backends and the drivers that start them.
-//! * [`session`] — session lifecycle, attach/detach, replay, and history.
-//! * [`service`] — the gRPC surface exposed to clients.
-//! * [`notify`] — desktop notifications and completion watchers.
-//! * [`config`] — daemon configuration read from the environment.
+//! * [`model`] — daemon lifecycle, replay envelopes and client presentation types.
+//! * [`service`] — gRPC envelopes, ACP payloads, and client connections.
+//!
+//! Backend drivers, session management, configuration, notifications, and the
+//! gRPC service implementation belong to the `basrd` binary.
 
-pub mod agent;
-pub mod config;
 pub mod model;
-pub mod notify;
 pub mod service;
-pub mod session;
+
+/// ACP schema supplied by agent-client-protocol 2.x (the negotiated v1 protocol).
+pub use agent_client_protocol::schema::v1 as acp;

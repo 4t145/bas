@@ -93,7 +93,7 @@ impl AgentId {
 
 impl fmt::Display for AgentId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        self.0.fmt(formatter)
     }
 }
 

@@ -1,8 +1,7 @@
 // The wire protocol between basrd and its clients (basrctl, TUI, GUI).
 //
-// Field values are the daemon's normalized model (see `basr::model`), so
-// clients never learn whether a session is backed by the embedded agent or an
-// external ACP agent.
+// ACP payloads are canonical JSON serialized by agent-client-protocol.
+// Protobuf only defines daemon management, routing and replay envelopes.
 
 syntax = "proto3";
 
@@ -23,10 +22,17 @@ service Basr {
   // Attaches to a session: replays history, then streams live events until the
   // client disconnects. Detaching never stops the agent.
   rpc Attach(AttachRequest) returns (stream Event);
+  // Tracks the session currently viewed in an active client window. Closing
+  // this stream releases its foreground state without affecting agent work.
+  rpc SetForeground(stream ForegroundRequest) returns (stream ForegroundResponse);
   // Sends a user turn.
-  rpc Prompt(PromptRequest) returns (PromptResponse);
+  rpc Prompt(AcpPayload) returns (TurnAccepted);
   // Cancels the running turn.
-  rpc Cancel(CancelRequest) returns (CancelResponse);
+  rpc Cancel(AcpPayload) returns (CancelResponse);
+  // ACP session/set_config_option request and response.
+  rpc SetConfigOption(AcpPayload) returns (AcpPayload);
+  // ACP session/set_mode request and response.
+  rpc SetMode(AcpPayload) returns (AcpPayload);
   // Renames a session.
   rpc SetTitle(SetTitleRequest) returns (SetTitleResponse);
   // Loads a page of history by cursor.
@@ -75,6 +81,12 @@ message Session {
   uint64 created_at = 6;
   uint64 updated_at = 7;
   SessionStatus status = 8;
+  // ACP InitializeResponse.
+  AcpPayload initialization = 9;
+  // ACP NewSessionResponse with current modes/configOptions.
+  AcpPayload acp = 10;
+  // Latest ACP AvailableCommandsUpdate, retained beyond the history window.
+  AcpPayload available_commands = 11;
 }
 
 message CreateSessionRequest {
@@ -110,54 +122,10 @@ message DeleteSessionRequest {
 
 message DeleteSessionResponse {}
 
-// A piece of user or agent content.
-message ContentBlock {
-  oneof block {
-    string text = 1;
-    string thinking = 2;
-    ToolCall tool_call = 3;
-    ResourceLink resource = 4;
-  }
-}
-
-message ResourceLink {
-  string uri = 1;
-  optional string name = 2;
-  optional string mime = 3;
-}
-
-message ToolCall {
-  string id = 1;
-  string title = 2;
-  string kind = 3;
-  ToolCallStatus status = 4;
-  optional string input_json = 5;
-  optional string output_json = 6;
-  repeated string locations = 7;
-}
-
-enum ToolCallStatus {
-  TOOL_CALL_STATUS_UNSPECIFIED = 0;
-  TOOL_CALL_STATUS_PENDING = 1;
-  TOOL_CALL_STATUS_IN_PROGRESS = 2;
-  TOOL_CALL_STATUS_COMPLETED = 3;
-  TOOL_CALL_STATUS_FAILED = 4;
-}
-
-message Message {
-  string id = 1;
-  // "user" or "agent".
-  string role = 2;
-  repeated ContentBlock content = 3;
-  uint64 at = 4;
-}
-
-message Delta {
-  string message = 1;
-  string role = 2;
-  // "text" or "thinking".
-  string kind = 3;
-  string text = 4;
+// Canonical ACP JSON. Use the SDK schema named by each field or RPC.
+// bytes preserves JSON numbers and extension metadata without Struct conversion.
+message AcpPayload {
+  bytes json = 1;
 }
 
 message TurnStarted {
@@ -166,8 +134,12 @@ message TurnStarted {
 
 message TurnFinished {
   string turn = 1;
-  // "end_turn", "max_tokens", "cancelled", "refusal", or "other".
-  string stop = 2;
+  reserved 2;
+  // Exactly one outcome: ACP PromptResponse or a daemon failure.
+  oneof outcome {
+    AcpPayload response = 3;
+    string error = 4;
+  }
 }
 
 message TitleChanged {
@@ -178,20 +150,25 @@ message StatusChanged {
   SessionStatus status = 1;
 }
 
+message Failed {
+  string message = 1;
+}
+
 // One event in a session timeline.
 message Event {
   string session = 1;
   // Monotonic position; pass the last one seen back to Attach or LoadHistory.
   uint64 cursor = 2;
   uint64 at = 3;
+  reserved 10, 11, 12;
   oneof kind {
-    Delta delta = 10;
-    Message message = 11;
-    ToolCall tool_call = 12;
+    // ACP SessionUpdate, including content, tools, plans, commands and options.
+    AcpPayload acp_update = 18;
     TurnStarted turn_started = 13;
     TurnFinished turn_finished = 14;
     TitleChanged title_changed = 15;
     StatusChanged status_changed = 16;
+    Failed failed = 17;
   }
 }
 
@@ -199,21 +176,22 @@ message AttachRequest {
   string session = 1;
   // Resume strictly after this cursor. Absent means "the newest replay events".
   optional uint64 cursor = 2;
-  // Replayable events to deliver first, or the page size when cursor is set.
+  // Recent replayable events when cursor is absent. With cursor, all retained
+  // events after it are replayed; an expired cursor returns DATA_LOSS.
   uint32 replay = 3;
 }
 
-message PromptRequest {
-  string session = 1;
-  repeated ContentBlock content = 2;
+message ForegroundRequest {
+  // Absent when the window is inactive or no session is selected.
+  optional string session = 1;
 }
 
-message PromptResponse {
+// Acknowledges that the foreground state has been applied.
+message ForegroundResponse {}
+
+// Prompt completion arrives asynchronously in TurnFinished.
+message TurnAccepted {
   string turn = 1;
-}
-
-message CancelRequest {
-  string session = 1;
 }
 
 message CancelResponse {}
@@ -227,6 +205,8 @@ message SetTitleResponse {}
 
 message LoadHistoryRequest {
   string session = 1;
+  // Absent starts at the oldest retained event. An explicitly supplied cursor
+  // must still be recoverable, otherwise the server returns DATA_LOSS.
   optional uint64 after = 2;
   uint32 limit = 3;
 }

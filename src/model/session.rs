@@ -30,7 +30,10 @@ impl Owner {
 }
 
 /// Lifecycle of a session, as observed by attached clients.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, strum::Display, strum::EnumString,
+)]
+#[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum SessionStatus {
     /// The backend is still starting up.
@@ -62,6 +65,13 @@ pub struct SessionMeta {
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub status: SessionStatus,
+    /// Agent capabilities, authentication methods and implementation information.
+    pub initialization: Option<crate::acp::InitializeResponse>,
+    /// Current ACP options and modes, with the public daemon session id.
+    pub acp: Option<crate::acp::NewSessionResponse>,
+    /// Latest command catalog, independent of the bounded event history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_commands: Option<crate::acp::AvailableCommandsUpdate>,
 }
 
 impl SessionMeta {
@@ -78,6 +88,9 @@ impl SessionMeta {
             created_at: now,
             updated_at: now,
             status: SessionStatus::Starting,
+            initialization: None,
+            acp: None,
+            available_commands: None,
         }
     }
 
@@ -85,5 +98,33 @@ impl SessionMeta {
     pub fn set_status(&mut self, status: SessionStatus) {
         self.status = status;
         self.updated_at = Timestamp::now();
+    }
+}
+
+impl SessionMeta {
+    /// Applies ACP state updates so newly attached clients see current configuration.
+    pub fn apply_acp(&mut self, update: &crate::acp::SessionUpdate) {
+        use crate::acp::SessionUpdate;
+        match update {
+            SessionUpdate::AvailableCommandsUpdate(update) => {
+                self.available_commands = Some(update.clone());
+            }
+            SessionUpdate::SessionInfoUpdate(info) => {
+                if !info.title.is_undefined() {
+                    self.title = info.title.clone().take();
+                }
+            }
+            SessionUpdate::ConfigOptionUpdate(update) => {
+                self.acp
+                    .get_or_insert_with(|| crate::acp::NewSessionResponse::new(self.id.to_string()))
+                    .config_options = Some(update.config_options.clone());
+            }
+            SessionUpdate::CurrentModeUpdate(update) => {
+                if let Some(modes) = self.acp.as_mut().and_then(|info| info.modes.as_mut()) {
+                    modes.current_mode_id = update.current_mode_id.clone();
+                }
+            }
+            _ => {}
+        }
     }
 }

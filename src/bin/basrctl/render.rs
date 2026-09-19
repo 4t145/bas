@@ -7,6 +7,7 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 use basr::{
+    acp,
     model::{self, EventKind},
     service::pb,
 };
@@ -28,97 +29,181 @@ pub fn agents(agents: &[pb::Agent]) {
 }
 
 /// Prints one line per session.
-pub fn sessions(sessions: &[pb::Session]) {
+///
+/// # Errors
+/// Returns an error if the daemon sends malformed session metadata.
+pub fn sessions(sessions: &[pb::Session]) -> Result<()> {
     if sessions.is_empty() {
         println!("no sessions");
-        return;
+        return Ok(());
     }
 
     for session in sessions {
-        println!("{}", session_line(session));
+        let session = model::SessionMeta::try_from(session.clone())
+            .context("malformed session from the daemon")?;
+        println!(
+            "{}  {:<9} {:<10} {}",
+            session.id,
+            session.status,
+            session.agent,
+            session.title.as_deref().unwrap_or("-")
+        );
     }
+    Ok(())
 }
 
 /// Prints a session's metadata, one field per line.
-pub fn session(session: &pb::Session) {
+///
+/// # Errors
+/// Returns an error if the daemon sends malformed session metadata.
+pub fn session(session: &pb::Session) -> Result<()> {
+    let session = model::SessionMeta::try_from(session.clone())
+        .context("malformed session from the daemon")?;
     println!("id        {}", session.id);
     println!("agent     {}", session.agent);
-    println!("status    {}", status_name(session.status));
+    println!("status    {}", session.status);
     println!("title     {}", session.title.as_deref().unwrap_or("-"));
-    println!("cwd       {}", session.cwd.as_deref().unwrap_or("-"));
-    if let Some(owner) = &session.owner {
-        println!("owner     {}@{}", owner.user, owner.host);
-    }
-    println!("created   {}", session.created_at);
-    println!("updated   {}", session.updated_at);
+    println!(
+        "cwd       {}",
+        session
+            .cwd
+            .as_deref()
+            .unwrap_or(std::path::Path::new("-"))
+            .display()
+    );
+    println!("owner     {}@{}", session.owner.user, session.owner.host);
+    println!("created   {}", session.created_at.millis());
+    println!("updated   {}", session.updated_at.millis());
+    Ok(())
 }
 
-/// Prints an event, streaming deltas inline and everything else as its own
-/// line.
-pub fn event(event: &pb::Event) -> Result<()> {
-    let decoded =
-        model::Event::try_from(event.clone()).context("malformed event from the daemon")?;
-    let mut stdout = std::io::stdout();
+/// Renders consecutive ACP chunks together while keeping user, thought and agent output distinct.
+#[derive(Default)]
+pub struct Timeline {
+    role: Option<model::Role>,
+}
 
-    match &decoded.kind {
-        EventKind::Delta(delta) => {
-            let text = match &delta.block {
-                model::DeltaBlock::Text { text } | model::DeltaBlock::Thinking { text } => text,
-            };
-            write!(stdout, "{text}").context("cannot write to stdout")?;
-        }
-        EventKind::Message(message) => {
-            let role = match message.role {
-                model::Role::User => "user",
-                model::Role::Agent => "agent",
-            };
-            writeln!(
-                stdout,
-                "{:>6} {role:>5} {}",
-                decoded.cursor,
-                message.plain_text()
-            )
-            .context("cannot write to stdout")?;
-        }
-        EventKind::ToolCall(call) => {
-            writeln!(
-                stdout,
-                "{:>6} tool  {} [{}]",
-                decoded.cursor,
-                call.title,
-                tool_status(call.status)
-            )
-            .context("cannot write to stdout")?;
-        }
-        EventKind::TurnStarted { turn } => {
-            writeln!(stdout, "{:>6} ---- turn {turn} started", decoded.cursor)
-                .context("cannot write to stdout")?;
-        }
-        EventKind::TurnFinished { turn, stop } => {
-            writeln!(
-                stdout,
-                "{:>6} ---- turn {turn} finished ({})",
-                decoded.cursor,
-                stop_name(*stop)
-            )
-            .context("cannot write to stdout")?;
-        }
-        EventKind::TitleChanged { title } => {
-            writeln!(stdout, "{:>6} ---- title {title:?}", decoded.cursor)
-                .context("cannot write to stdout")?;
-        }
-        EventKind::StatusChanged { status } => {
-            writeln!(
-                stdout,
-                "{:>6} ---- status {}",
-                decoded.cursor,
-                status_label(*status)
-            )
-            .context("cannot write to stdout")?;
-        }
+impl Timeline {
+    /// # Errors
+    /// Returns an error when the event cannot be decoded or stdout cannot be written.
+    pub fn event(&mut self, event: &pb::Event) -> Result<()> {
+        let decoded =
+            model::Event::try_from(event.clone()).context("malformed event from the daemon")?;
+        self.write_event(&decoded, &mut std::io::stdout())
     }
 
-    stdout.flush().context("cannot flush stdout")
+    /// # Errors
+    /// Returns an error when the final newline cannot be written.
+    pub fn finish(&mut self) -> Result<()> {
+        self.end_line(&mut std::io::stdout())
+    }
+
+    fn end_line(&mut self, stdout: &mut impl Write) -> Result<()> {
+        if self.role.take().is_some() {
+            writeln!(stdout)?;
+        }
+        Ok(())
+    }
+
+    fn write_event(&mut self, decoded: &model::Event, stdout: &mut impl Write) -> Result<()> {
+        let chunk = match &decoded.kind {
+            EventKind::Acp(acp::SessionUpdate::UserMessageChunk(chunk)) => {
+                Some((model::Role::User, chunk))
+            }
+            EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(chunk)) => {
+                Some((model::Role::Agent, chunk))
+            }
+            EventKind::Acp(acp::SessionUpdate::AgentThoughtChunk(chunk)) => {
+                Some((model::Role::Thought, chunk))
+            }
+            _ => None,
+        };
+        if let Some((role, chunk)) = chunk
+            && let acp::ContentBlock::Text(text) = &chunk.content
+        {
+            if self.role != Some(role) {
+                self.end_line(stdout)?;
+                write!(stdout, "{:>6} {:>7} ", decoded.cursor, role)?;
+                self.role = Some(role);
+            }
+            write!(stdout, "{}", text.text)?;
+            return stdout.flush().context("cannot flush stdout");
+        }
+        self.end_line(stdout)?;
+
+        match &decoded.kind {
+            EventKind::Failed { message } => {
+                writeln!(stdout, "{:>6} ---- failed: {message}", decoded.cursor)
+                    .context("cannot write to stdout")?;
+            }
+            EventKind::Acp(update) => match update {
+                acp::SessionUpdate::AgentMessageChunk(chunk)
+                | acp::SessionUpdate::AgentThoughtChunk(chunk)
+                | acp::SessionUpdate::UserMessageChunk(chunk) => match &chunk.content {
+                    acp::ContentBlock::Text(text) => write!(stdout, "{}", text.text)?,
+                    acp::ContentBlock::ResourceLink(link) => {
+                        writeln!(stdout, "[{}]({})", link.name, link.uri)?
+                    }
+                    acp::ContentBlock::Image(image) => {
+                        writeln!(stdout, "[image: {}]", image.mime_type)?
+                    }
+                    acp::ContentBlock::Audio(audio) => {
+                        writeln!(stdout, "[audio: {}]", audio.mime_type)?
+                    }
+                    content => writeln!(stdout, "{}", serde_json::to_string(content)?)?,
+                },
+                acp::SessionUpdate::ToolCall(call) => writeln!(
+                    stdout,
+                    "{:>6} tool {} [{}]",
+                    decoded.cursor,
+                    call.title,
+                    enum_name(&call.status)?
+                )?,
+                acp::SessionUpdate::ToolCallUpdate(call) => writeln!(
+                    stdout,
+                    "{:>6} tool {} [{}]",
+                    decoded.cursor,
+                    call.tool_call_id,
+                    call.fields
+                        .status
+                        .as_ref()
+                        .map(enum_name)
+                        .transpose()?
+                        .unwrap_or_else(|| "update".into())
+                )?,
+                update => writeln!(stdout, "{}", serde_json::to_string(update)?)?,
+            },
+            EventKind::TurnStarted { turn } => {
+                writeln!(stdout, "{:>6} ---- turn {turn} started", decoded.cursor)
+                    .context("cannot write to stdout")?;
+            }
+            EventKind::TurnFinished { turn, result } => {
+                let stop = match result {
+                    Ok(response) => serde_json::to_value(response.stop_reason)?
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_owned(),
+                    Err(error) => format!("error: {error}"),
+                };
+                writeln!(
+                    stdout,
+                    "{:>6} ---- turn {turn} finished ({stop})",
+                    decoded.cursor
+                )
+                .context("cannot write to stdout")?;
+            }
+            EventKind::TitleChanged { title } => {
+                writeln!(stdout, "{:>6} ---- title {title:?}", decoded.cursor)
+                    .context("cannot write to stdout")?;
+            }
+            EventKind::StatusChanged { status } => {
+                writeln!(stdout, "{:>6} ---- status {status}", decoded.cursor)
+                    .context("cannot write to stdout")?;
+            }
+        }
+
+        stdout.flush().context("cannot flush stdout")
+    }
 }
 
 /// Prints a cursor hint after a history page.
@@ -128,52 +213,12 @@ pub fn next_cursor(next: Option<u64>) {
     }
 }
 
-fn session_line(session: &pb::Session) -> String {
-    format!(
-        "{}  {:<9} {:<10} {}",
-        session.id,
-        status_name(session.status),
-        session.agent,
-        session.title.as_deref().unwrap_or("-")
-    )
+fn enum_name(value: &impl serde::Serialize) -> Result<String> {
+    Ok(serde_json::to_value(value)?
+        .as_str()
+        .unwrap_or("unknown")
+        .to_owned())
 }
 
-fn status_name(status: i32) -> &'static str {
-    match pb::SessionStatus::try_from(status) {
-        Ok(pb::SessionStatus::Starting) => "starting",
-        Ok(pb::SessionStatus::Idle) => "idle",
-        Ok(pb::SessionStatus::Working) => "working",
-        Ok(pb::SessionStatus::Stopped) => "stopped",
-        Ok(pb::SessionStatus::Failed) => "failed",
-        Ok(pb::SessionStatus::Unspecified) | Err(_) => "unknown",
-    }
-}
-
-fn status_label(status: model::SessionStatus) -> &'static str {
-    match status {
-        model::SessionStatus::Starting => "starting",
-        model::SessionStatus::Idle => "idle",
-        model::SessionStatus::Working => "working",
-        model::SessionStatus::Stopped => "stopped",
-        model::SessionStatus::Failed => "failed",
-    }
-}
-
-fn stop_name(stop: model::StopReason) -> &'static str {
-    match stop {
-        model::StopReason::EndTurn => "end_turn",
-        model::StopReason::MaxTokens => "max_tokens",
-        model::StopReason::Cancelled => "cancelled",
-        model::StopReason::Refusal => "refusal",
-        model::StopReason::Other => "other",
-    }
-}
-
-fn tool_status(status: model::ToolCallStatus) -> &'static str {
-    match status {
-        model::ToolCallStatus::Pending => "pending",
-        model::ToolCallStatus::InProgress => "running",
-        model::ToolCallStatus::Completed => "done",
-        model::ToolCallStatus::Failed => "failed",
-    }
-}
+#[cfg(test)]
+mod tests;

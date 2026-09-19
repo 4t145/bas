@@ -3,14 +3,19 @@ use serde::{Deserialize, Serialize};
 use super::{ContentBlock, MessageId, Timestamp};
 
 /// Who produced a message.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, strum::Display, strum::EnumString,
+)]
+#[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     User,
     Agent,
+    Thought,
 }
 
-/// A completed message inside a session.
+/// A client presentation message assembled from ACP content chunks.
+/// This type is never sent over RPC.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,
@@ -41,7 +46,7 @@ impl Message {
     /// Creates a single-block text message with a fresh identifier.
     #[must_use]
     pub fn text(role: Role, text: impl Into<String>) -> Self {
-        Self::new(role, vec![ContentBlock::text(text)])
+        Self::new(role, vec![ContentBlock::from(text.into())])
     }
 
     /// Concatenates every text block, ignoring non-text content.
@@ -50,7 +55,7 @@ impl Message {
         self.content
             .iter()
             .filter_map(|block| match block {
-                ContentBlock::Text(text) | ContentBlock::Thinking(text) => Some(text.text.as_str()),
+                ContentBlock::Text(text) => Some(text.text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>()

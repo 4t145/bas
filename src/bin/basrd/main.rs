@@ -5,7 +5,12 @@
 //! under systemd: logs go to journald, readiness is signalled with `sd_notify`,
 //! and `WatchdogSec=` is honored.
 
+mod agent;
 mod clap;
+mod config;
+mod notify;
+mod service;
+mod session;
 mod system;
 mod tracing;
 
@@ -13,11 +18,11 @@ use std::sync::Arc;
 
 use ::clap::Parser;
 use anyhow::{Context, Result};
-use basr::{
-    agent::{Catalog, Driver, Kind, LocalHost, PermissionPolicy, acp, embedded},
-    config::{Config, Notify},
-    notify::{self, Dbus, Notifier},
-    service,
+
+use crate::{
+    agent::{Catalog, LocalHost},
+    config::Config,
+    notify::Watcher,
     session::Registry,
 };
 
@@ -26,10 +31,10 @@ async fn main() -> Result<()> {
     let args = clap::Args::parse();
     let config = args.config()?;
 
-    let backend = tracing::init(
-        args.tracing()?
-            .with_syslog_identifier(tracing::DEFAULT_SYSLOG_IDENTIFIER),
-    )?;
+    let backend = args
+        .tracing()
+        .with_syslog_identifier(tracing::DEFAULT_SYSLOG_IDENTIFIER)
+        .init()?;
 
     ::tracing::info!(
         backend = %backend,
@@ -43,88 +48,60 @@ async fn main() -> Result<()> {
 
 /// Builds the daemon's runtime and serves until a shutdown signal arrives.
 async fn run(config: Config) -> Result<()> {
-    let catalog = Arc::new(catalog(&config)?);
-    let registry = Arc::new(Registry::new(
-        catalog,
-        Arc::new(LocalHost::new(PermissionPolicy::Allow)),
+    let shutdown = system::shutdown_signal().context("cannot install shutdown handlers")?;
+    let watcher = Watcher::connect(config.notify).await?;
+    let mut registry = Registry::new(
+        Arc::new(Catalog::from_specs(config.agents)?),
+        Arc::new(LocalHost::new(config.permissions)),
         config.limits,
-    ));
-
-    let watcher = match notifier(config.notify).await {
-        Some(notifier) => Some(notify::watch_completions(Arc::clone(&registry), notifier)),
-        None => {
-            ::tracing::info!("desktop notifications are disabled");
-            None
-        }
-    };
-
+    );
+    if let Some(watcher) = &watcher {
+        registry = registry.with_completions(watcher.sender.clone());
+    }
+    let registry = Arc::new(registry);
     let listener = tokio::net::TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("cannot listen on {}", config.listen))?;
     let local = listener
         .local_addr()
         .context("cannot read the bound address")?;
-
+    let stopping = tokio_util::sync::CancellationToken::new();
+    let server = tonic::transport::Server::builder()
+        .add_service(service::Service::new(Arc::clone(&registry)).into_server())
+        .serve_with_incoming_shutdown(
+            tokio_stream::wrappers::TcpListenerStream::new(listener),
+            stopping.clone().cancelled_owned(),
+        );
+    tokio::pin!(server);
     let watchdog = system::spawn_watchdog();
     system::ready();
     ::tracing::info!(address = %local, "serving the basr.v1.Basr service");
-
-    let result = tonic::transport::Server::builder()
-        .add_service(service::Service::new(registry).into_server())
-        .serve_with_incoming_shutdown(
-            tokio_stream::wrappers::TcpListenerStream::new(listener),
-            async {
-                let _ = system::shutdown_signal().await;
-                // Attached clients hold long-lived streams, so bound the drain.
-                tokio::spawn(async {
-                    tokio::time::sleep(system::SHUTDOWN_GRACE).await;
-                    ::tracing::warn!("shutdown grace expired; exiting");
-                    std::process::exit(0);
-                });
-            },
-        )
-        .await
-        .context("the gRPC server failed");
-
+    let (server_result, signal_result) = tokio::select! {
+        result = &mut server => (Some(result), Ok(())),
+        result = shutdown => (None, result),
+    };
     system::stopping();
+    stopping.cancel();
+    let cleanup = async {
+        let finish_server = async {
+            match server_result {
+                Some(result) => result,
+                None => server.await,
+            }
+        };
+        let (_, result) = tokio::join!(registry.shutdown(), finish_server);
+        if let Some(watcher) = watcher {
+            watcher.shutdown().await;
+        }
+        result.context("the gRPC server failed")
+    };
+    let result = tokio::time::timeout(system::SHUTDOWN_GRACE, cleanup)
+        .await
+        .context("shutdown grace expired")?;
     if let Some(watchdog) = watchdog {
         watchdog.abort();
+        let _ = watchdog.await;
     }
-    if let Some(watcher) = watcher {
-        watcher.abort();
-    }
-
+    signal_result.context("shutdown signal failed")?;
     result
-}
-
-/// Builds the catalog of launchable agent backends.
-fn catalog(config: &Config) -> Result<Catalog> {
-    let mut catalog = Catalog::new();
-
-    for spec in &config.agents {
-        let driver: Arc<dyn Driver> = match spec.kind {
-            Kind::Embedded => Arc::new(embedded::Driver::new()),
-            Kind::Acp => Arc::new(acp::Driver::new()),
-        };
-
-        catalog
-            .insert(spec.clone(), driver)
-            .with_context(|| format!("cannot configure agent {}", spec.id))?;
-    }
-
-    Ok(catalog)
-}
-
-/// Connects the notifier named by the configuration, if any.
-async fn notifier(policy: Notify) -> Option<Arc<dyn Notifier>> {
-    match policy {
-        Notify::Never => None,
-        Notify::Auto | Notify::Always => match Dbus::connect().await {
-            Ok(notifier) => Some(Arc::new(notifier)),
-            Err(error) => {
-                ::tracing::warn!(%error, "no desktop session bus; notifications are off");
-                None
-            }
-        },
-    }
 }

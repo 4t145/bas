@@ -24,9 +24,11 @@ pub(super) async fn page(
         .context("load history failed")?
         .into_inner();
 
+    let mut timeline = render::Timeline::default();
     for event in &response.events {
-        render::event(event)?;
+        timeline.event(event)?;
     }
+    timeline.finish()?;
     render::next_cursor(response.next);
 
     Ok(())

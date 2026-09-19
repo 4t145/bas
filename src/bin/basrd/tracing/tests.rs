@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use super::{Backend, Config, resolve_auto_backend};
+use super::{Backend, Config};
 
 #[test]
 fn parses_backend_names_case_insensitively() {
@@ -59,8 +59,8 @@ fn validates_filter_before_global_initialization() {
 
 #[test]
 fn auto_uses_journald_only_when_supported_and_connected() {
-    assert_eq!(resolve_auto_backend(true, true), Backend::Journald);
-    assert_eq!(resolve_auto_backend(false, true), Backend::Stdout);
-    assert_eq!(resolve_auto_backend(true, false), Backend::Stdout);
-    assert_eq!(resolve_auto_backend(false, false), Backend::Stdout);
+    assert_eq!(Backend::for_environment(true, true), Backend::Journald);
+    assert_eq!(Backend::for_environment(false, true), Backend::Stdout);
+    assert_eq!(Backend::for_environment(true, false), Backend::Stdout);
+    assert_eq!(Backend::for_environment(false, false), Backend::Stdout);
 }

@@ -1,0 +1,16 @@
+[
+  {"sessionUpdate":"agent_message_chunk","content":{"type":"image","data":"aW1hZ2U=","mimeType":"image/png","annotations":{"audience":["user"],"priority":0.8},"_meta":{"asset":{"id":9007199254740993}}},"_meta":{"chunk":1}},
+  {"sessionUpdate":"agent_message_chunk","content":{"type":"resource","resource":{"uri":"file:///report.txt","mimeType":"text/plain","text":"完整文件\n第二行","_meta":{"version":2}},"_meta":{"source":"attachment"}}},
+  {"sessionUpdate":"agent_message_chunk","content":{"type":"resource","resource":{"uri":"file:///data.bin","mimeType":"application/octet-stream","blob":"AAEC"}}},
+  {"sessionUpdate":"agent_message_chunk","content":{"type":"audio","data":"YXVkaW8=","mimeType":"audio/wav"}},
+  {"sessionUpdate":"agent_message_chunk","content":{"type":"resource_link","uri":"file:///report.txt","name":"report","mimeType":"text/plain","description":"output file","size":42}},
+  {"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking","_meta":{"visible":true}}},
+  {"sessionUpdate":"tool_call","toolCallId":"read","title":"read file","kind":"read","status":"pending","rawInput":{"path":"report.txt"},"locations":[{"path":"/tmp/report.txt","line":12}],"content":[{"type":"content","content":{"type":"text","text":"result"}}],"_meta":{"tool":"metadata"}},
+  {"sessionUpdate":"tool_call_update","toolCallId":"read","status":"completed","rawOutput":{"count":9007199254740993},"content":[{"type":"diff","path":"/tmp/report.txt","oldText":"before","newText":"after"}],"_meta":{"update":"metadata"}},
+  {"sessionUpdate":"config_option_update","configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"fast","options":[{"value":"fast","name":"Fast"},{"value":"deep","name":"Deep"}]},{"id":"enabled","name":"Enabled","type":"boolean","currentValue":true}],"_meta":{"revision":3}},
+  {"sessionUpdate":"current_mode_update","currentModeId":"code"},
+  {"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes","input":{"hint":"files"}}]},
+  {"sessionUpdate":"plan","entries":[{"content":"Read files","priority":"high","status":"in_progress"}]},
+  {"sessionUpdate":"usage_update","used":100,"size":1000},
+  {"sessionUpdate":"session_info_update","title":"renamed","_meta":{"custom":"state"}}
+]

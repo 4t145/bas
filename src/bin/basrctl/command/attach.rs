@@ -26,9 +26,10 @@ pub(super) async fn run(
         .context("attach failed")?
         .into_inner();
 
+    let mut timeline = render::Timeline::default();
     while let Some(event) = events.next().await {
-        render::event(&event.context("the event stream failed")?)?;
+        timeline.event(&event.context("the event stream failed")?)?;
     }
 
-    Ok(())
+    timeline.finish()
 }

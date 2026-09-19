@@ -1,0 +1,8 @@
+{
+  "name": "basr-pi-acp",
+  "version": "0.0.32",
+  "private": true,
+  "dependencies": {
+    "pi-acp": "0.0.32"
+  }
+}

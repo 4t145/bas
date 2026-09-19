@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 #[command(name = "basrctl", version, about, long_about = None)]
 pub struct Args {
     /// Address of the daemon's gRPC service.
-    #[arg(long, global = true, default_value = basr::config::DEFAULT_LISTEN)]
+    #[arg(long, global = true, default_value = basr::service::DEFAULT_ADDRESS)]
     pub server: SocketAddr,
 
     #[command(subcommand)]
@@ -34,7 +34,7 @@ pub enum Command {
         #[arg(long)]
         cursor: Option<u64>,
         /// Replayable events to print before live ones.
-        #[arg(long, default_value_t = basr::session::DEFAULT_REPLAY)]
+        #[arg(long, default_value_t = basr::service::DEFAULT_REPLAY)]
         replay: usize,
     },
 

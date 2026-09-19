@@ -1,78 +1,85 @@
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    num::{NonZeroU64, NonZeroUsize},
+    path::PathBuf,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
-use basr::config::{self, Config};
+use basr::service::DEFAULT_ADDRESS;
 use clap::Parser;
+
+use crate::{
+    agent::PermissionPolicy,
+    config::{self, Config, Notify},
+    session::{DEFAULT_BUFFER, DEFAULT_HISTORY, DEFAULT_STARTUP_TIMEOUT, Limits},
+};
 
 /// BASR agent service daemon.
 #[derive(Clone, Debug, Parser)]
 #[command(name = "basrd", version, about, long_about = None)]
 pub struct Args {
     /// Address the gRPC service listens on.
-    #[arg(long, value_name = "ADDR:PORT")]
-    listen: Option<SocketAddr>,
-
+    #[arg(long, env = config::LISTEN_ENV, default_value = DEFAULT_ADDRESS, value_name = "ADDR:PORT")]
+    listen: SocketAddr,
     /// Agent catalog, for example `embedded;opencode=acp:opencode acp`.
-    #[arg(long, value_name = "SPEC")]
+    #[arg(long, env = config::AGENTS_ENV, value_name = "SPEC")]
     agents: Option<String>,
-
-    /// Desktop notification policy: auto, always, or never.
-    #[arg(long, value_name = "POLICY")]
-    notify: Option<String>,
-
-    /// Replayable events kept per session.
-    #[arg(long, value_name = "COUNT")]
-    history: Option<usize>,
-
+    /// JSON agent catalog; defaults to $XDG_CONFIG_HOME/basr/agents.json.
+    #[arg(long, env = config::AGENTS_FILE_ENV, value_name = "PATH")]
+    agents_file: Option<PathBuf>,
+    /// Desktop notification policy: auto, always (required), or never.
+    #[arg(long, env = config::NOTIFY_ENV, default_value = "auto")]
+    notify: Notify,
+    /// Replayable events kept per session; must be greater than zero.
+    #[arg(long, env = config::HISTORY_ENV, default_value_t = NonZeroUsize::new(DEFAULT_HISTORY).expect("nonzero default"))]
+    history: NonZeroUsize,
+    /// Backend queue and live broadcast capacities; must be greater than zero.
+    #[arg(long, env = config::BUFFER_ENV, default_value_t = NonZeroUsize::new(DEFAULT_BUFFER).expect("nonzero default"))]
+    buffer: NonZeroUsize,
+    /// Maximum backend startup time in seconds.
+    #[arg(long, env = config::STARTUP_TIMEOUT_ENV, default_value_t = NonZeroU64::new(DEFAULT_STARTUP_TIMEOUT).expect("nonzero default"))]
+    startup_timeout: NonZeroU64,
+    /// Fixed response to backend permission requests.
+    #[arg(long, env = config::PERMISSIONS_ENV, value_enum, default_value = "deny")]
+    permissions: PermissionPolicy,
     /// Tracing backend: auto, stdout, or journald.
-    #[arg(long, value_name = "BACKEND")]
-    log_backend: Option<String>,
-
-    /// Tracing filter, for example `basr=debug`.
-    #[arg(long, value_name = "FILTER")]
-    log_filter: Option<String>,
+    #[arg(long, env = crate::tracing::BACKEND_ENV, default_value = "auto")]
+    log_backend: crate::tracing::Backend,
+    /// Tracing filter, for example `basrd=debug`.
+    #[arg(long, env = "RUST_LOG", default_value = "info")]
+    log_filter: String,
 }
 
 impl Args {
-    /// Merges command-line flags over the environment-derived configuration.
+    /// Clap selects command-line values before environment values are parsed.
     ///
     /// # Errors
-    ///
-    /// Returns an error when a flag carries a malformed value.
+    /// Returns an error if the selected agent catalog is invalid or empty.
     pub fn config(&self) -> Result<Config> {
-        let mut config = Config::from_env()?;
-
-        if let Some(listen) = self.listen {
-            config.listen = listen;
-        }
-        if let Some(agents) = &self.agents {
-            config.agents = config::parse_agents(agents).context("invalid --agents")?;
-        }
-        if let Some(notify) = &self.notify {
-            config.notify = notify.parse().context("invalid --notify")?;
-        }
-        if let Some(history) = self.history {
-            config.limits.history_capacity = history;
-        }
-
-        Ok(config)
+        let agents = if let Some(agents) = &self.agents {
+            config::parse_agents(agents).context("invalid agent catalog")?
+        } else {
+            config::configured_agents(
+                self.agents_file.as_deref(),
+                config::default_agents_file().as_deref(),
+            )?
+        };
+        anyhow::ensure!(!agents.is_empty(), "at least one agent must be configured");
+        Ok(Config {
+            listen: self.listen,
+            notify: self.notify,
+            agents,
+            permissions: self.permissions,
+            limits: Limits {
+                history_capacity: self.history,
+                live_capacity: self.buffer,
+                startup_timeout: Duration::from_secs(self.startup_timeout.get()),
+            },
+        })
     }
 
-    /// Tracing configuration, honoring `--log-*` over the environment.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backend name or filter is invalid.
-    pub fn tracing(&self) -> Result<crate::tracing::Config> {
-        let mut config = crate::tracing::Config::from_env()?;
-
-        if let Some(backend) = &self.log_backend {
-            config = config.with_backend(backend.parse().context("invalid --log-backend")?);
-        }
-        if let Some(filter) = &self.log_filter {
-            config = config.with_filter(filter.clone());
-        }
-
-        Ok(config)
+    pub fn tracing(&self) -> crate::tracing::Config {
+        crate::tracing::Config::new(self.log_backend).with_filter(&self.log_filter)
     }
 }

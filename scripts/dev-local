@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-gui}" in
+    gui|daemon|smoke) ;;
+    -h|--help)
+        cat <<'USAGE'
+Usage: scripts/dev-local [gui|daemon|smoke] [options]
+  gui     Build and start basrd + pi + GUI (default); close GUI to stop all.
+  daemon  Start basrd + pi in the terminal; Ctrl-C stops it.
+  smoke   Test a real DeepSeek turn and pi file tools, then stop all processes.
+Options:
+  --port PORT   Local port (default: 7337; smoke: automatic; 0: automatic).
+  --cwd PATH    Default GUI session directory (default: a new test directory).
+  --compact     Open the minimal popup (default).
+  --window      Open the workspace and thread window.
+  --no-build    Reuse existing target/debug binaries.
+Reads DEEPSEEK_API_KEY from the repository's .env (nonempty environment wins).
+Logs, pi settings and test files: .test-results/local.*/
+USAGE
+        exit 0 ;;
+    *) echo 'Use scripts/dev-local --help for usage.' >&2; exit 2 ;;
+esac
+
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+command -v nix >/dev/null || { echo 'Nix with flakes enabled is required.' >&2; exit 1; }
+[[ $(uname -s) = Linux ]] || { echo 'Local desktop testing currently requires Linux.' >&2; exit 1; }
+
+export BASR_LOCAL_SOURCE="$root"
+# Include untracked development files without copying credentials or build outputs.
+source_path=$(nix eval --impure --raw --expr '
+  builtins.path {
+    path = builtins.getEnv "BASR_LOCAL_SOURCE";
+    name = "basr-local-source";
+    filter = path: type:
+      let name = builtins.baseNameOf path; in
+      !(builtins.elem name [ ".git" ".direnv" "target" ".test-results" "result" "__pycache__" ])
+      && (name == ".env.example" || builtins.match "[.]env([.].*)?" name == null);
+  }
+')
+exec nix develop "$source_path#local" -c python "$root/scripts/local.py" "$@"

@@ -14,18 +14,9 @@ use basr::service::Client;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = clap::Args::parse();
-    let mut client = connect(args.server).await?;
-
-    command::run(args.command, &mut client).await
-}
-
-/// Connects to the daemon, turning a transport failure into a usable hint.
-///
-/// # Errors
-///
-/// Returns an error when the daemon cannot be reached.
-async fn connect(server: std::net::SocketAddr) -> Result<Client> {
-    basr::service::connect(server)
+    let mut client = Client::connect_at(args.server)
         .await
-        .with_context(|| format!("cannot connect to basrd at {server}; is it running?"))
+        .with_context(|| format!("cannot connect to basrd at {}; is it running?", args.server))?;
+
+    args.command.run(&mut client).await
 }

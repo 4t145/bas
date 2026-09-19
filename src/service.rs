@@ -1,12 +1,12 @@
 //! The gRPC surface exposed to clients.
 //!
 //! `basrd` serves [`pb::basr_server`]; `basrctl`, the TUI, and the GUI consume
-//! [`pb::basr_client`]. Everything crossing the wire is a [`crate::model`]
-//! value, converted by [`convert`].
+//! [`pb::basr_client`]. ACP requests and updates use SDK JSON inside
+//! [`pb::AcpPayload`]; protobuf defines daemon management and replay envelopes.
 
 mod client;
 mod convert;
-mod server;
+mod defaults;
 
 pub mod pb {
     //! Generated protobuf messages and service stubs.
@@ -19,7 +19,7 @@ pub mod pb {
 
 pub use client::*;
 pub use convert::*;
-pub use server::*;
+pub use defaults::*;
 
 #[cfg(test)]
 mod tests;
