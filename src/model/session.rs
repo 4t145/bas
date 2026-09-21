@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::{AgentId, SessionId, Timestamp};
+use super::{AgentId, Cursor, Event, EventKind, SessionId, Timestamp, TurnId};
+
+#[cfg(test)]
+mod tests;
 
 /// Used when neither `USER` nor `LOGNAME` is set, as in a bare systemd unit.
 const UNKNOWN_USER: &str = "unknown";
@@ -48,6 +51,13 @@ pub enum SessionStatus {
     Failed,
 }
 
+/// Acceptance of a prompt, tied to the event that started its turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TurnReceipt {
+    pub turn: TurnId,
+    pub cursor: Cursor,
+}
+
 /// Everything the daemon records about a session besides its events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -65,6 +75,17 @@ pub struct SessionMeta {
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub status: SessionStatus,
+    /// Hidden from the ordinary list without stopping the backend or discarding history.
+    #[serde(default)]
+    pub archived: bool,
+    /// Cursor of the most recent agent message chunk; metadata-only edits do not change it.
+    #[serde(default)]
+    pub last_reply: Cursor,
+    /// Last event included in this metadata snapshot, independent of replay retention.
+    #[serde(default)]
+    pub revision: Cursor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_turn: Option<TurnId>,
     /// Agent capabilities, authentication methods and implementation information.
     pub initialization: Option<crate::acp::InitializeResponse>,
     /// Current ACP options and modes, with the public daemon session id.
@@ -88,6 +109,10 @@ impl SessionMeta {
             created_at: now,
             updated_at: now,
             status: SessionStatus::Starting,
+            archived: false,
+            last_reply: Cursor::START,
+            revision: Cursor::START,
+            active_turn: None,
             initialization: None,
             acp: None,
             available_commands: None,
@@ -97,7 +122,48 @@ impl SessionMeta {
     /// Records a lifecycle transition.
     pub fn set_status(&mut self, status: SessionStatus) {
         self.status = status;
+        if status != SessionStatus::Working {
+            self.active_turn = None;
+        }
         self.updated_at = Timestamp::now();
+    }
+
+    /// Applies only events newer than this snapshot. Content replay has its own cursor.
+    pub fn apply_event(&mut self, event: &Event) -> bool {
+        if event.session != self.id || event.cursor <= self.revision {
+            return false;
+        }
+        match &event.kind {
+            EventKind::Acp(update) => {
+                if matches!(update, crate::acp::SessionUpdate::AgentMessageChunk(_)) {
+                    self.last_reply = event.cursor;
+                }
+                self.apply_acp(update);
+            }
+            EventKind::TitleChanged { title } => self.title = Some(title.clone()),
+            EventKind::ArchiveChanged { archived } => self.archived = *archived,
+            EventKind::StatusChanged { status } => {
+                self.status = *status;
+                if *status != SessionStatus::Working {
+                    self.active_turn = None;
+                }
+            }
+            EventKind::TurnStarted { turn } => {
+                self.status = SessionStatus::Working;
+                self.active_turn = Some(*turn);
+            }
+            EventKind::TurnFinished { .. } => {
+                self.status = SessionStatus::Idle;
+                self.active_turn = None;
+            }
+            EventKind::Failed { .. } => {
+                self.status = SessionStatus::Failed;
+                self.active_turn = None;
+            }
+        }
+        self.revision = event.cursor;
+        self.updated_at = event.at;
+        true
     }
 }
 

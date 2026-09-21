@@ -4,18 +4,45 @@ use tokio::sync::mpsc;
 
 use super::*;
 
+mod application;
+mod archive;
+mod chrome;
+mod navigation;
+mod rename;
+mod rows;
+mod settings;
+mod thread_actions;
+
+fn receipt(cursor: u64) -> basr::model::TurnReceipt {
+    basr::model::TurnReceipt {
+        turn: basr::model::TurnId::new(),
+        cursor: Cursor::from_raw(cursor),
+    }
+}
+
 struct Fixture {
     view: Entity<Workspace>,
     window: WindowHandle<Root>,
     commands: mpsc::UnboundedReceiver<Command>,
     initial_create: connection::CreateSession,
     _updates: mpsc::Sender<Update>,
+    _appearance: tempfile::TempDir,
 }
 
 fn fixture(cx: &mut TestAppContext) -> Fixture {
+    let appearance = tempfile::tempdir().expect("isolated appearance directory");
+    let appearance_path = appearance.path().join("appearance.json");
+    std::fs::write(
+        &appearance_path,
+        r#"{"theme_source":"builtin","theme_mode":"dark"}"#,
+    )
+    .expect("write deterministic appearance");
     cx.update(|cx| {
         gpui_kit::init(cx);
+        theme::init(None, Some(appearance_path), cx);
+        crate::application::init(cx);
         bind_keys(cx);
+        crate::settings_window::bind_keys(cx);
     });
     let (commands, mut receiver) = mpsc::unbounded_channel();
     let (updates, events) = mpsc::channel(EVENT_BATCH);
@@ -59,6 +86,7 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
         window,
         commands: receiver,
         _updates: updates,
+        _appearance: appearance,
     }
 }
 
@@ -66,6 +94,256 @@ fn session() -> SessionMeta {
     let mut session = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
     session.status = SessionStatus::Idle;
     session
+}
+
+#[gpui_kit::test]
+fn title_before_receipt_does_not_drain_and_background_catalog_does(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let first = session();
+    let second = session();
+    let accepted = receipt(3);
+    attach(&fixture, first.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.composer
+                .update(cx, |input, cx| input.set_value("A", window, cx));
+            view.send_prompt(window, cx);
+            view.outboxes
+                .get_mut(&first.id)
+                .expect("outbox")
+                .enqueue(Draft {
+                    text: "B".into(),
+                    attachments: Vec::new(),
+                });
+            view.update(
+                Update::Event {
+                    epoch: view.epoch,
+                    event: Event::new(
+                        first.id,
+                        Cursor::from_raw(2),
+                        EventKind::TitleChanged {
+                            title: "renamed".into(),
+                        },
+                    ),
+                },
+                window,
+                cx,
+            );
+            view.update(
+                Update::Sent {
+                    session: first.id,
+                    text: "A".into(),
+                    attachments: Vec::new(),
+                    result: Ok(accepted),
+                },
+                window,
+                cx,
+            );
+        });
+        assert!(
+            matches!(fixture.commands.try_recv(), Ok(Command::Prompt { text, .. }) if text == "A")
+        );
+        assert!(fixture.commands.try_recv().is_err());
+    })
+    .expect("window");
+    attach(&fixture, second.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            let mut completed = first.clone();
+            completed.revision = Cursor::from_raw(4);
+            view.update(Update::Catalog(Ok(connection::Catalog {
+                agents: view.agents.clone(), sessions: vec![completed, second],
+            })), window, cx);
+        });
+        assert!(matches!(fixture.commands.try_recv(), Ok(Command::Prompt { session, text, .. }) if session == first.id && text == "B"));
+    }).expect("window");
+}
+
+#[gpui_kit::test]
+fn catalog_and_history_merge_metadata_without_skipping_content(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let mut newest = session();
+    newest.revision = Cursor::from_raw(10);
+    newest.title = Some("latest".into());
+    newest.status = SessionStatus::Working;
+    newest.active_turn = Some(basr::model::TurnId::new());
+    attach(&fixture, newest.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            let mut old = newest.clone();
+            old.revision = Cursor::from_raw(2);
+            old.title = Some("old".into());
+            old.status = SessionStatus::Idle;
+            old.active_turn = None;
+            let finish = Event::new(
+                newest.id,
+                Cursor::from_raw(5),
+                EventKind::TurnFinished {
+                    turn: basr::model::TurnId::new(),
+                    result: Ok(basr::acp::PromptResponse::new(
+                        basr::acp::StopReason::EndTurn,
+                    )),
+                },
+            );
+            view.update(
+                Update::Snapshot {
+                    epoch: view.epoch,
+                    session: old.clone(),
+                    events: vec![
+                        Event::new(
+                            newest.id,
+                            Cursor::from_raw(4),
+                            EventKind::Acp(basr::acp::SessionUpdate::AgentMessageChunk(
+                                basr::acp::ContentChunk::new("history".into()),
+                            )),
+                        ),
+                        finish,
+                    ],
+                },
+                window,
+                cx,
+            );
+            view.update(
+                Update::Catalog(Ok(connection::Catalog {
+                    agents: view.agents.clone(),
+                    sessions: vec![old],
+                })),
+                window,
+                cx,
+            );
+            let conversation = view.conversation.as_ref().expect("conversation");
+            assert_eq!(conversation.session, newest);
+            assert_eq!(conversation.cursor, 5);
+            assert_eq!(conversation.items.len(), 1);
+            assert_eq!(view.sessions[0], newest);
+            // A completion between history and GetSession stays newer than the snapshot.
+            view.update(
+                Update::Event {
+                    epoch: view.epoch,
+                    event: Event::new(
+                        newest.id,
+                        Cursor::from_raw(11),
+                        EventKind::TurnFinished {
+                            turn: newest.active_turn.expect("turn"),
+                            result: Ok(basr::acp::PromptResponse::new(
+                                basr::acp::StopReason::EndTurn,
+                            )),
+                        },
+                    ),
+                },
+                window,
+                cx,
+            );
+            assert_eq!(view.current().expect("current").status, SessionStatus::Idle);
+        });
+    })
+    .expect("window");
+}
+
+#[gpui_kit::test]
+fn editing_queue_head_keeps_order_and_escape_restores_composition(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let mut meta = session();
+    meta.status = SessionStatus::Working;
+    attach(&fixture, meta.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.enqueue_draft(meta.id, "A".into(), window, cx);
+            view.enqueue_draft(meta.id, "B".into(), window, cx);
+            view.composer
+                .update(cx, |input, cx| input.set_value("composition", window, cx));
+        });
+        window.render_frame(cx);
+        window.click("pending-messages", cx);
+        assert_eq!(fixture.view.read(cx).composer.read(cx).value(), "A");
+        window.press("escape", cx);
+        assert_eq!(
+            fixture.view.read(cx).composer.read(cx).value(),
+            "composition"
+        );
+        window.render_frame(cx);
+        window.click("pending-messages", cx);
+        fixture.view.update(cx, |view, cx| {
+            view.composer
+                .update(cx, |input, cx| input.set_value("A'", window, cx));
+            view.send_prompt(window, cx);
+            assert_eq!(view.composer.read(cx).value(), "composition");
+            view.update(
+                Update::Event {
+                    epoch: view.epoch,
+                    event: Event::new(
+                        meta.id,
+                        Cursor::from_raw(1),
+                        EventKind::TurnFinished {
+                            turn: basr::model::TurnId::new(),
+                            result: Ok(basr::acp::PromptResponse::new(
+                                basr::acp::StopReason::EndTurn,
+                            )),
+                        },
+                    ),
+                },
+                window,
+                cx,
+            );
+        });
+        assert!(
+            matches!(fixture.commands.try_recv(), Ok(Command::Prompt { text, .. }) if text == "A'")
+        );
+        assert_eq!(
+            fixture.view.read(cx).outboxes[&meta.id]
+                .front()
+                .expect("B")
+                .text,
+            "B"
+        );
+    })
+    .expect("window");
+}
+
+#[gpui_kit::test]
+fn receipt_after_session_deletion_cannot_recreate_outbox_or_draft(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.update(
+                Update::Catalog(Ok(crate::connection::Catalog {
+                    agents: view.agents.clone(),
+                    sessions: vec![meta.clone()],
+                })),
+                window,
+                cx,
+            );
+            view.composer
+                .update(cx, |input, cx| input.set_value("A", window, cx));
+            view.send_prompt(window, cx);
+            view.update(
+                Update::Catalog(Ok(crate::connection::Catalog {
+                    agents: Vec::new(),
+                    sessions: Vec::new(),
+                })),
+                window,
+                cx,
+            );
+            view.update(
+                Update::Sent {
+                    session: meta.id,
+                    text: "A".into(),
+                    attachments: Vec::new(),
+                    result: Err("late failure".into()),
+                },
+                window,
+                cx,
+            );
+            assert!(!view.outboxes.contains_key(&meta.id));
+            assert!(!view.drafts.contains_key(&meta.id));
+        });
+    })
+    .expect("window");
 }
 
 fn attach(fixture: &Fixture, session: SessionMeta, cx: &mut TestAppContext) {
@@ -467,7 +745,7 @@ fn enter_submits_shift_enter_adds_a_line_and_failed_send_keeps_draft(cx: &mut Te
                 cx,
             );
             assert_eq!(view.composer.read(cx).value().as_ref(), text);
-            assert!(!view.sending.contains(&id));
+            assert!(!view.sending(id));
             assert!(view.error.is_some());
         });
     })
@@ -497,7 +775,7 @@ fn late_events_and_send_receipts_cannot_modify_another_session(cx: &mut TestAppC
                     session: first.id,
                     text: "第一条消息".into(),
                     attachments: vec![],
-                    result: Ok(()),
+                    result: Ok(receipt(1)),
                 },
                 window,
                 cx,
@@ -537,22 +815,21 @@ fn late_events_and_send_receipts_cannot_modify_another_session(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
-fn deleting_requires_confirmation(cx: &mut TestAppContext) {
+fn archive_row_button_does_not_select(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let session = session();
     attach(&fixture, session.clone(), cx);
     let _ = fixture.commands.try_recv();
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
-        window.click("delete-session", cx);
+        window.hover(format!("session-{}", session.id), cx);
+        window.click(format!("archive-{}", session.id), cx);
     })
     .expect("test window available");
-    assert!(fixture.commands.try_recv().is_err());
-    cx.update_window(fixture.window.into(), |_, window, cx| {
-        window.click("confirm-delete", cx)
-    })
-    .expect("test window available");
-    assert!(matches!(fixture.commands.try_recv(), Ok(Command::Delete(id)) if id == session.id));
+    assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::Archive { session: id, archived: true }) if id == session.id)
+    );
+    cx.update(|cx| assert_eq!(fixture.view.read(cx).active, Some(session.id)));
 }
 
 #[gpui_kit::test]
@@ -986,6 +1263,60 @@ fn composer_toolbar_keeps_options_attachments_and_send_on_one_row_in_both_modes(
 }
 
 #[gpui_kit::test]
+fn explicit_line_break_at_end_increases_the_editor_height(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.input("line", cx);
+        window.render_frame(cx);
+        let initial_height = window.find("composer-editor").bounds().size.height;
+        window.press("shift-enter", cx);
+        window.render_frame(cx);
+
+        assert!(
+            fixture
+                .view
+                .read(cx)
+                .composer
+                .read(cx)
+                .value()
+                .ends_with('\n')
+        );
+        assert!(
+            window.find("composer-editor").bounds().size.height > initial_height,
+            "the trailing empty line must contribute to the editor height"
+        );
+    })
+    .expect("composer window");
+}
+
+#[gpui_kit::test]
+fn soft_wrapped_composer_text_increases_the_editor_height(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let initial_height = window.find("composer-editor").bounds().size.height;
+        window.input(&"long text without an explicit line break ".repeat(12), cx);
+        window.render_frame(cx);
+        window.render_frame(cx);
+
+        assert_eq!(
+            fixture.view.read(cx).composer.read(cx).value().lines().count(),
+            1,
+            "this regression exercises soft wrapping, not explicit newlines"
+        );
+        let wrapped_height = window.find("composer-editor").bounds().size.height;
+        assert!(
+            wrapped_height > initial_height,
+            "soft-wrapped text must grow the composer: initial={initial_height:?}, wrapped={wrapped_height:?}"
+        );
+    })
+    .expect("composer window");
+}
+
+#[gpui_kit::test]
 fn attachments_follow_drafts_and_survive_failed_send(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let mut first = session();
@@ -1023,12 +1354,13 @@ fn attachments_follow_drafts_and_survive_failed_send(cx: &mut TestAppContext) {
                 cx,
             );
             assert_eq!(view.attachments[0].id, attachment.id);
+            view.send_prompt(window, cx);
             view.update(
                 Update::Sent {
                     session: first.id,
                     text: format!("{} ", attachment.mention),
                     attachments: vec![attachment.clone()],
-                    result: Ok(()),
+                    result: Ok(receipt(1)),
                 },
                 window,
                 cx,
@@ -1255,6 +1587,208 @@ fn clipboard_images_are_inline_and_support_delete_undo_and_text_paste(cx: &mut T
 }
 
 #[gpui_kit::test]
+fn word_deletion_removes_a_dragged_image_atomically_and_undo_restores_it(cx: &mut TestAppContext) {
+    use gpui_kit::{ExternalPaths, FileDropEvent, PlatformInput};
+
+    let fixture = fixture(cx);
+    let mut session = session();
+    session.initialization = Some(
+        basr::acp::InitializeResponse::new(agent_client_protocol::schema::ProtocolVersion::V1)
+            .agent_capabilities(
+                basr::acp::AgentCapabilities::new()
+                    .prompt_capabilities(basr::acp::PromptCapabilities::new().image(true)),
+            ),
+    );
+    attach(&fixture, session, cx);
+    let directory = tempfile::tempdir().expect("image fixture directory");
+    let path = directory.path().join("image.png");
+    std::fs::write(&path, b"\x89PNG\r\n\x1a\n").expect("write image fixture");
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let position = window.find("composer-panel").bounds().center();
+        window.dispatch_event(
+            PlatformInput::FileDrop(FileDropEvent::Entered {
+                position,
+                paths: ExternalPaths([path].into_iter().collect()),
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            PlatformInput::FileDrop(FileDropEvent::Submit { position }),
+            cx,
+        );
+    })
+    .expect("drop image into composer");
+    cx.executor().run_until_parked();
+    let original = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let original = fixture.view.read(cx).composer.read(cx).value();
+            assert_eq!(
+                crate::attachment::mentions(&original, &fixture.view.read(cx).attachments).len(),
+                1
+            );
+            window.press("ctrl-backspace", cx);
+            original
+        })
+        .expect("delete image");
+    cx.executor().run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        let composer = fixture.view.read(cx).composer.clone();
+        assert_eq!(
+            composer.read(cx).value(),
+            "",
+            "word deletion must remove the whole attachment marker, not its closing bracket"
+        );
+        window.press("ctrl-z", cx);
+        assert_eq!(composer.read(cx).value(), original);
+        assert_eq!(
+            crate::attachment::mentions(
+                &composer.read(cx).value(),
+                &fixture.view.read(cx).attachments
+            )
+            .len(),
+            1,
+            "undo must restore the original attachment reference"
+        );
+    })
+    .expect("delete and restore image");
+}
+
+#[gpui_kit::test]
+fn word_deletion_preserves_attachment_boundaries_and_undo_carets(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    let image =
+        gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Png, b"\x89PNG\r\n\x1a\n".to_vec());
+    let attachment = Attachment::image(&image).expect("test image attachment");
+    let prefix = "前文😀 ";
+    let suffix = " 后文";
+    for backward in [true, false] {
+        for padding in ["", " ", "\t"] {
+            let value = if backward {
+                format!("{prefix}{}{padding}{suffix}", attachment.mention)
+            } else {
+                format!("{prefix}{padding}{}{suffix}", attachment.mention)
+            };
+            let caret = if backward {
+                prefix.len() + attachment.mention.len() + padding.len()
+            } else {
+                prefix.len()
+            };
+            cx.update_window(fixture.window.into(), |_, window, cx| {
+                fixture.view.update(cx, |view, cx| {
+                    view.attachments = vec![attachment.clone()];
+                    view.composer.update(cx, |input, cx| {
+                        input.set_value(value.clone(), window, cx);
+                        input.set_selected_range(caret..caret, cx);
+                        input.focus(window, cx);
+                    });
+                    view.sync_mentions(cx);
+                });
+                window.render_frame(cx);
+                window.press(
+                    if backward {
+                        "ctrl-backspace"
+                    } else {
+                        "ctrl-delete"
+                    },
+                    cx,
+                );
+                let composer = fixture.view.read(cx).composer.clone();
+                assert_eq!(
+                    composer.read(cx).value(),
+                    format!("{prefix}{suffix}"),
+                    "backward={backward}, padding={padding:?}"
+                );
+                window.press("ctrl-z", cx);
+                assert_eq!(composer.read(cx).value(), value);
+                assert_eq!(
+                    composer.read(cx).selected_range(),
+                    caret..caret,
+                    "undo must restore the original caret, not a temporary selection"
+                );
+            })
+            .expect("delete and restore adjacent attachment");
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn word_deletion_keeps_native_text_and_existing_selection_semantics(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    let image =
+        gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Png, b"\x89PNG\r\n\x1a\n".to_vec());
+    let attachment = Attachment::image(&image).expect("test image attachment");
+    for has_attachment in [false, true] {
+        for backward in [true, false] {
+            let tail = if has_attachment {
+                format!(" {}", attachment.mention)
+            } else {
+                String::new()
+            };
+            let value = format!("one two{tail}");
+            let caret = if backward { "one two".len() } else { 0 };
+            cx.update_window(fixture.window.into(), |_, window, cx| {
+                fixture.view.update(cx, |view, cx| {
+                    view.attachments = if has_attachment {
+                        vec![attachment.clone()]
+                    } else {
+                        Vec::new()
+                    };
+                    view.composer.update(cx, |input, cx| {
+                        input.set_value(value.clone(), window, cx);
+                        input.set_selected_range(caret..caret, cx);
+                        input.focus(window, cx);
+                    });
+                    view.sync_mentions(cx);
+                });
+                window.render_frame(cx);
+                window.press(
+                    if backward {
+                        "ctrl-backspace"
+                    } else {
+                        "ctrl-delete"
+                    },
+                    cx,
+                );
+                let expected = if backward {
+                    format!("one {tail}")
+                } else {
+                    format!(" two{tail}")
+                };
+                let composer = fixture.view.read(cx).composer.clone();
+                assert_eq!(composer.read(cx).value(), expected);
+                window.press("ctrl-z", cx);
+                assert_eq!(composer.read(cx).value(), value);
+                assert_eq!(composer.read(cx).selected_range(), caret..caret);
+            })
+            .expect("ordinary word deletion retains native undo");
+        }
+    }
+
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.attachments = vec![attachment.clone()];
+            view.composer.update(cx, |input, cx| {
+                input.set_value(format!("keep {} after", attachment.mention), window, cx);
+                input.set_selected_range(5..5 + attachment.mention.len(), cx);
+            });
+            view.sync_mentions(cx);
+        });
+        window.render_frame(cx);
+        window.press("ctrl-backspace", cx);
+        assert_eq!(
+            fixture.view.read(cx).composer.read(cx).value(),
+            "keep  after",
+            "an existing selection must not expand to the previous word"
+        );
+    })
+    .expect("delete selected attachment");
+}
+
+#[gpui_kit::test]
 fn compact_status_tracks_thought_tools_and_answer_without_expanding(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let session = session();
@@ -1267,7 +1801,7 @@ fn compact_status_tracks_thought_tools_and_answer_without_expanding(cx: &mut Tes
         window.press("enter", cx);
         assert!(!fixture.view.read(cx).output_open);
         fixture.view.update(cx, |view, cx| {
-            view.sending.clear();
+            view.outboxes.clear();
             let conversation = view.conversation.as_mut().expect("conversation");
             conversation.session.status = SessionStatus::Working;
             for (index, (update, status)) in [
@@ -1514,7 +2048,7 @@ fn folded_reply_stays_unread_until_opened_and_survives_replay(cx: &mut TestAppCo
         assert!(fixture.view.read(cx).reply_preview.is_none());
         assert_eq!(
             fixture.view.read(cx).seen_replies.get(&session.id),
-            Some(&3)
+            Some(&2)
         );
         fixture.view.update(cx, |view, cx| {
             view.toggle_output(window, cx);
@@ -1531,7 +2065,7 @@ fn folded_reply_stays_unread_until_opened_and_survives_replay(cx: &mut TestAppCo
         window.render_frame(cx);
         assert_eq!(
             fixture.view.read(cx).seen_replies.get(&session.id),
-            Some(&3)
+            Some(&2)
         );
         assert!(!fixture.view.read(cx).output_open);
     })
@@ -1602,7 +2136,7 @@ fn unread_reply_is_scoped_to_its_session_and_requires_a_visible_foreground_answe
         );
         window.click("scroll-to-bottom", cx);
         window.render_frame(cx);
-        assert_eq!(primary.view.read(cx).seen_replies.get(&first.id), Some(&3));
+        assert_eq!(primary.view.read(cx).seen_replies.get(&first.id), Some(&2));
     })
     .expect("read latest answer");
     let second = session();
@@ -1624,7 +2158,7 @@ fn unread_reply_is_scoped_to_its_session_and_requires_a_visible_foreground_answe
         });
         window.render_frame(cx);
         assert!(!primary.view.read(cx).seen_replies.contains_key(&second.id));
-        assert_eq!(primary.view.read(cx).seen_replies.get(&first.id), Some(&3));
+        assert_eq!(primary.view.read(cx).seen_replies.get(&first.id), Some(&2));
     })
     .expect("separate unread state");
 }
@@ -1633,6 +2167,7 @@ fn unread_reply_is_scoped_to_its_session_and_requires_a_visible_foreground_answe
 fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let mut session = session();
+    let accepted = receipt(2);
     session.status = SessionStatus::Working;
     attach(&fixture, session.clone(), cx);
     while fixture.commands.try_recv().is_ok() {}
@@ -1646,7 +2181,7 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
     }
     cx.update_window(fixture.window.into(), |_, window, cx| {
         assert!(fixture.commands.try_recv().is_err(), "running turns must not overlap");
-        assert_eq!(fixture.view.read(cx).queued.get(&session.id).map(|q| q.len()), Some(2), "text after enter: {:?}", fixture.view.read(cx).composer.read(cx).value());
+        assert_eq!(fixture.view.read(cx).outboxes.get(&session.id).map(|q| q.len()), Some(2), "text after enter: {:?}", fixture.view.read(cx).composer.read(cx).value());
         assert!(fixture.view.read(cx).composer.read(cx).value().is_empty());
         fixture.view.update(cx, |view, cx| {
             view.update(Update::Event { epoch: view.epoch, event: Event::new(session.id, Cursor::from_raw(1), EventKind::TurnFinished {
@@ -1655,13 +2190,13 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
         });
         assert!(matches!(fixture.commands.try_recv(), Ok(Command::Prompt { text, .. }) if text == "追加一"));
         fixture.view.update(cx, |view, cx| {
-            view.update(Update::Sent { session: session.id, text: "追加一".into(), attachments: Vec::new(), result: Ok(()) }, window, cx);
+            view.update(Update::Sent { session: session.id, text: "追加一".into(), attachments: Vec::new(), result: Ok(accepted) }, window, cx);
         });
         assert!(fixture.commands.try_recv().is_err(), "receipt must not drain the next prompt using a stale Idle snapshot");
         fixture.view.update(cx, |view, cx| {
-            view.update(Update::Event { epoch: view.epoch, event: Event::new(session.id, Cursor::from_raw(2), EventKind::TurnStarted { turn: basr::model::TurnId::new() }) }, window, cx);
+            view.update(Update::Event { epoch: view.epoch, event: Event::new(session.id, Cursor::from_raw(2), EventKind::TurnStarted { turn: accepted.turn }) }, window, cx);
             view.update(Update::Event { epoch: view.epoch, event: Event::new(session.id, Cursor::from_raw(3), EventKind::TurnFinished {
-                turn: basr::model::TurnId::new(), result: Ok(basr::acp::PromptResponse::new(basr::acp::StopReason::EndTurn))
+                turn: accepted.turn, result: Ok(basr::acp::PromptResponse::new(basr::acp::StopReason::EndTurn))
             }) }, window, cx);
         });
         assert!(matches!(fixture.commands.try_recv(), Ok(Command::Prompt { text, .. }) if text == "追加二"));

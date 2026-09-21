@@ -17,11 +17,13 @@ pub(super) fn content_panel() -> Div {
 impl Workspace {
     pub(super) fn composer_height(&self, cx: &App) -> f32 {
         let input = self.composer.read(cx);
+        // Height follows explicit line breaks; upstream does not expose wrapped row counts.
         let rows = input
-            .display_row_count()
-            .max(input.value().lines().count())
+            .text()
+            .lines_len()
             .clamp(1, if self.compact { 4 } else { 10 });
-        rows as f32 * (f32::from(theme::content_font_size(cx)) * theme::CONTENT_LINE_HEIGHT).ceil()
+        rows as f32
+            * (f32::from(theme::content_font_size(cx)) * theme::content_line_height(cx)).ceil()
             + f32::from(gpui_kit::component::Size::Medium.input_py()) * 2.
     }
 
@@ -165,7 +167,7 @@ impl Workspace {
         if self.active.is_some_and(|id| self.configuring.contains(&id)) {
             return "正在应用选项…".into();
         }
-        if self.active.is_some_and(|id| self.sending.contains(&id)) {
+        if self.active.is_some_and(|id| self.sending(id)) {
             return "正在发送…".into();
         }
         match &self.stream {
@@ -179,7 +181,7 @@ impl Workspace {
     }
 
     pub(super) fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let sending = self.active.is_some_and(|id| self.sending.contains(&id));
+        let sending = self.active.is_some_and(|id| self.sending(id));
         let cancelling = self.active.is_some_and(|id| self.cancelling.contains(&id));
         let submit = if self.working() || cancelling {
             Button::new("stop-turn")
@@ -206,7 +208,7 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, _, cx| {
                     if let Some(session) = this.active {
                         this.cancelling.insert(session);
-                        this.queued_paused.insert(session);
+                        this.outboxes.entry(session).or_default().pause();
                         this.command(Command::Cancel(session));
                         cx.notify();
                     }
@@ -261,6 +263,16 @@ impl Workspace {
                             .capture_action(cx.listener(|this, _: &Delete, window, cx| {
                                 this.delete_mention(false, window, cx)
                             }))
+                            .capture_action(cx.listener(
+                                |this, _: &DeleteToPreviousWordStart, window, cx| {
+                                    this.delete_word_preserving_mentions(true, window, cx)
+                                },
+                            ))
+                            .capture_action(cx.listener(
+                                |this, _: &DeleteToNextWordEnd, window, cx| {
+                                    this.delete_word_preserving_mentions(false, window, cx)
+                                },
+                            ))
                             .capture_action(
                                 cx.listener(|this, _: &MoveLeft, _, cx| {
                                     this.cross_mention(true, cx)
@@ -293,7 +305,7 @@ impl Workspace {
                                             .font_family(cx.theme().font_family.clone())
                                             .text_size(theme::content_font_size(cx))
                                             .line_height(gpui_kit::relative(
-                                                theme::CONTENT_LINE_HEIGHT,
+                                                theme::content_line_height(cx),
                                             ))
                                             .appearance(false)
                                             .bordered(false)
@@ -517,7 +529,7 @@ impl Workspace {
                                             .max_w(px(560.))
                                             .text_size(theme::content_font_size(cx))
                                             .line_height(gpui_kit::relative(
-                                                theme::CONTENT_LINE_HEIGHT,
+                                                theme::content_line_height(cx),
                                             ))
                                             .children(command.lines().map(|line| {
                                                 div().flex_shrink_0().child(

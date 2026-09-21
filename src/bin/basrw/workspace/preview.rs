@@ -223,7 +223,6 @@ impl Workspace {
             });
         }
         view.placement = Some(desktop::Placement::new(runtime));
-        view._theme_watch = Some(theme::watch(window, cx));
         view.resize_window(window, cx);
         if fixture == "clipboard" {
             cx.spawn_in(window, async move |view, cx| {

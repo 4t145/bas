@@ -60,6 +60,8 @@ pub fn read_agents(path: &Path) -> Result<Vec<AgentSpec>, AgentsFileError> {
     for agent in &agents {
         let reason = if agent.id.as_str().trim().is_empty() {
             Some("id must not be empty")
+        } else if agent.cancellation_grace.is_zero() {
+            Some("cancellation_grace_ms must be greater than zero")
         } else if agent.kind == Kind::Embedded && agent.command.is_some() {
             Some("embedded agent cannot have an external command")
         } else if agent.kind == Kind::Acp

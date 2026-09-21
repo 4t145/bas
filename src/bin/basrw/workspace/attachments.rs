@@ -1,6 +1,7 @@
 use super::*;
 use crate::attachment::{MAX_TOTAL_BYTES, mentions};
-use gpui_kit::{ClipboardEntry, PathPromptOptions};
+use gpui_kit::{ClipboardEntry, EntityInputHandler, PathPromptOptions};
+use unicode_segmentation::UnicodeSegmentation;
 mod chips;
 
 impl Workspace {
@@ -81,7 +82,7 @@ impl Workspace {
         let Some(session) = self.active else {
             return;
         };
-        if self.sending.contains(&session) || !self.loading_attachments.insert(session) {
+        if self.sending(session) || !self.loading_attachments.insert(session) {
             return;
         }
         self.error = None;
@@ -180,7 +181,6 @@ impl Workspace {
         if self.active == Some(session) {
             self.composer.update(cx, |input, cx| {
                 input.replace(inserted, window, cx);
-                input.focus(window, cx);
             });
             self.sync_mentions(cx);
             self.error = self.attachment_error(cx);
@@ -269,18 +269,67 @@ impl Workspace {
         }
     }
 
+    pub(super) fn delete_word_preserving_mentions(
+        &mut self,
+        backward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active.is_some_and(|id| self.sending(id)) {
+            cx.stop_propagation();
+            return;
+        }
+        let input = self.composer.read(cx);
+        if self.attachments.is_empty() {
+            cx.propagate();
+            return;
+        }
+        let mut selected = input.selected_range();
+        if selected.is_empty() {
+            let value = input.value();
+            let Some((before, after)) = value.split_at_checked(selected.start) else {
+                cx.propagate();
+                return;
+            };
+            // Use the editor's Unicode word-boundary library, without temporarily
+            // changing the selection (which would alter native undo semantics).
+            if backward {
+                selected.start = before
+                    .split_word_bound_indices()
+                    .rfind(|(_, word)| !word.trim().is_empty())
+                    .map_or(0, |(start, _)| start);
+            } else {
+                selected.end += after
+                    .split_word_bound_indices()
+                    .find(|(_, word)| !word.trim().is_empty())
+                    .map_or(after.len(), |(start, word)| start + word.len());
+            }
+        }
+        self.delete_mention_range(selected, backward, window, cx);
+    }
+
     pub(super) fn delete_mention(
         &mut self,
         backward: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.active.is_some_and(|id| self.sending.contains(&id)) {
+        let selected = self.composer.read(cx).selected_range();
+        self.delete_mention_range(selected, backward, window, cx);
+    }
+
+    fn delete_mention_range(
+        &mut self,
+        selected: std::ops::Range<usize>,
+        backward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active.is_some_and(|id| self.sending(id)) {
             cx.stop_propagation();
             return;
         }
         let input = self.composer.read(cx);
-        let selected = input.selected_range();
         let value = input.value();
         let mut range = selected.clone();
         let mut matched = false;
@@ -305,8 +354,9 @@ impl Workspace {
             return;
         }
         self.composer.update(cx, |input, cx| {
-            input.set_selected_range(range, cx);
-            input.replace("", window, cx);
+            let utf16 = input.text().offset_to_offset_utf16(range.start)
+                ..input.text().offset_to_offset_utf16(range.end);
+            input.replace_text_in_range(Some(utf16), "", window, cx);
         });
         self.sync_mentions(cx);
         cx.stop_propagation();
@@ -314,7 +364,7 @@ impl Workspace {
     }
 
     pub(super) fn paste_attachment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active.is_some_and(|id| self.sending.contains(&id)) {
+        if self.active.is_some_and(|id| self.sending(id)) {
             cx.stop_propagation();
             return;
         }
@@ -367,7 +417,7 @@ impl Workspace {
     pub(super) fn attachment_button(&self, cx: &mut Context<Self>) -> Button {
         let busy = self
             .active
-            .is_some_and(|id| self.loading_attachments.contains(&id) || self.sending.contains(&id));
+            .is_some_and(|id| self.loading_attachments.contains(&id) || self.sending(id));
         Button::new("add-attachment")
             .ghost()
             .xsmall()

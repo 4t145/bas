@@ -76,10 +76,18 @@ impl Error {
 }
 
 /// Updates are ordered by the backend and scoped to the turn that produced them.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Update {
-    Turn { turn: TurnId, update: TurnUpdate },
+    Turn {
+        turn: TurnId,
+        update: TurnUpdate,
+    },
     Acp(acp::SessionUpdate),
+    /// Ordered state mutation acknowledged after the session commits it.
+    Commit {
+        update: acp::SessionUpdate,
+        committed: tokio::sync::oneshot::Sender<()>,
+    },
     Failed(String),
 }
 

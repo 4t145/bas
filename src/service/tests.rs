@@ -67,6 +67,8 @@ fn lifecycle_and_complete_prompt_responses_round_trip() {
         EventKind::TitleChanged {
             title: "renamed".into(),
         },
+        EventKind::ArchiveChanged { archived: true },
+        EventKind::ArchiveChanged { archived: false },
         EventKind::StatusChanged {
             status: SessionStatus::Working,
         },
@@ -126,6 +128,10 @@ fn malformed_envelopes_and_acp_payloads_are_rejected() {
 #[test]
 fn session_capabilities_modes_and_options_round_trip() {
     let mut session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    session.revision = Cursor::from_raw(123);
+    session.active_turn = Some(TurnId::new());
+    session.archived = true;
+    session.last_reply = Cursor::from_raw(98);
     session.initialization = Some(
         acp::InitializeResponse::new(agent_client_protocol::schema::ProtocolVersion::V1)
             .agent_capabilities(
@@ -145,7 +151,8 @@ fn session_capabilities_modes_and_options_round_trip() {
         acp::AvailableCommand::new("help", "Help"),
     ]));
     assert_eq!(
-        SessionMeta::try_from(pb::Session::from(&session)).expect("metadata"),
+        SessionMeta::try_from(pb::Session::try_from(&session).expect("wire metadata"))
+            .expect("metadata"),
         session
     );
 }
@@ -173,4 +180,68 @@ fn missing_owner_and_unknown_lifecycle_status_are_rejected() {
             ..
         })
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_working_directory_is_rejected_without_replacement() {
+    use std::os::unix::ffi::OsStringExt;
+    let mut session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    session.cwd = Some(std::ffi::OsString::from_vec(b"/tmp/invalid-\xff".to_vec()).into());
+    assert!(matches!(
+        pb::Session::try_from(&session),
+        Err(Error::NonUtf8Cwd)
+    ));
+    assert!(matches!(
+        super::utf8_cwd(session.cwd.as_ref().unwrap()),
+        Err(Error::NonUtf8Cwd)
+    ));
+    session.cwd = Some("/tmp/中文".into());
+    assert_eq!(
+        pb::Session::try_from(&session).unwrap().cwd.as_deref(),
+        Some("/tmp/中文")
+    );
+}
+
+#[test]
+fn turn_receipts_preserve_acknowledged_cursor_and_accept_legacy_default() {
+    let turn = TurnId::new();
+    for cursor in [Cursor::START, Cursor::from_raw(123)] {
+        let receipt = TurnReceipt { turn, cursor };
+        let wire = pb::TurnAccepted::from(receipt);
+        assert_eq!(wire.turn, turn.to_string());
+        assert_eq!(wire.cursor, cursor.raw());
+        let decoded = TurnReceipt::try_from(wire).expect("receipt");
+        assert_eq!(decoded.turn, turn);
+        assert_eq!(decoded.cursor, cursor);
+    }
+    let legacy = pb::TurnAccepted {
+        turn: turn.to_string(),
+        ..Default::default()
+    };
+    assert_eq!(TurnReceipt::try_from(legacy).unwrap().cursor, Cursor::START);
+    assert!(matches!(
+        TurnReceipt::try_from(pb::TurnAccepted {
+            turn: "invalid-turn".into(),
+            cursor: 123,
+        }),
+        Err(Error::Id(_))
+    ));
+}
+
+#[test]
+fn legacy_metadata_defaults_revision_and_active_turn_and_rejects_invalid_turn() {
+    let session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    let mut wire = pb::Session::try_from(&session).unwrap();
+    assert_eq!(wire.revision, 0);
+    assert_eq!(wire.active_turn, None);
+    assert!(!wire.archived);
+    assert_eq!(wire.last_reply, 0);
+    let decoded = SessionMeta::try_from(wire.clone()).unwrap();
+    assert_eq!(decoded.revision, Cursor::START);
+    assert_eq!(decoded.active_turn, None);
+    assert!(!decoded.archived);
+    assert_eq!(decoded.last_reply, Cursor::START);
+    wire.active_turn = Some("invalid-turn".into());
+    assert!(matches!(SessionMeta::try_from(wire), Err(Error::Id(_))));
 }

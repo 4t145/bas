@@ -2,6 +2,9 @@ use std::{collections::VecDeque, num::NonZeroUsize};
 
 use basr::model::{Cursor, Event};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Page {
     pub events: Vec<Event>,
@@ -54,6 +57,25 @@ impl Ring {
     /// # Errors
     /// Returns an error if the requested position has been evicted or limit is zero.
     pub fn page(&self, after: Option<Cursor>, limit: usize) -> Result<Page, HistoryError> {
+        let mut page = Page::default();
+        self.visit(after, limit, |event, more| {
+            page.events.push(event.clone());
+            page.next = more.then_some(event.cursor);
+            true
+        })?;
+        Ok(page)
+    }
+
+    /// Visits borrowed events; `more` includes events outside the requested limit.
+    ///
+    /// # Errors
+    /// Returns an error if the requested position has been evicted or limit is zero.
+    pub fn visit(
+        &self,
+        after: Option<Cursor>,
+        limit: usize,
+        mut visitor: impl FnMut(&Event, bool) -> bool,
+    ) -> Result<(), HistoryError> {
         if limit == 0 {
             return Err(HistoryError::EmptyPage);
         }
@@ -66,12 +88,18 @@ impl Ring {
             });
         }
         let after = after.unwrap_or(Cursor::START);
-        let mut remaining = self.events.iter().filter(|event| event.cursor > after);
-        let events: Vec<Event> = remaining.by_ref().take(limit).cloned().collect();
-        let next = remaining
-            .next()
-            .and_then(|_| events.last().map(|event| event.cursor));
-        Ok(Page { events, next })
+        let mut remaining = self
+            .events
+            .iter()
+            .filter(|event| event.cursor > after)
+            .peekable();
+        for _ in 0..limit {
+            let Some(event) = remaining.next() else { break };
+            if !visitor(event, remaining.peek().is_some()) {
+                break;
+            }
+        }
+        Ok(())
     }
 
     pub fn tail(&self, count: usize) -> Vec<Event> {

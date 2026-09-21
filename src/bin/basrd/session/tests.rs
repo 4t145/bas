@@ -1,4 +1,6 @@
 use basr::acp;
+mod archive;
+
 use std::{
     num::NonZeroUsize,
     sync::{
@@ -42,6 +44,32 @@ fn registry() -> Registry {
     )
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn registry_rejects_non_utf8_canonical_workspaces_including_symlinks() {
+    use std::{
+        ffi::OsString,
+        os::unix::{ffi::OsStringExt, fs::symlink},
+    };
+    let directory = tempfile::tempdir().expect("directory");
+    let invalid = directory
+        .path()
+        .join(OsString::from_vec(b"workspace-\xff".to_vec()));
+    std::fs::create_dir(&invalid).expect("non-UTF8 directory");
+    let link = directory.path().join("valid-link");
+    symlink(&invalid, &link).expect("symlink");
+    let registry = registry();
+    for cwd in [invalid, link] {
+        let mut request = request();
+        request.cwd = Some(cwd);
+        assert!(
+            matches!(registry.create(request).await, Err(CreateError::Cwd(error))
+            if error.kind() == std::io::ErrorKind::InvalidInput)
+        );
+        assert!(registry.list().await.is_empty());
+    }
+}
+
 struct PendingAgent {
     _updates: mpsc::Sender<Update>,
 }
@@ -69,6 +97,76 @@ fn pending_session(limits: Limits) -> Arc<Session> {
         .ready(Box::new(PendingAgent { _updates: updates }))
         .expect("session starts");
     session
+}
+
+#[tokio::test]
+async fn startup_overlay_survives_content_eviction_before_ready() {
+    struct InitialSnapshot;
+    #[async_trait]
+    impl Agent for InitialSnapshot {
+        fn session_info(&self) -> Option<acp::NewSessionResponse> {
+            Some(serde_json::from_value(serde_json::json!({
+                "sessionId": "backend",
+                "configOptions": [{
+                    "id": "enabled", "name": "Enabled", "type": "boolean", "currentValue": false
+                }],
+                "modes": {
+                    "currentModeId": "ask",
+                    "availableModes": [{"id": "ask", "name": "Ask"}, {"id": "code", "name": "Code"}]
+                }
+            })).expect("initial snapshot"))
+        }
+        fn prompt(&mut self, _: TurnId, _: acp::PromptRequest) -> Result<(), agent::Error> {
+            Ok(())
+        }
+        fn cancel(&mut self, _: acp::CancelNotification) -> Result<(), agent::Error> {
+            Ok(())
+        }
+        async fn shutdown(&mut self) {}
+    }
+    let session = Session::new(
+        SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current()),
+        Limits {
+            history_capacity: NonZeroUsize::new(1).expect("one event"),
+            ..Limits::default()
+        },
+        None,
+    );
+    session.apply(Update::Acp(
+        serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "config_option_update",
+            "configOptions": [{
+                "id": "enabled", "name": "Enabled", "type": "boolean", "currentValue": true
+            }]
+        }))
+        .expect("startup config"),
+    ));
+    session.apply(Update::Acp(acp::SessionUpdate::CurrentModeUpdate(
+        acp::CurrentModeUpdate::new("code"),
+    )));
+    session.apply(Update::Acp(acp::SessionUpdate::AgentMessageChunk(
+        acp::ContentChunk::new("startup content evicts configuration".into()),
+    )));
+    assert_eq!(session.page(None, 10).expect("history").events.len(), 1);
+    session.ready(Box::new(InitialSnapshot)).expect("ready");
+    let meta = session.meta();
+    let snapshot = serde_json::to_value(meta.acp.expect("ACP state")).expect("JSON");
+    assert_eq!(snapshot["configOptions"][0]["currentValue"], true);
+    assert_eq!(snapshot["modes"]["currentModeId"], "code");
+    assert_eq!(
+        meta.revision,
+        session.page(None, 1).expect("history").events[0].cursor
+    );
+    assert_eq!(
+        session.visit_history(Some(meta.revision.next()), 1, |_, _| panic!(
+            "future cursor"
+        )),
+        Err(HistoryError::Future {
+            requested: meta.revision.next(),
+            latest: meta.revision
+        })
+    );
+    session.shutdown().await;
 }
 
 fn options(replay: usize) -> AttachOptions {

@@ -1,47 +1,138 @@
 use super::*;
+use gpui_kit::KeyDownEvent;
 use gpui_kit::component::menu::PopupMenuItem;
 
 impl Workspace {
+    pub(super) fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing_title || self.renaming || self.current().is_none() {
+            return;
+        }
+        let text = self.current().map(title).unwrap_or_default();
+        self.editing_title = true;
+        self.rename.update(cx, |input, cx| {
+            input.set_value(text, window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn save_title(&mut self, cx: &mut Context<Self>) {
+        if !self.editing_title || self.renaming {
+            return;
+        }
+        let title = self.rename.read(cx).value().trim().to_owned();
+        let Some(session) = self.active.filter(|_| !title.is_empty()) else {
+            return;
+        };
+        self.renaming = true;
+        self.error = None;
+        self.command(Command::Rename { session, title });
+        cx.notify();
+    }
+
+    pub(super) fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editing_title = false;
+        self.focus_input(window, cx);
+        cx.notify();
+    }
+
+    fn title_slot(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("thread-title-slot")
+            .test_support()
+            .flex_1()
+            .min_w_0()
+            .h_8()
+            .flex()
+            .items_center()
+            .gap_2()
+            .when(self.editing_title, |slot| {
+                slot.on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.cancel_rename(window, cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(Input::new(&self.rename).small().disabled(self.renaming)),
+                )
+                .child(
+                    Button::new("save-title")
+                        .primary()
+                        .small()
+                        .label("保存")
+                        .disabled(self.renaming || self.rename.read(cx).value().trim().is_empty())
+                        .on_click(cx.listener(|this, _, _, cx| this.save_title(cx))),
+                )
+                .child(
+                    Button::new("cancel-rename")
+                        .ghost()
+                        .small()
+                        .label("取消")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.cancel_rename(window, cx)),
+                        ),
+                )
+            })
+            .when(!self.editing_title, |slot| {
+                slot.child(
+                    div()
+                        .id("rename-session")
+                        .test_support()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_sm()
+                        .cursor_pointer()
+                        .child(
+                            self.current()
+                                .map(title)
+                                .unwrap_or_else(|| "新 thread".into()),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| this.begin_rename(window, cx))),
+                )
+            })
+    }
+
     pub(super) fn render_header(&self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.current();
         div()
+            .id("thread-header")
+            .test_support()
             .flex()
             .flex_col()
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
                 div()
+                    .id("conversation-header-row")
+                    .test_support()
                     .flex()
+                    .flex_shrink_0()
+                    .h(px(layout::HEADER_HEIGHT))
                     .items_center()
-                    .gap_2()
+                    .gap_1()
                     .px_3()
-                    .py_2()
                     .child(
-                        Button::new("sidebar-toggle")
-                            .ghost()
-                            .small()
-                            .icon(IconName::PanelLeft)
+                        layout::icon_button("sidebar-toggle", IconName::PanelLeft)
                             .tooltip("Threads · Ctrl B")
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)),
                             ),
                     )
+                    .when(!self.sidebar_visible, |row| {
+                        row.child(self.application_button(cx))
+                            .child(self.settings_button(cx))
+                    })
                     .child(self.workspace_button(cx))
                     .child(caption("/", cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_sm()
-                            .child(current.map(title).unwrap_or_else(|| "新 thread".into())),
-                    )
+                    .child(self.title_slot(cx))
                     .when_some(current, |row, session| {
                         row.child(
-                            Button::new("copy-session-id")
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Copy)
+                            layout::icon_button("copy-session-id", IconName::Copy)
                                 .tooltip(format!("复制 thread ID · {}", session.id))
                                 .on_click({
                                     let id = session.id.to_string();
@@ -52,134 +143,41 @@ impl Workspace {
                                     }
                                 }),
                         )
-                    })
-                    .when(self.active.is_some(), |row| {
-                        row.child(
-                            Button::new("rename-session")
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Pencil)
-                                .tooltip("重命名 thread")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    let text = this.current().map(title).unwrap_or_default();
-                                    this.editing_title = !this.editing_title;
-                                    if this.editing_title {
-                                        this.rename.update(cx, |input, cx| {
-                                            input.set_value(text, window, cx);
-                                            input.focus(window, cx);
-                                        });
-                                    } else {
-                                        this.focus_input(window, cx);
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("delete-session")
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Trash)
-                                .tooltip("删除 thread")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.deleting = this.active;
-                                    cx.notify();
-                                })),
-                        )
+                        .when(!session.archived, |row| {
+                            row.child(self.archive_button(session, "header-archive", cx))
+                        })
                     })
                     .child(
-                        Button::new("refresh")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::RefreshCw)
+                        layout::icon_button("refresh", IconName::RefreshCw)
                             .tooltip("刷新 · F5")
                             .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     )
                     .child(self.mode_button(cx)),
             )
-            .when(self.editing_title, |header| {
-                header.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_5()
-                        .pb_3()
-                        .child(Input::new(&self.rename))
-                        .child(
-                            Button::new("save-title")
-                                .primary()
-                                .small()
-                                .label("保存")
-                                .disabled(
-                                    self.renaming || self.rename.read(cx).value().trim().is_empty(),
-                                )
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(session) = this.active {
-                                        this.renaming = true;
-                                        this.command(Command::Rename {
-                                            session,
-                                            title: this.rename.read(cx).value().trim().to_owned(),
-                                        });
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                        .child(
-                            Button::new("cancel-rename")
-                                .ghost()
-                                .small()
-                                .label("取消")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.editing_title = false;
-                                    this.focus_input(window, cx);
-                                    cx.notify();
-                                })),
-                        ),
-                )
-            })
-            .when_some(self.deleting, |header, session| {
-                header.child(
-                    div()
-                        .px_5()
-                        .pb_3()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_color(cx.theme().danger)
-                                .child("删除会话会停止 Agent，并移除 basrd 中的会话记录。"),
-                        )
-                        .child(
-                            Button::new("confirm-delete")
-                                .danger()
-                                .small()
-                                .label("确认删除")
-                                .disabled(self.delete_pending)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.delete_pending = true;
-                                    this.command(Command::Delete(session));
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("cancel-delete")
-                                .ghost()
-                                .small()
-                                .label("取消")
-                                .disabled(self.delete_pending)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.deleting = None;
-                                    cx.notify();
-                                })),
-                        ),
-                )
-            })
+            .when_some(
+                current.filter(|session| session.archived),
+                |header, session| {
+                    header.child(
+                        div()
+                            .px_5()
+                            .pb_3()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child("已归档 · 历史已保留，恢复后可发送；当前任务仍可停止。"),
+                            )
+                            .child(self.archive_button(session, "restore-archived", cx)),
+                    )
+                },
+            )
     }
 
     pub(super) fn workspace_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let groups = groups::group_threads(&self.sessions, &self.directories, "");
+        let sessions = self.visible_sessions();
+        let groups = self.grouped_threads(&sessions, "");
         let directories: Vec<_> = groups.into_iter().map(|group| group.directory).collect();
         let selected = self.selected_directory.clone();
         let view = cx.entity().downgrade();
@@ -188,6 +186,12 @@ impl Workspace {
             .ghost()
             .xsmall()
             .icon(IconName::Folder)
+            .when(self.compact, |button| {
+                button
+                    .w(px(layout::ICON_BUTTON_SIZE))
+                    .h(px(layout::ICON_BUTTON_SIZE))
+                    .p_0()
+            })
             .when(!self.compact, |button| {
                 button.label(groups::name(selected.as_deref()))
             })
@@ -244,7 +248,7 @@ impl Workspace {
                 .as_ref()
                 .is_none_or(|c| !c.items.is_empty())
                 || self.working()
-                || self.active.is_some_and(|id| self.sending.contains(&id)));
+                || self.active.is_some_and(|id| self.sending(id)));
         let button = Button::new("agent-picker")
             .ghost()
             .xsmall()

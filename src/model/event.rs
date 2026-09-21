@@ -17,6 +17,7 @@ pub enum EventKind {
     TurnStarted { turn: TurnId },
     TurnFinished { turn: TurnId, result: TurnResult },
     TitleChanged { title: String },
+    ArchiveChanged { archived: bool },
     StatusChanged { status: super::SessionStatus },
     Failed { message: String },
 }

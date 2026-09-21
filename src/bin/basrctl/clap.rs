@@ -82,8 +82,12 @@ pub enum Session {
         cwd: Option<PathBuf>,
     },
 
-    /// List live sessions.
-    List,
+    /// List non-archived sessions.
+    List {
+        /// Include archived sessions.
+        #[arg(long)]
+        all: bool,
+    },
 
     /// Show one session's metadata.
     Show {
@@ -91,7 +95,19 @@ pub enum Session {
         session: String,
     },
 
-    /// Stop a session's backend and forget it.
+    /// Reversibly archive a session without stopping its backend.
+    Archive {
+        /// Session id.
+        session: String,
+    },
+
+    /// Restore an archived session to the default list.
+    Restore {
+        /// Session id.
+        session: String,
+    },
+
+    /// Permanently stop a session's backend and forget it (not recoverable archive).
     Remove {
         /// Session id.
         session: String,
@@ -105,3 +121,6 @@ pub enum Session {
         title: String,
     },
 }
+
+#[cfg(test)]
+mod tests;

@@ -43,7 +43,7 @@ pub(super) enum PreviewKey {
 }
 
 impl Workspace {
-    fn completed_reply(&self) -> Option<(&Message, crate::conversation::CompletedReply)> {
+    fn completed_reply(&self) -> Option<(&Message, crate::conversation::ReplyPosition)> {
         let conversation = self.conversation.as_ref()?;
         if conversation.session.status != SessionStatus::Idle {
             return None;
@@ -84,10 +84,14 @@ impl Workspace {
         {
             self.close_reply_preview(window, cx);
         }
+        let visible_reply = self
+            .conversation
+            .as_ref()
+            .and_then(|conversation| conversation.last_reply);
         if window.is_window_active()
             && (!self.compact || self.output_open)
             && (self.list.is_following_tail()
-                || reply.is_some_and(|reply| {
+                || visible_reply.is_some_and(|reply| {
                     self.list
                         .bounds_for_item(reply.index)
                         .is_some_and(|bounds| {
@@ -97,10 +101,11 @@ impl Workspace {
                                 && bounds.bottom() > viewport.top()
                         })
                 }))
-            && let Some(cursor) = completed
+            && let Some(reply) = visible_reply
             && let Some(session) = self.active
         {
-            self.seen_replies.insert(session, cursor);
+            let seen = self.seen_replies.entry(session).or_default();
+            *seen = (*seen).max(reply.cursor);
         }
     }
 

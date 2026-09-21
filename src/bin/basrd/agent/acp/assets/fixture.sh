@@ -14,6 +14,7 @@ while IFS= read -r request; do
             if [ "$BASR_FIXTURE_MODE" = early_update ]; then
                 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"config_option_update","configOptions":[{"id":"enabled","name":"Enabled","type":"boolean","currentValue":true}]}}}'
                 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"current_mode_update","currentModeId":"code"}}}'
+                printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"startup"}}}}'
             fi
             printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"fixture","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"fast","options":[{"value":"fast","name":"Fast"},{"value":"deep","name":"Deep"}]}],"modes":{"currentModeId":"ask","availableModes":[{"id":"ask","name":"Ask"},{"id":"code","name":"Code"}]},"_meta":{"fixture":"session"}}}\n' "$id"
             if [ "$BASR_FIXTURE_MODE" = idle_exit ]; then sleep 0.1; exit; fi
@@ -25,8 +26,17 @@ while IFS= read -r request; do
             if [ "$BASR_FIXTURE_MODE" = wait_release ]; then
                 while [ ! -f "$BASR_FIXTURE_PID.release" ]; do sleep 0.01; done
             fi
-            if [ "$BASR_FIXTURE_MODE" = prompt_error ]; then
-                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"fixture prompt failed"}}\n' "$id"
+            if [ "$BASR_FIXTURE_MODE" = prompt_disconnect ]; then
+                exit
+            elif [ "$BASR_FIXTURE_MODE" = malformed_prompt ]; then
+                printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+            elif [ "$BASR_FIXTURE_MODE" = corrupt_prompt ]; then
+                printf '%s\n' 'not json'
+            elif [ "$BASR_FIXTURE_MODE" = prompt_error ]; then
+                printf '\n   \n'
+                printf '%s\n' '{"jsonrpc":"2.0","method":"fixture/unknown","params":{}}'
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"fixture prompt rejected"}}\n' "$id"
+                BASR_FIXTURE_MODE=normal
             elif [ "$BASR_FIXTURE_MODE" != wait_cancel ] && [ "$BASR_FIXTURE_MODE" != ignore_cancel ]; then
                 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking"}}}}'
                 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"answer"}}}}'
@@ -46,13 +56,21 @@ while IFS= read -r request; do
                     printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"invalid config value","data":{"configId":"model"}}}\n' "$id"
                     ;;
                 *)
-                    printf '{"jsonrpc":"2.0","id":%s,"result":{"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"deep","options":[{"value":"fast","name":"Fast"},{"value":"deep","name":"Deep"}]}],"_meta":{"fixture":"config"}}}\n' "$id"
+                    config_value=deep
+                    case "$request" in *'"value":"fast"'*) config_value=fast;; esac
+                    printf '{"jsonrpc":"2.0","id":%s,"result":{"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"%s","options":[{"value":"fast","name":"Fast"},{"value":"deep","name":"Deep"}]}],"_meta":{"fixture":"config"}}}\n' "$id" "$config_value"
+                    if [ "$BASR_FIXTURE_MODE" = config_notification ]; then
+                        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"config_option_update","configOptions":[{"id":"enabled","name":"Enabled","type":"boolean","currentValue":true}]}}}'
+                    fi
                     ;;
             esac
             ;;
         *'"method":"session/set_mode"'*)
             printf '%s\n' "$request" > "$BASR_FIXTURE_PID.mode"
             printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+            if [ "$BASR_FIXTURE_MODE" = mode_notification ]; then
+                printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"current_mode_update","currentModeId":"code"}}}'
+            fi
             ;;
         *'"method":"session/cancel"'*)
             printf '%s\n' "$request" > "$BASR_FIXTURE_PID.cancel"

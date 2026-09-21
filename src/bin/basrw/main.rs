@@ -1,10 +1,15 @@
 //! Native session management and agent conversations for BASR.
 
+mod application;
 mod assets;
 mod attachment;
+mod branding;
 mod connection;
 mod conversation;
 mod desktop;
+mod http;
+mod settings;
+mod settings_window;
 mod theme;
 mod workspace;
 
@@ -38,8 +43,11 @@ struct Args {
     /// Override the DMS-generated Zed theme file; changes are reloaded live.
     #[arg(long)]
     theme_file: Option<PathBuf>,
+    /// BASR appearance preferences (default: $XDG_CONFIG_HOME/basr/appearance.json).
+    #[arg(long)]
+    appearance_file: Option<PathBuf>,
     #[cfg(feature = "gui-tests")]
-    #[arg(long, hide = true, value_parser = ["empty", "sample", "layout", "connecting", "disconnected", "menus", "files", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "clipboard"])]
+    #[arg(long, hide = true, value_parser = ["empty", "sample", "layout", "connecting", "disconnected", "menus", "files", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "clipboard", "settings"])]
     preview_panel: Option<String>,
 }
 
@@ -61,17 +69,29 @@ fn main() -> Result<()> {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
     gpui_kit::application()
+        .with_http_client(http::client(&handle)?)
         .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            theme::init(args.theme_file, cx);
+            theme::init(args.theme_file, args.appearance_file, cx);
+            theme::watch(cx);
+            application::init(cx);
             workspace::bind_keys(cx);
+            settings_window::bind_keys(cx);
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }
             })
             .detach();
+            #[cfg(feature = "gui-tests")]
+            if args.preview_panel.as_deref() == Some("settings") {
+                if let Err(error) = settings_window::open(cx) {
+                    tracing::error!(%error, "cannot open the BASR settings window");
+                    cx.quit();
+                }
+                return;
+            }
             let bounds = Bounds::centered(None, workspace::initial_size(!args.window), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

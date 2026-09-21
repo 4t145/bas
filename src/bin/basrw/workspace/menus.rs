@@ -4,9 +4,9 @@ use std::{cell::Cell, rc::Rc};
 
 use gpui_kit::{
     AnyWindowHandle, Bounds, DismissEvent, FocusHandle, Focusable, MouseButton,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, canvas,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, anchored, canvas,
     component::menu::{DropdownMenu, PopupMenu},
-    point,
+    deferred, point,
     popup::{PopupAnchor, PopupConstraintAdjustment, PopupGravity, PopupOptions},
 };
 
@@ -17,7 +17,7 @@ const MENU_MAX_HEIGHT: f32 = 360.;
 const MENU_ROW_HEIGHT: f32 = 28.;
 const MENU_PADDING: f32 = 12.;
 
-type Builder = Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
+pub(super) type Builder = Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
 
 pub(super) struct OpenMenu {
     pub window: Option<AnyWindowHandle>,
@@ -28,7 +28,74 @@ pub(super) struct OpenMenu {
     _subscriptions: Vec<Subscription>,
 }
 
+struct MenuSurface {
+    content: Entity<PopupMenu>,
+}
+
+impl Render for MenuSurface {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .on_action(
+                cx.listener(|this, _: &crate::application::OpenSettings, _, cx| {
+                    this.dismiss_for_action(cx);
+                }),
+            )
+            .on_action(cx.listener(|this, _: &crate::application::Quit, _, cx| {
+                this.dismiss_for_action(cx);
+            }))
+            .child(self.content.clone())
+            .on_prepaint(|bounds, window, _| {
+                let desired = size(window.bounds().size.width, bounds.size.height.ceil());
+                if desired != window.bounds().size {
+                    window.resize(desired);
+                }
+            })
+    }
+}
+
+impl MenuSurface {
+    fn dismiss_for_action(&self, cx: &mut Context<Self>) {
+        self.content.update(cx, |_, cx| cx.emit(DismissEvent));
+        cx.propagate();
+    }
+}
+
 impl Workspace {
+    pub(super) fn open_context_menu(
+        &mut self,
+        position: gpui_kit::Point<Pixels>,
+        rows: usize,
+        build: Builder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_menu(window, cx);
+        self.open_menu(
+            Bounds::new(position, size(px(0.), px(0.))),
+            rows,
+            build,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn inline_context_menu(&self) -> Option<AnyElement> {
+        let menu = self
+            .menu
+            .as_ref()
+            .filter(|menu| !self.compact && menu.window.is_none())?;
+        Some(
+            deferred(
+                anchored()
+                    .position(menu.trigger.origin)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(menu.content.clone()),
+            )
+            .with_priority(gpui_kit::base::POPUP_PRIORITY)
+            .into_any_element(),
+        )
+    }
+
     pub(super) fn menu_button(
         &self,
         button: Button,
@@ -127,8 +194,9 @@ impl Workspace {
         let native =
             match cx.open_window(popup_options(parent, trigger, menu_size), |window, cx| {
                 menu.focus_handle(cx).focus(window, cx);
+                let surface = cx.new(|_| MenuSurface { content: menu });
                 cx.new(|cx| {
-                    Root::new(menu, window, cx)
+                    Root::new(surface, window, cx)
                         .refine_style(&theme::font_style(cx))
                         .bordered(false)
                         .window_shadow_size(px(0.))

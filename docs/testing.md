@@ -18,6 +18,20 @@ nix develop -c cargo test --all-targets
 已经进入开发 shell 时可以直接运行 `cargo test --all-targets`。这一层包括
 Rust 单元测试、gRPC 和进程集成测试，不启动虚拟机。
 
+默认目标不包含可选的 GUI。完整本地验收还需运行：
+
+```sh
+nix develop .#gui -c cargo fmt --all -- --check
+nix develop .#gui -c cargo build --all-targets --features gui-tests --locked
+nix develop .#gui -c cargo test --features gui-tests --bin basrw --locked
+nix develop .#gui -c cargo clippy --all-targets --features gui-tests --locked -- -D warnings
+```
+
+CI 分别执行默认测试与 headless GUI 测试，不读取 `.env`，也不调用真实模型。
+状态回归通过受控事件顺序和 ACP fixture 验证：设置响应与通知的提交顺序、
+启动期间历史淘汰、快照版本合并、发送回执与事件交错以及队列编辑保序。
+这些测试不使用固定等待时间推测操作是否完成。
+
 ## 自动系统测试
 
 宿主机需要 Linux 和启用了 flakes 的 Nix，当前提供 `x86_64-linux`、

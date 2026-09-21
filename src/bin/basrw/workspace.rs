@@ -1,3 +1,5 @@
+mod application;
+mod archive;
 mod attachments;
 mod chat;
 mod commands;
@@ -6,14 +8,19 @@ mod groups;
 mod layout;
 mod markdown;
 mod menus;
+mod navigation;
+mod outbox;
 #[cfg(feature = "gui-tests")]
 mod preview;
 mod queue;
 mod reply;
 mod restore;
+mod settings;
 mod sidebar;
 mod status;
 mod thought;
+mod thread_actions;
+mod thread_row;
 
 use std::{
     cell::RefCell,
@@ -32,7 +39,8 @@ use gpui_kit::{
     AnyElement, App, ClipboardItem, Context, Div, Entity, FollowMode, FontWeight, KeyBinding,
     ListAlignment, ListState, Pixels, SharedString, Size, Subscription, Task, TestSupportExt,
     Window, actions,
-    component::{button::*, input::*, text::TextView, *},
+    base::TextView,
+    component::{button::*, input::*, *},
     div, list,
     prelude::*,
     px, size,
@@ -49,6 +57,7 @@ const EVENT_BATCH: usize = 64;
 const LIST_OVERDRAW: f32 = 800.;
 const SIDEBAR_WIDTH: f32 = 252.;
 
+use crate::application::OpenSettings;
 pub(super) use layout::initial_size;
 
 actions!(
@@ -60,6 +69,8 @@ actions!(
         ToggleSidebar,
         ToggleMode,
         ToggleOutput,
+        NextThread,
+        PreviousThread,
         Dismiss,
         Refresh
     ]
@@ -75,6 +86,14 @@ pub(super) fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-b", ToggleSidebar, Some("BasrWorkspace")),
         KeyBinding::new("ctrl-shift-m", ToggleMode, Some("BasrWorkspace")),
         KeyBinding::new("ctrl-o", ToggleOutput, Some("BasrWorkspace")),
+        KeyBinding::new("ctrl-tab", NextThread, Some("BasrWorkspace")),
+        KeyBinding::new("ctrl-shift-tab", PreviousThread, Some("BasrWorkspace")),
+        KeyBinding::new("ctrl-tab", NextThread, Some("BasrWorkspace > Input")),
+        KeyBinding::new(
+            "ctrl-shift-tab",
+            PreviousThread,
+            Some("BasrWorkspace > Input"),
+        ),
         KeyBinding::new("escape", Dismiss, Some("BasrWorkspace")),
         KeyBinding::new("f5", Refresh, Some("BasrWorkspace")),
     ]);
@@ -86,12 +105,15 @@ pub(super) struct Workspace {
     reply_preview: Option<reply::Preview>,
     reply_hover: Option<Task<()>>,
     seen_replies: HashMap<SessionId, u64>,
+    pinned: HashSet<SessionId>,
     foreground: Option<SessionId>,
     connection: Connection,
     restore_store: Option<restore::Store>,
     restore_on_connect: bool,
     server: SocketAddr,
     sessions: Vec<SessionMeta>,
+    catalog_ids: HashSet<SessionId>,
+    removed_sessions: HashSet<SessionId>,
     agents: Vec<pb::Agent>,
     active: Option<SessionId>,
     conversation: Option<Conversation>,
@@ -118,18 +140,15 @@ pub(super) struct Workspace {
     command_selection: usize,
     commands_dismissed: bool,
     markdown: RefCell<HashMap<String, markdown::Document>>,
-    sending: HashSet<SessionId>,
-    queued: HashMap<SessionId, std::collections::VecDeque<Draft>>,
-    queued_inflight: HashMap<SessionId, Draft>,
-    queued_paused: HashSet<SessionId>,
-    awaiting_turn: HashMap<SessionId, basr::model::Timestamp>,
+    outboxes: HashMap<SessionId, outbox::SessionOutbox>,
     configuring: HashSet<SessionId>,
     cancelling: HashSet<SessionId>,
     creating: bool,
     editing_title: bool,
     renaming: bool,
-    deleting: Option<SessionId>,
-    delete_pending: bool,
+    archived_list: bool,
+    archive_pending: HashSet<SessionId>,
+    delete_pending: HashSet<SessionId>,
     sidebar_visible: bool,
     compact: bool,
     output_open: bool,
@@ -141,7 +160,6 @@ pub(super) struct Workspace {
     list: ListState,
     _subscriptions: Vec<Subscription>,
     _events: Task<()>,
-    _theme_watch: Option<Task<()>>,
 }
 
 impl Workspace {
@@ -156,9 +174,13 @@ impl Workspace {
         let (connection, events) = Connection::new(server, runtime);
         let mut view = Self::with_connection(connection, events, server, cwd, compact, window, cx);
         view.restore_store = restore::Store::discover(server);
+        view.pinned = view
+            .restore_store
+            .as_ref()
+            .map(restore::Store::pinned)
+            .unwrap_or_default();
         view.restore_on_connect = true;
         view.placement = Some(desktop::Placement::new(runtime));
-        view._theme_watch = Some(theme::watch(window, cx));
         view.resize_window(window, cx);
         view
     }
@@ -219,7 +241,7 @@ impl Workspace {
                 if matches!(event, InputEvent::PressEnter { .. }) {
                     let query = this.search.read(cx).value().to_lowercase();
                     if let Some(id) = this
-                        .sessions
+                        .visible_sessions()
                         .iter()
                         .find(|session| matches_query(session, &query))
                         .map(|session| session.id)
@@ -243,6 +265,11 @@ impl Workspace {
                 cx.notify();
             }),
             cx.observe(&rename, |_, _, cx| cx.notify()),
+            cx.subscribe_in(&rename, window, |this, _, event, _, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.save_title(cx);
+                }
+            }),
             cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
                 if matches!(event, InputEvent::PressEnter { shift: false, .. })
                     && !this.complete_command(window, cx)
@@ -295,6 +322,8 @@ impl Workspace {
             restore_on_connect: false,
             server,
             sessions: Vec::new(),
+            catalog_ids: HashSet::new(),
+            removed_sessions: HashSet::new(),
             agents: Vec::new(),
             active: None,
             conversation: None,
@@ -321,23 +350,21 @@ impl Workspace {
             command_selection: 0,
             commands_dismissed: false,
             markdown: RefCell::new(HashMap::new()),
-            sending: HashSet::new(),
-            queued: HashMap::new(),
-            queued_inflight: HashMap::new(),
-            queued_paused: HashSet::new(),
-            awaiting_turn: HashMap::new(),
+            outboxes: HashMap::new(),
             configuring: HashSet::new(),
             cancelling: HashSet::new(),
             creating: false,
             editing_title: false,
             renaming: false,
-            deleting: None,
-            delete_pending: false,
+            archived_list: false,
+            archive_pending: HashSet::new(),
+            delete_pending: HashSet::new(),
             window: window.window_handle(),
             menu: None,
             reply_preview: None,
             reply_hover: None,
             seen_replies: HashMap::new(),
+            pinned: HashSet::new(),
             foreground: None,
             sidebar_visible: !compact,
             compact,
@@ -350,13 +377,25 @@ impl Workspace {
             list,
             _subscriptions: subscriptions,
             _events: event_task,
-            _theme_watch: None,
         }
     }
 
     fn command(&mut self, command: Command) {
         self.error = None;
+        let prompt = match &command {
+            Command::Prompt { session, .. } => Some(*session),
+            _ => None,
+        };
         if !self.connection.send(command) {
+            if let Some(session) = prompt
+                && let Some(outbox) = self.outboxes.get_mut(&session)
+                && let Some(outbox::Action::Rejected {
+                    origin: outbox::Origin::Composer,
+                    draft,
+                }) = outbox.receipt(None)
+            {
+                self.drafts.insert(session, draft);
+            }
             self.connected = false;
             self.connection_error = Some("连接任务已停止，请重新打开 BASR。".into());
         }
@@ -388,7 +427,9 @@ impl Workspace {
             "连接未就绪，暂不能发送"
         } else if self.creating {
             "正在创建 thread，暂不能发送"
-        } else if self.active.is_some_and(|id| self.sending.contains(&id)) {
+        } else if self.active.is_some_and(|id| self.archive_blocked(id)) {
+            "已归档或正在更新归档状态；恢复后可发送，待发送队列需手动重试"
+        } else if self.active.is_some_and(|id| self.sending(id)) {
             "正在发送…"
         } else if self.working() {
             "加入待发送队列 · Enter\n当前回复结束后发送 · Shift Enter 换行"
@@ -479,7 +520,6 @@ impl Workspace {
         self.error = None;
         self.editing_title = false;
         self.editing_workspace = false;
-        self.deleting = None;
         self.expanded.clear();
         self.list.reset(0);
         self.list.set_follow_mode(FollowMode::Tail);
@@ -488,8 +528,8 @@ impl Workspace {
             self.attachments = draft.attachments;
             self.composer.update(cx, |input, cx| {
                 input.set_value(draft.text, window, cx);
-                input.focus(window, cx);
             });
+            self.focus_input(window, cx);
         }
         self.command(Command::Watch {
             session: id,
@@ -508,6 +548,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.archived_list = false;
         self.save_draft(cx);
         self.close_reply_preview(window, cx);
         self.active = None;
@@ -520,7 +561,6 @@ impl Workspace {
         self.expanded.clear();
         self.list.reset(0);
         self.epoch += 1;
-        self.deleting = None;
         self.editing_title = false;
         self.editing_workspace = false;
         self.error = None;
@@ -540,8 +580,8 @@ impl Workspace {
         self.attachments = draft.attachments;
         self.composer.update(cx, |input, cx| {
             input.set_value(draft.text, window, cx);
-            input.focus(window, cx);
         });
+        self.focus_input(window, cx);
         self.prepare_session(cx);
         cx.notify();
     }
@@ -567,8 +607,9 @@ impl Workspace {
             && self.stream == StreamState::Live
             && self.current().is_some_and(|session| {
                 matches!(session.status, SessionStatus::Idle | SessionStatus::Working)
+                    && !self.archive_blocked(session.id)
                     && !self.cancelling.contains(&session.id)
-                    && !self.sending.contains(&session.id)
+                    && !self.sending(session.id)
                     && !self.configuring.contains(&session.id)
                     && !self.loading_attachments.contains(&session.id)
             });
@@ -581,22 +622,32 @@ impl Workspace {
 
     fn prepare_session(&mut self, cx: &mut Context<Self>) {
         if !self.connected
+            || self.archived_list
             || self.active.is_some()
             || self.creating
             || self.selected_agent.is_empty()
         {
             return;
         }
+        let cwd = match self
+            .selected_directory
+            .as_deref()
+            .map(basr::service::utf8_cwd)
+            .transpose()
+        {
+            Err(_) => {
+                self.error = Some("工作目录不是有效 UTF-8，无法创建会话".into());
+                cx.notify();
+                return;
+            }
+            Ok(path) => path.unwrap_or_default().to_owned(),
+        };
         self.creating = true;
         self.command(Command::Create(connection::CreateSession {
             epoch: self.epoch,
             agent: self.selected_agent.clone(),
             title: String::new(),
-            cwd: self
-                .selected_directory
-                .as_ref()
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+            cwd,
         }));
         cx.notify();
     }
@@ -627,22 +678,26 @@ impl Workspace {
         };
         let text = self.composer.read(cx).value().to_string();
         if self.working()
-            || self.awaiting_turn.contains_key(&session)
             || self
-                .queued
+                .outboxes
                 .get(&session)
-                .is_some_and(|queue| !queue.is_empty())
+                .is_some_and(outbox::SessionOutbox::pending)
         {
             self.enqueue_draft(session, text, window, cx);
             return;
         }
-        if let Some(meta) = self.current() {
-            self.awaiting_turn.insert(session, meta.updated_at);
-        }
         self.error = None;
         self.commands_dismissed = true;
         self.list.set_follow_mode(FollowMode::Tail);
-        self.sending.insert(session);
+        let outbox::Action::Send(draft) = self.outboxes.entry(session).or_default().start(
+            Draft {
+                text: text.clone(),
+                attachments: self.attachments.clone(),
+            },
+            outbox::Origin::Composer,
+        ) else {
+            unreachable!("starting a submission returns its network action");
+        };
         let title = self.current().filter(|meta| meta.title.is_none()).map(|_| {
             text.lines()
                 .find(|line| !line.trim().is_empty())
@@ -654,8 +709,8 @@ impl Workspace {
         });
         self.command(Command::Prompt {
             session,
-            text,
-            attachments: self.attachments.clone(),
+            text: draft.text,
+            attachments: draft.attachments,
             capabilities: self.prompt_capabilities(),
             title,
         });
@@ -676,6 +731,32 @@ impl Workspace {
                 Ok(mut catalog) => {
                     self.connected = true;
                     self.connection_error = None;
+                    // Session IDs are never reused. Older snapshots cannot revive
+                    // a session whose removal has already been confirmed.
+                    catalog
+                        .sessions
+                        .retain(|meta| !self.removed_sessions.contains(&meta.id));
+                    let catalog_ids: HashSet<_> =
+                        catalog.sessions.iter().map(|meta| meta.id).collect();
+                    // Catalog requests are serial, but create receipts can overtake them.
+                    // Only disappearance after a prior catalog observation proves removal.
+                    for removed in self.catalog_ids.difference(&catalog_ids) {
+                        self.drafts.remove(removed);
+                        self.outboxes.remove(removed);
+                        self.removed_sessions.insert(*removed);
+                    }
+                    self.catalog_ids = catalog_ids;
+                    for meta in &mut catalog.sessions {
+                        if let Some(old) = self.sessions.iter().find(|old| old.id == meta.id) {
+                            let incoming = std::mem::replace(meta, old.clone());
+                            crate::conversation::merge_meta(meta, &incoming);
+                        }
+                        if let Some(conversation) = &self.conversation
+                            && conversation.session.id == meta.id
+                        {
+                            crate::conversation::merge_meta(meta, &conversation.session);
+                        }
+                    }
                     catalog
                         .sessions
                         .sort_by_key(|session| std::cmp::Reverse(session.updated_at));
@@ -697,9 +778,8 @@ impl Workspace {
                             .sessions
                             .iter()
                             .find(|session| session.id == conversation.session.id)
-                        && meta.updated_at > conversation.session.updated_at
                     {
-                        conversation.session = meta.clone();
+                        conversation.merge_meta(meta);
                     }
                     self.restore_thread(window, cx);
                     if self.error.is_none() {
@@ -717,10 +797,19 @@ impl Workspace {
                     self.creating = false;
                 }
                 match result {
+                    Ok(session) if self.removed_sessions.contains(&session.id) => {
+                        if current {
+                            self.error =
+                                Some("创建的 thread 已被删除，请新建 thread 后继续。".into());
+                        }
+                    }
                     Ok(session) => {
                         let id = session.id;
-                        self.sessions.retain(|meta| meta.id != id);
-                        self.sessions.insert(0, session);
+                        if let Some(meta) = self.sessions.iter_mut().find(|meta| meta.id == id) {
+                            crate::conversation::merge_meta(meta, &session);
+                        } else {
+                            self.sessions.insert(0, session);
+                        }
                         if current {
                             let draft = self.composer.read(cx).value().to_string();
                             self.drafts.insert(
@@ -742,11 +831,7 @@ impl Workspace {
                     Err(_) => {}
                 }
             }
-            Update::Renamed {
-                session,
-                title,
-                result,
-            } => {
+            Update::Renamed { session, result } => {
                 self.renaming = false;
                 match result {
                     Ok(()) => {
@@ -754,38 +839,79 @@ impl Workspace {
                             self.editing_title = false;
                             self.focus_input(window, cx);
                         }
+                        // The ordered event or catalog carries the title's revision.
+                    }
+                    Err(error) if self.active == Some(session) && self.editing_title => {
+                        self.error = Some(format!("重命名失败：{error}"));
+                        self.rename.update(cx, |input, cx| input.focus(window, cx));
+                    }
+                    Err(_) => {}
+                }
+            }
+            Update::Archived { session, result } => {
+                self.archive_pending.remove(&session);
+                match result {
+                    Ok(incoming) => {
+                        // A newer restore snapshot must not erase this successful archive's
+                        // queue pause, even when its metadata revision wins the merge.
+                        if incoming.archived
+                            && let Some(outbox) = self.outboxes.get_mut(&session)
+                        {
+                            outbox.pause();
+                        }
+                        // A late receipt must not resurrect a deleted catalog entry.
                         if let Some(meta) = self.sessions.iter_mut().find(|meta| meta.id == session)
                         {
-                            meta.title = Some(title.clone());
-                        }
-                        if let Some(conversation) = self
-                            .conversation
-                            .as_mut()
-                            .filter(|c| c.session.id == session)
-                        {
-                            conversation.session.title = Some(title);
+                            crate::conversation::merge_meta(meta, &incoming);
+                            if let Some(conversation) = &mut self.conversation
+                                && conversation.session.id == session
+                            {
+                                conversation.merge_meta(meta);
+                            }
                         }
                     }
-                    Err(error) => self.error = Some(format!("重命名失败：{error}")),
+                    Err(error) => {
+                        self.operation_error(
+                            "归档状态更新失败",
+                            format!("草稿和队列已保留。\n{error}"),
+                            cx,
+                        );
+                    }
                 }
             }
             Update::Deleted { session, result } => {
-                self.delete_pending = false;
+                self.delete_pending.remove(&session);
                 match result {
                     Ok(()) => {
+                        self.removed_sessions.insert(session);
                         self.sessions.retain(|meta| meta.id != session);
+                        self.catalog_ids.remove(&session);
                         if self.active == Some(session) {
-                            self.new_session(window, cx);
+                            if let Some(next) = self
+                                .sessions
+                                .iter()
+                                .find(|meta| !meta.archived)
+                                .map(|meta| meta.id)
+                            {
+                                self.select(next, window, cx);
+                            } else {
+                                self.new_session(window, cx);
+                            }
                         }
                         self.drafts.remove(&session);
-                        self.sending.remove(&session);
-                        self.queued.remove(&session);
-                        self.queued_inflight.remove(&session);
-                        self.queued_paused.remove(&session);
-                        self.awaiting_turn.remove(&session);
-                        self.deleting = None;
+                        self.outboxes.remove(&session);
+                        self.seen_replies.remove(&session);
+                        if self.pinned.contains(&session) {
+                            self.toggle_pinned(session, cx);
+                        }
                     }
-                    Err(error) => self.error = Some(format!("删除会话失败：{error}")),
+                    Err(error) => {
+                        self.operation_error(
+                            "删除失败",
+                            format!("会话 {session} 的本地草稿和队列已保留。\n{error}"),
+                            cx,
+                        );
+                    }
                 }
             }
             Update::Sent {
@@ -794,23 +920,12 @@ impl Workspace {
                 attachments,
                 result,
             } => {
-                self.sending.remove(&session);
-                if let Some(draft) = self.queued_inflight.remove(&session) {
-                    if let Err(error) = result {
-                        self.awaiting_turn.remove(&session);
-                        self.queued_paused.insert(session);
-                        self.queued.entry(session).or_default().push_front(draft);
-                        self.error = Some(format!("追加消息发送失败，消息已保留：{error}"));
-                    }
-                    self.flush_queue(cx);
-                    cx.notify();
-                    return;
-                }
-                if result.is_err() {
-                    self.awaiting_turn.remove(&session);
-                }
-                match result {
-                    Ok(()) => {
+                let action = self
+                    .outboxes
+                    .get_mut(&session)
+                    .and_then(|outbox| outbox.receipt(result.as_ref().ok().copied()));
+                match action {
+                    Some(outbox::Action::Accepted(outbox::Origin::Composer)) => {
                         if let Some(draft) = self.drafts.get_mut(&session) {
                             if draft.text == text {
                                 draft.text.clear();
@@ -830,10 +945,15 @@ impl Workspace {
                                 .update(cx, |input, cx| input.set_value("", window, cx));
                         }
                     }
-                    Err(error) => {
+                    Some(outbox::Action::Rejected { origin, draft }) => {
+                        if origin == outbox::Origin::Composer {
+                            self.drafts.insert(session, draft);
+                        }
+                        let error = result.expect_err("rejection requires an RPC error");
                         self.error =
                             Some(format!("发送失败，草稿已保留（会话 {session}）：{error}"))
                     }
+                    _ => {}
                 }
             }
             Update::Cancelled { session, result } => {
@@ -846,31 +966,45 @@ impl Workspace {
                 epoch,
                 session,
                 events,
-            } if epoch == self.epoch => {
+            } if epoch == self.epoch && self.active == Some(session.id) => {
                 self.markdown.borrow_mut().clear();
-                let mut conversation = Conversation::new(session.clone());
+                let known = self
+                    .sessions
+                    .iter()
+                    .find(|meta| meta.id == session.id)
+                    .unwrap_or(&session);
+                let mut conversation = Conversation::new(known.clone());
+                conversation.merge_meta(&session);
+                if let Some(old) = &self.conversation
+                    && old.session.id == session.id
+                {
+                    conversation.merge_meta(&old.session);
+                }
                 for event in events {
+                    if let Some(outbox) = self.outboxes.get_mut(&event.session) {
+                        outbox.observe(&event);
+                    }
                     conversation.apply(event);
                 }
-                if let Some(update) = &session.available_commands {
-                    conversation.commands = update.available_commands.clone();
+                if let Some(meta) = self.sessions.iter_mut().find(|meta| meta.id == session.id) {
+                    crate::conversation::merge_meta(meta, &conversation.session);
                 }
-                conversation.session = session;
                 self.list.reset(conversation.items.len());
                 self.list.set_follow_mode(FollowMode::Tail);
                 self.conversation = Some(conversation);
             }
             Update::Event { epoch, event } if epoch == self.epoch => {
+                if let Some(meta) = self
+                    .sessions
+                    .iter_mut()
+                    .find(|meta| meta.id == event.session)
+                {
+                    meta.apply_event(&event);
+                }
+                if let Some(outbox) = self.outboxes.get_mut(&event.session) {
+                    outbox.observe(&event);
+                }
                 if let Some(conversation) = &mut self.conversation {
-                    if event.cursor.raw() > conversation.cursor
-                        && matches!(
-                            event.kind,
-                            basr::model::EventKind::TurnStarted { .. }
-                                | basr::model::EventKind::TurnFinished { .. }
-                        )
-                    {
-                        self.awaiting_turn.remove(&event.session);
-                    }
                     let old_count = conversation.items.len();
                     let changed = conversation.apply(event);
                     let count = conversation.items.len();
@@ -885,13 +1019,14 @@ impl Workspace {
                         .iter_mut()
                         .find(|meta| meta.id == conversation.session.id)
                     {
-                        *meta = conversation.session.clone();
+                        crate::conversation::merge_meta(meta, &conversation.session);
                     }
                 }
             }
             Update::Stream { epoch, state } if epoch == self.epoch => self.stream = state,
             Update::Snapshot { .. } | Update::Event { .. } | Update::Stream { .. } => {}
         }
+        self.pause_archived();
         self.flush_queue(cx);
     }
 }
@@ -924,16 +1059,6 @@ fn matches_query(session: &SessionMeta, query: &str) -> bool {
             .cwd
             .as_ref()
             .is_some_and(|path| path.to_string_lossy().to_lowercase().contains(query))
-}
-
-fn status(status: SessionStatus) -> &'static str {
-    match status {
-        SessionStatus::Starting => "启动中",
-        SessionStatus::Idle => "就绪",
-        SessionStatus::Working => "运行中",
-        SessionStatus::Stopped => "已停止",
-        SessionStatus::Failed => "失败",
-    }
 }
 
 fn caption(text: impl Into<SharedString>, cx: &App) -> Div {

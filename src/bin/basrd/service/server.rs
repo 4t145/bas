@@ -21,6 +21,8 @@ use basr::service::{
     pb::basr_server::{Basr, BasrServer},
 };
 
+use super::pagination::PageEncoder;
+
 /// History page size used when a client does not ask for one.
 const DEFAULT_PAGE: usize = 128;
 
@@ -102,15 +104,24 @@ impl Basr for Service {
             .await?;
 
         Ok(Response::new(pb::CreateSessionResponse {
-            session: Some((&session.meta()).into()),
+            session: Some(pb::Session::try_from(&session.meta()).map_err(metadata_error)?),
         }))
     }
 
     async fn list_sessions(
         &self,
-        _request: Request<pb::ListSessionsRequest>,
+        request: Request<pb::ListSessionsRequest>,
     ) -> Result<Response<pb::ListSessionsResponse>, Status> {
-        let sessions = self.registry.list().await.iter().map(Into::into).collect();
+        let include_archived = request.into_inner().include_archived;
+        let sessions = self
+            .registry
+            .list()
+            .await
+            .iter()
+            .filter(|session| include_archived || !session.archived)
+            .map(pb::Session::try_from)
+            .collect::<Result<_, _>>()
+            .map_err(metadata_error)?;
 
         Ok(Response::new(pb::ListSessionsResponse { sessions }))
     }
@@ -122,7 +133,7 @@ impl Basr for Service {
         let session = self.session(&request.into_inner().session).await?;
 
         Ok(Response::new(pb::GetSessionResponse {
-            session: Some((&session.meta()).into()),
+            session: Some(pb::Session::try_from(&session.meta()).map_err(metadata_error)?),
         }))
     }
 
@@ -201,11 +212,9 @@ impl Basr for Service {
     ) -> Result<Response<pb::TurnAccepted>, Status> {
         let request: acp::PromptRequest = decode(request)?;
         let session = self.session(&request.session_id.to_string()).await?;
-        let turn = session.prompt_acp(request)?;
+        let receipt = session.accept_prompt(request)?;
 
-        Ok(Response::new(pb::TurnAccepted {
-            turn: turn.to_string(),
-        }))
+        Ok(Response::new(receipt.into()))
     }
 
     async fn cancel(
@@ -239,6 +248,18 @@ impl Basr for Service {
         Ok(Response::new((&response).into()))
     }
 
+    async fn set_archived(
+        &self,
+        request: Request<pb::SetArchivedRequest>,
+    ) -> Result<Response<pb::SetArchivedResponse>, Status> {
+        let request = request.into_inner();
+        let session = self.session(&request.session).await?;
+        let meta = session.set_archived(request.archived);
+        Ok(Response::new(pb::SetArchivedResponse {
+            session: Some(pb::Session::try_from(&meta).map_err(metadata_error)?),
+        }))
+    }
+
     async fn set_title(
         &self,
         request: Request<pb::SetTitleRequest>,
@@ -261,19 +282,25 @@ impl Basr for Service {
         } else {
             request.limit as usize
         };
-        let page = session.page(request.after.map(Cursor::from_raw), limit)?;
-
-        Ok(Response::new(pb::LoadHistoryResponse {
-            events: page.events.iter().map(Into::into).collect(),
-            next: page.next.map(Cursor::raw),
-        }))
+        let mut encoder = PageEncoder::new(basr::service::MAX_MESSAGE_SIZE);
+        let mut result = Ok(true);
+        session.visit_history(
+            request.after.map(Cursor::from_raw),
+            limit,
+            |event, has_more| {
+                result = encoder.push(pb::Event::from(event), has_more);
+                matches!(result, Ok(true))
+            },
+        )?;
+        result?;
+        Ok(Response::new(encoder.finish()))
     }
 }
 
 impl From<SessionError> for Status {
     fn from(error: SessionError) -> Self {
         match &error {
-            SessionError::Busy | SessionError::Inactive(_) => {
+            SessionError::Busy | SessionError::Archived | SessionError::Inactive(_) => {
                 Status::failed_precondition(error.to_string())
             }
             SessionError::EmptyPrompt => Status::invalid_argument(error.to_string()),
@@ -329,6 +356,10 @@ impl From<AttachError> for Status {
             AttachError::Closed => Self::unavailable(error.to_string()),
         }
     }
+}
+
+fn metadata_error(error: basr::service::Error) -> Status {
+    Status::failed_precondition(error.to_string())
 }
 
 fn decode<T: serde::de::DeserializeOwned>(request: Request<pb::AcpPayload>) -> Result<T, Status> {

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -106,11 +107,41 @@ pub struct AgentSpec {
     /// Environment overrides applied to the child process.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    /// Maximum wait for a running prompt after sending cancellation.
+    #[serde(
+        default = "AgentSpec::default_cancellation_grace",
+        rename = "cancellation_grace_ms",
+        with = "milliseconds"
+    )]
+    pub cancellation_grace: Duration,
+}
+
+mod milliseconds {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::Duration;
+
+    /// # Errors
+    /// Rejects durations whose millisecond count cannot fit in the catalog format.
+    pub fn serialize<S: Serializer>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error> {
+        let millis = u64::try_from(duration.as_millis()).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_u64(millis)
+    }
+
+    /// # Errors
+    /// Rejects negative, fractional, or overflowing millisecond counts.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Duration, D::Error> {
+        u64::deserialize(deserializer).map(Duration::from_millis)
+    }
 }
 
 impl AgentSpec {
     /// The backend used when a session does not name one.
     pub const DEFAULT_ID: &'static str = "embedded";
+
+    /// Default deadline after sending a prompt cancellation notification.
+    pub const fn default_cancellation_grace() -> Duration {
+        Duration::from_secs(5)
+    }
 
     /// Builds a spec for the in-process agent.
     #[must_use]
@@ -120,6 +151,7 @@ impl AgentSpec {
             kind: Kind::Embedded,
             command: None,
             env: BTreeMap::new(),
+            cancellation_grace: Self::default_cancellation_grace(),
         }
     }
 
@@ -131,6 +163,7 @@ impl AgentSpec {
             kind: Kind::Acp,
             command: Some(command),
             env: BTreeMap::new(),
+            cancellation_grace: Self::default_cancellation_grace(),
         }
     }
 

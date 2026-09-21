@@ -14,9 +14,6 @@ impl TryFrom<&AgentSpec> for AcpAgent {
             AcpAgentConfig::new(command.program.clone())
                 .args(command.args.clone())
                 .envs(spec.env.clone()),
-        )
-        .with_debug(|line, direction| {
-            tracing::trace!(?direction, "acp: {line}");
-        }))
+        ))
     }
 }

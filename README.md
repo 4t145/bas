@@ -146,9 +146,16 @@ basrw --server 127.0.0.1:7337
 
 安装包包含图形运行库与桌面入口，basrd 服务单独运行。源码均加入 Git 后也可使用
 `nix profile install .#basrw`；开发运行使用 `nix develop .#gui -c cargo run --features gui --bin basrw`。
-支持会话创建、搜索、切换、重命名、删除、流式对话与停止回合。默认构建不启用图形依赖。
+支持会话创建、搜索、切换、重命名、可恢复归档、流式对话与停止回合。默认构建不启用图形依赖。
 默认打开最小输入弹窗，Ctrl+Shift+M 展开 workspace / thread 窗口，并自动跟随 DMS 的 Zed 主题。
+应用自己的字体、字号、行高、透明度和主题偏好可放在 `$XDG_CONFIG_HOME/basr/appearance.json`，
+或通过 `--appearance-file` 指定；也可用 `Ctrl+,` 打开独立的设置窗口，
+在分类页面中搜索并修改。有效修改自动保存并热更新所有窗口，非法配置不会覆盖当前外观。
 使用方式和测试命令见 [GUI 说明](docs/gui.md)。
+
+第一方代码保持 MIT；UI 使用许可兼容的 GPUI 组件，不复制或链接 Zed 的 GPL 上层面板。
+第三方依赖使用正式发布包，不维护本地源码覆盖。版本基线、验证结果和待处理问题见
+[原版 UI 依赖基线](docs/upstream-ui.md)。
 
 ## basrctl
 
@@ -163,10 +170,15 @@ $ basrctl attach <id> --cursor 42 --replay 50     # 按游标续传
 $ basrctl history <id> --after 42 --limit 50      # 翻页读取历史
 $ basrctl cancel <id>
 $ basrctl session rename <id> 新标题
-$ basrctl session remove <id>
+$ basrctl session archive <id>                   # 隐藏但保留会话与历史
+$ basrctl session list --all                     # 包括已归档会话
+$ basrctl session restore <id>                   # 恢复到普通列表
+$ basrctl session remove <id>                    # 永久删除：停止 Agent 并遗忘会话
 ```
 
 `--server` 可指定守护进程地址，默认 `127.0.0.1:7337`。
+归档不取消正在执行的回合，但归档期间不能发起新回合。会话和归档状态仍保存在
+daemon 内存中，受现有历史容量限制；归档不提供跨 daemon 重启的磁盘持久化。
 
 ## 架构要点
 

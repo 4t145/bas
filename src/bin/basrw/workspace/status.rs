@@ -75,7 +75,7 @@ impl Workspace {
             || self.working()
             || self
                 .active
-                .is_some_and(|id| self.sending.contains(&id) || self.configuring.contains(&id));
+                .is_some_and(|id| self.sending(id) || self.configuring.contains(&id));
         (active && self.connection_status() == ConnectionStatus::Connected)
             .then(|| self.stream_label())
     }

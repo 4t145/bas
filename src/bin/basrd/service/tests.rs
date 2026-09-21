@@ -1,5 +1,7 @@
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
+mod archive;
+
 use basr::{
     model::{ContentBlock, Cursor, Owner},
     service::pb::{self, basr_server::Basr},

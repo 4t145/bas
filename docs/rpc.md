@@ -15,10 +15,13 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | Session.initialization | `InitializeResponse`，包含 Agent 能力、实现信息与认证方法 |
 | Session.acp | `NewSessionResponse`，包含当前 modes、configOptions 和初始扩展元数据 |
 | Session.available_commands | 最新 `AvailableCommandsUpdate`，不受事件历史裁剪影响 |
+| Session.revision、active_turn | 快照包含的最后事件游标，以及当前正在执行的回合 |
+| Session.last_reply | 最近一条 Agent 回复块的游标；用于未读判断，改名/归档等元数据操作不会推进 |
+| Session.archived、SetArchived、ArchiveChanged | 可恢复的列表可见性，不改变 Agent 生命周期 |
 | Prompt 请求 | `PromptRequest`，完整 prompt 内容与 `_meta` |
-| Prompt 返回 | `TurnAccepted`，确认后台回合已接收 |
+| Prompt 返回 | `TurnAccepted`，包含 turn ID 和对应 `TurnStarted` 的 cursor |
 | TurnFinished.response | 完整 `PromptResponse`，包括 stopReason 和 `_meta` |
-| TurnFinished.error、Failed | BASR 后端故障信息 |
+| TurnFinished.error、Failed | 单轮请求失败、不可继续的后端故障，分别处理 |
 | Cancel 请求 | `CancelNotification` |
 | SetConfigOption | `SetSessionConfigOptionRequest` / `SetSessionConfigOptionResponse` |
 | SetMode | `SetSessionModeRequest` / `SetSessionModeResponse` |
@@ -61,13 +64,60 @@ let options = client.set_config_option_acp(
 `ConfigOptionUpdate` 并更新会话快照，所有订阅者都能看到变化。
 配置和模式请求的 ACP 错误保留在 gRPC status details 中，Rust 客户端可用
 `basr::service::acp_error` 解码原始 code、message、data。
+设置响应和通知由后端有序提交；调用者取消等待不会撤销已经执行的设置或丢失其状态更新。
+
+### 快照与回合确认
+
+`Session.revision` 表示快照已包含的最后一条事件。客户端重放聊天内容时维护自己的
+内容游标，但只有更高 revision 的事件才可以更新用于调度的会话元数据。
+目录刷新不能被迟到的旧事件覆盖；`updated_at` 是显示用墙上时钟，不是版本或发送确认。
+
+`TurnAccepted.cursor` 与 `turn` 一起标识被接受的请求。客户端必须确认对应回合或足够新的
+会话状态，才能派发下一条排队消息；无关的标题变更不能解除发送屏障。
+旧 daemon 缺少这些新增字段时，数值为零，不能将零版本当成可靠的进度确认。
+建议 daemon、CLI、GUI 一起更新。
+
+客户端按会话保存已读回复游标，用 `last_reply` 判断后台 thread 的未读状态；
+不能将任意 `revision` 或 `updated_at` 变化当成新回复。旧服务缺少 `last_reply` 时，
+客户端只使用实际收到的回复事件，不从目录时间戳猜测未读。
+
+后端返回有效的 ACP 请求错误时，只结束当前回合，允许修正输入后继续原会话。
+连接断开、协议故障和超过取消宽限期等不可继续的情况仍会使整个会话失败并回收后端。
+
+### 可恢复归档
+
+`SetArchived { session, archived }` 在会话锁内更新 `archived`，发布带 revision 的
+`ArchiveChanged`，并返回同一时刻的完整 Session 快照。相同值的重复请求不产生新事件。
+客户端仍按 revision 合并响应、目录和事件，不能用迟到响应覆盖更高版本。
+
+`ListSessions` 默认只返回未归档会话，`include_archived=true` 返回完整目录。
+归档不删除会话、不停止 Agent、不取消已接受的回合；`GetSession`、`Attach` 和
+`LoadHistory` 继续可用，`Cancel` 仍可显式停止正在执行的回合。
+归档后新 `Prompt` 返回 `FAILED_PRECONDITION`；恢复后按原生命周期判断是否可发送。
+Stopped / Failed 会话也可以归档和恢复，但恢复不会启动新 Agent 或使失效会话复活。
+
+GUI 在归档时保留草稿和未发队列并暂停派发，恢复本身不自动解除队列暂停。
+`DeleteSession` / `basrctl session remove` 仍是停止 Agent 并遗忘会话的永久删除操作，
+不作为旧服务器不支持归档时的兼容替代。
+
+归档沿用当前内存会话存储与有界历史策略，不是磁盘备份：
+GUI 关闭不会销毁它，但 daemon 重启后会话和归档状态仍会丢失，已淘汰的历史不会恢复。
+归档功能需更新 daemon、CLI 与 GUI；旧 daemon 返回 `UNIMPLEMENTED` 时应提示升级，
+不能把新增字段的默认 `false` 当作旧服务支持归档的证据。
+
+### 回放与输入边界
 
 所有 ACP 更新都进入历史，包括流式内容块。客户端按 cursor 去重后，以相同逻辑
 处理直播和回放；文本、思考分别累积，工具更新使用 ACP 的 `ToolCall::update`。
 游标过期仍返回 `DATA_LOSS`；历史容量现在按所有更新计数，淘汰可能发生在一条消息中间。
 `LoadHistory` 不承诺返回已淘汰内容。大附件也会占用历史内存。
-客户端与服务端的单条 gRPC 消息上限为 32 MiB，包含 base64 开销；历史页同样受此限制，
-含大文件时应减小分页条数。
+客户端与服务端的单条 gRPC 消息上限为 32 MiB，包含 base64 开销。历史分页同时遵守
+请求的事件条数和编码字节预算，达到预算时提前结束页面，并返回最后实际输出事件的
+`next`。单个事件已超过上限时返回 `RESOURCE_EXHAUSTED`，不会静默跳过或截断它。
+
+当前协议的工作目录为 UTF-8 字符串；CLI 和 daemon 都拒绝无法无损表示的路径，
+包括 canonicalize 后指向非 UTF-8 目录的符号链接，不使用替换字符改写路径。
+CLI 的人类可读输出会转义终端控制字符；JSON 输出保留 JSON 自身的编码语义。
 
 这是对旧自定义消息协议的破坏性调整，daemon、CLI、GUI 应一起重新编译和更新。
 旧的 ContentBlock / Delta / Message protobuf 字段已移除，事件字段号保留以避免复用。

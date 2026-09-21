@@ -6,6 +6,7 @@ use tonic::{Request, Response, Status, transport::Server};
 
 use super::*;
 use pb::basr_server::{Basr, BasrServer};
+mod archive;
 
 struct Fixture {
     client: Client,
@@ -26,6 +27,7 @@ enum Scenario {
     Reconnect,
     Expired,
     Missing,
+    Archived,
 }
 
 struct Service {
@@ -54,7 +56,10 @@ impl Basr for Service {
         _: Request<pb::GetSessionRequest>,
     ) -> Result<Response<pb::GetSessionResponse>, Status> {
         Ok(Response::new(pb::GetSessionResponse {
-            session: Some((&self.session).into()),
+            session: Some(
+                pb::Session::try_from(&self.session)
+                    .expect("fixture metadata has a UTF-8 working directory"),
+            ),
         }))
     }
 
@@ -122,13 +127,16 @@ impl Basr for Service {
         &self,
         _: Request<pb::ListAgentsRequest>,
     ) -> Result<Response<pb::ListAgentsResponse>, Status> {
-        Err(Status::unimplemented("not used"))
+        Ok(Response::new(pb::ListAgentsResponse { agents: Vec::new() }))
     }
     async fn list_sessions(
         &self,
-        _: Request<pb::ListSessionsRequest>,
+        request: Request<pb::ListSessionsRequest>,
     ) -> Result<Response<pb::ListSessionsResponse>, Status> {
-        Err(Status::unimplemented("not used"))
+        assert!(request.into_inner().include_archived);
+        Ok(Response::new(pb::ListSessionsResponse {
+            sessions: vec![pb::Session::try_from(&self.session).expect("metadata")],
+        }))
     }
     async fn create_session(
         &self,
@@ -136,6 +144,13 @@ impl Basr for Service {
     ) -> Result<Response<pb::CreateSessionResponse>, Status> {
         Err(Status::unimplemented("not used"))
     }
+    async fn set_archived(
+        &self,
+        _: Request<pb::SetArchivedRequest>,
+    ) -> Result<Response<pb::SetArchivedResponse>, Status> {
+        Err(Status::unimplemented("old daemon"))
+    }
+
     async fn delete_session(
         &self,
         _: Request<pb::DeleteSessionRequest>,
@@ -153,6 +168,7 @@ impl Basr for Service {
         self.prompts.lock().expect("prompt log").push(prompt);
         Ok(Response::new(pb::TurnAccepted {
             turn: uuid::Uuid::new_v4().to_string(),
+            cursor: 7,
         }))
     }
     async fn cancel(
@@ -182,7 +198,8 @@ impl Basr for Service {
 }
 
 async fn fixture(scenario: Scenario) -> Fixture {
-    let session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    let mut session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    session.archived = matches!(scenario, Scenario::Archived);
     let id = session.id;
     let history = (1..=300)
         .map(|cursor| {
@@ -257,7 +274,7 @@ async fn prompt_sends_text_files_and_images_as_native_acp_blocks() {
         },
     )
     .await;
-    assert!(matches!(update, Update::Sent { result: Ok(()), .. }));
+    assert!(matches!(update, Update::Sent { result: Ok(_), .. }));
     let update = execute(
         fixture.client.clone(),
         Command::Prompt {
@@ -271,7 +288,9 @@ async fn prompt_sends_text_files_and_images_as_native_acp_blocks() {
         },
     )
     .await;
-    assert!(matches!(update, Update::Sent { result: Ok(()), .. }));
+    assert!(
+        matches!(update, Update::Sent { result: Ok(receipt), .. } if receipt.cursor.raw() == 7)
+    );
     let prompts = fixture.prompts.lock().expect("prompt log");
     assert_eq!(prompts.len(), 2);
     assert_eq!(

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Check formatting
+        run: nix develop .#gui -c cargo fmt --all -- --check
+      - name: Build all application targets
+        run: nix develop .#gui -c cargo build --all-targets --features gui-tests --locked
+      - name: Test daemon and protocol
+        run: nix develop -c cargo test --all-targets --locked
+      - name: Lint default targets
+        run: nix develop -c cargo clippy --all-targets --locked -- -D warnings
+      - name: Test GUI package feature set
+        run: nix develop .#gui -c cargo test --features gui --bin basrw --locked
+      - name: Test headless desktop
+        run: nix develop .#gui -c cargo test --features gui-tests --bin basrw --locked
+      - name: Lint application targets
+        run: nix develop .#gui -c cargo clippy --all-targets --features gui-tests --locked -- -D warnings

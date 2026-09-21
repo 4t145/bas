@@ -4,9 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Default, Deserialize, Serialize)]
 struct Saved {
     thread: Option<SessionId>,
+    #[serde(default)]
+    pinned: std::collections::BTreeSet<SessionId>,
 }
 
 pub(super) struct Store {
@@ -20,6 +25,8 @@ pub(super) enum Error {
     Io(#[from] std::io::Error),
     #[error("invalid window state: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("window state is being updated by another process; please retry")]
+    Busy,
 }
 
 impl Store {
@@ -55,10 +62,64 @@ impl Store {
         self.saved.thread
     }
 
+    pub fn pinned(&self) -> HashSet<SessionId> {
+        self.saved.pinned.iter().copied().collect()
+    }
+
+    /// # Errors
+    /// Returns read/parse failures rather than overwriting corrupt saved state.
+    fn latest(&self) -> Result<Saved, Error> {
+        match fs::read(&self.path) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Saved::default()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// # Errors
+    /// Returns persistence failures without changing the in-memory pin set.
+    pub fn set_pinned(&mut self, id: SessionId, pinned: bool) -> Result<(), Error> {
+        let _lock = self.lock()?;
+        let mut saved = self.latest()?;
+        if pinned {
+            saved.pinned.insert(id);
+        } else {
+            saved.pinned.remove(&id);
+        }
+        self.write(saved)
+    }
+
     /// # Errors
     /// Returns filesystem or serialization failures; the previous state remains intact.
     pub fn save(&mut self, thread: Option<SessionId>) -> Result<(), Error> {
-        let saved = Saved { thread };
+        let _lock = self.lock()?;
+        let mut saved = self.latest()?;
+        saved.thread = thread;
+        self.write(saved)
+    }
+
+    /// # Errors
+    /// Returns IO failures or Busy without blocking the UI on another writer.
+    fn lock(&self) -> Result<fs::File, Error> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.path.with_extension("lock"))?;
+        match lock.try_lock() {
+            Ok(()) => Ok(lock),
+            Err(fs::TryLockError::WouldBlock) => Err(Error::Busy),
+            Err(fs::TryLockError::Error(error)) => Err(error.into()),
+        }
+    }
+
+    /// # Errors
+    /// Returns filesystem or serialization failures; the previous state remains intact.
+    fn write(&mut self, saved: Saved) -> Result<(), Error> {
         let bytes = serde_json::to_vec(&saved)?;
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
@@ -102,12 +163,20 @@ impl Workspace {
         // The catalog is newest first. A removed thread (or a first launch after
         // upgrading) falls back to the most recent live session before creating one.
         let thread = saved
-            .filter(|id| self.sessions.iter().any(|session| session.id == *id))
+            .filter(|id| {
+                self.sessions
+                    .iter()
+                    .any(|session| session.id == *id && !session.archived)
+            })
             .or_else(|| {
                 self.sessions
                     .iter()
                     .find(|session| {
-                        matches!(session.status, SessionStatus::Idle | SessionStatus::Working)
+                        !session.archived
+                            && matches!(
+                                session.status,
+                                SessionStatus::Idle | SessionStatus::Working
+                            )
                     })
                     .map(|session| session.id)
             });

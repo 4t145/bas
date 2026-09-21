@@ -51,27 +51,52 @@ impl Sources {
             dms_settings: config.join("DankMaterialShell/settings.json"),
         }
     }
-    pub fn read(&self) -> Files {
-        Files {
-            zed_theme: read(&self.zed_theme),
-            zed_settings: read(&self.zed_settings),
-            dms_colors: read(&self.dms_colors),
-            dms_settings: read(&self.dms_settings),
-        }
+    /// # Errors
+    /// Reports IO errors other than missing files, including the source path.
+    pub fn read(&self) -> Result<Files> {
+        Ok(Files {
+            zed_theme: read(&self.zed_theme)?,
+            zed_settings: read(&self.zed_settings)?,
+            dms_colors: read(&self.dms_colors)?,
+            dms_settings: read(&self.dms_settings)?,
+        })
+    }
+
+    pub fn description(&self) -> String {
+        format!(
+            "theme={}, Zed settings={}, DMS colors={}, DMS settings={}",
+            self.zed_theme.display(),
+            self.zed_settings.display(),
+            self.dms_colors.display(),
+            self.dms_settings.display()
+        )
     }
 }
 
-fn read(path: &Path) -> Option<String> {
-    fs::read_to_string(path).ok()
+/// # Errors
+/// Reports read failures with a path; absence alone means no override.
+pub(super) fn read(path: &Path) -> Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("cannot read {}", path.display())),
+    }
 }
 
 /// # Errors
 /// Rejects partially written or invalid theme JSON so live reload retains the last palette.
 pub(super) fn resolve(files: &Files, dark: bool) -> Result<Resolved> {
+    resolve_mode(files, dark, None)
+}
+
+/// # Errors
+/// Reports invalid imported JSON or dimensions. A mode override supersedes Zed selection.
+pub(super) fn resolve_mode(files: &Files, dark: bool, mode: Option<bool>) -> Result<Resolved> {
     let settings = parse(files.zed_settings.as_deref())?;
+    let dark = mode.unwrap_or(dark);
     let desktop = parse(files.dms_settings.as_deref())?;
     let mut result = if let Some(theme) = files.zed_theme.as_deref() {
-        from_zed(&parse(Some(theme))?, &settings, dark)?
+        from_zed(&parse(Some(theme))?, &settings, dark, mode.is_some())?
     } else if let Some(palette) = files.dms_colors.as_deref() {
         from_palette(&parse(Some(palette))?, dark)?
     } else {
@@ -85,11 +110,8 @@ pub(super) fn resolve(files: &Files, dark: bool) -> Result<Resolved> {
         .as_str()
         .or_else(|| desktop["monoFontFamily"].as_str())
         .map(Into::into);
-    result.config.font_size = Some(settings["ui_font_size"].as_f64().unwrap_or(15.) as f32);
-    result.content_font_size = settings["agent_ui_font_size"]
-        .as_f64()
-        .map(|size| size as f32)
-        .filter(|size| size.is_finite() && *size > 0.);
+    result.config.font_size = Some(font_size(&settings, "ui_font_size")?.unwrap_or(15.));
+    result.content_font_size = font_size(&settings, "agent_ui_font_size")?;
     result.font_fallbacks = settings["ui_font_fallbacks"]
         .as_array()
         .into_iter()
@@ -97,6 +119,19 @@ pub(super) fn resolve(files: &Files, dark: bool) -> Result<Resolved> {
         .filter_map(|name| name.as_str().map(str::to_owned))
         .collect();
     Ok(result)
+}
+
+/// # Errors
+/// Rejects non-numeric, non-finite, or non-positive imported font sizes.
+fn font_size(settings: &Value, name: &'static str) -> Result<Option<f32>> {
+    let Some(value) = settings.get(name) else {
+        return Ok(None);
+    };
+    let size = value
+        .as_f64()
+        .with_context(|| format!("{name} must be a number"))? as f32;
+    super::preferences::positive(name, size)?;
+    Ok(Some(size))
 }
 
 /// # Errors
@@ -110,17 +145,16 @@ fn parse(text: Option<&str>) -> Result<Value> {
 
 /// # Errors
 /// Reports a missing variant or invalid Zed theme schema.
-fn from_zed(family: &Value, settings: &Value, dark: bool) -> Result<Resolved> {
+fn from_zed(family: &Value, settings: &Value, dark: bool, override_mode: bool) -> Result<Resolved> {
     let selection = &settings["theme"];
-    let mode = match selection["mode"].as_str() {
-        Some("light") => "light",
-        Some("dark") => "dark",
-        _ => {
-            if dark {
-                "dark"
-            } else {
-                "light"
-            }
+    let default_mode = if dark { "dark" } else { "light" };
+    let mode = if override_mode {
+        default_mode
+    } else {
+        match selection["mode"].as_str() {
+            Some("light") => "light",
+            Some("dark") => "dark",
+            _ => default_mode,
         }
     };
     let requested = selection.as_str().or_else(|| selection[mode].as_str());
@@ -128,7 +162,11 @@ fn from_zed(family: &Value, settings: &Value, dark: bool) -> Result<Resolved> {
         .as_array()
         .context("Zed theme family has no variants")?;
     let theme = requested
-        .and_then(|name| themes.iter().find(|theme| theme["name"] == name))
+        .and_then(|name| {
+            themes.iter().find(|theme| {
+                theme["name"] == name && (!override_mode || theme["appearance"] == mode)
+            })
+        })
         .or_else(|| {
             themes.iter().find(|theme| {
                 theme["appearance"] == mode
@@ -139,11 +177,11 @@ fn from_zed(family: &Value, settings: &Value, dark: bool) -> Result<Resolved> {
         })
         .or_else(|| themes.iter().find(|theme| theme["appearance"] == mode))
         .context("Zed theme has no matching light/dark variant")?;
-    let mut style = theme["style"].clone();
-    if let (Some(style), Some(overrides)) = (
-        style.as_object_mut(),
-        settings["theme_overrides"].as_object(),
-    ) {
+    let mut style = theme["style"]
+        .as_object()
+        .context("Zed theme style must be an object")?
+        .clone();
+    if let Some(overrides) = settings["theme_overrides"].as_object() {
         style.extend(overrides.clone());
     }
     let mut colors = serde_json::Map::new();
@@ -177,27 +215,36 @@ fn from_zed(family: &Value, settings: &Value, dark: bool) -> Result<Resolved> {
         ("success.background", "success"),
         ("warning.background", "warning"),
     ] {
-        if style[source].is_string() {
-            colors.insert(target.into(), style[source].clone());
+        if let Some(value) = style.get(source).filter(|value| value.is_string()) {
+            colors.insert(target.into(), value.clone());
         }
     }
     colors.insert("scrollbar.background".into(), json!("#00000000"));
     // Button text must stay opaque even when the editor surface is translucent.
     if let Some(Value::String(color)) = colors.get_mut("primary.foreground")
-        && color.len() == 9
-        && color.starts_with('#')
+        && let Some(hex) = color.strip_prefix('#')
     {
-        color.truncate(7);
+        anyhow::ensure!(
+            matches!(hex.len(), 3 | 4 | 6 | 8) && hex.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "invalid hexadecimal editor.background color"
+        );
+        if let Some(rgb_digits) = match hex.len() {
+            4 => Some(3),
+            8 => Some(6),
+            _ => None,
+        } {
+            *color = format!("#{}", hex.chars().take(rgb_digits).collect::<String>());
+        }
     }
-    let background = match style["background.appearance"].as_str() {
+    let background = match style.get("background.appearance").and_then(Value::as_str) {
         Some("blurred") => WindowBackgroundAppearance::Blurred,
         Some("transparent") => WindowBackgroundAppearance::Transparent,
         _ => WindowBackgroundAppearance::Opaque,
     };
     let name = theme["name"].as_str().unwrap_or("DMS").to_owned();
     // Zed allows themes without syntax colors; GPUI's highlight schema requires the map.
-    if style["syntax"].is_null() {
-        style["syntax"] = json!({});
+    if style.get("syntax").is_none_or(Value::is_null) {
+        style.insert("syntax".into(), json!({}));
     }
     let config = serde_json::from_value(json!({
         "name": name, "mode": theme["appearance"], "radius": 6, "colors": colors, "highlight": style,

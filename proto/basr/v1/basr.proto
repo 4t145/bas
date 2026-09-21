@@ -13,10 +13,12 @@ service Basr {
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   // Starts a session on a backend.
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
-  // Lists live sessions.
+  // Lists non-archived sessions by default.
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   // Reads one session's metadata.
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  // Hides/restores a session without stopping its backend or deleting history.
+  rpc SetArchived(SetArchivedRequest) returns (SetArchivedResponse);
   // Stops a session's backend and forgets it.
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
   // Attaches to a session: replays history, then streams live events until the
@@ -87,6 +89,13 @@ message Session {
   AcpPayload acp = 10;
   // Latest ACP AvailableCommandsUpdate, retained beyond the history window.
   AcpPayload available_commands = 11;
+  // Last event reflected in this snapshot; independent of retained history.
+  uint64 revision = 12;
+  optional string active_turn = 13;
+  // Independent of lifecycle: a running turn may finish while archived.
+  bool archived = 14;
+  // Last agent message chunk; metadata-only changes are not unread replies.
+  uint64 last_reply = 15;
 }
 
 message CreateSessionRequest {
@@ -102,7 +111,9 @@ message CreateSessionResponse {
   Session session = 1;
 }
 
-message ListSessionsRequest {}
+message ListSessionsRequest {
+  bool include_archived = 1;
+}
 
 message ListSessionsResponse {
   repeated Session sessions = 1;
@@ -113,6 +124,16 @@ message GetSessionRequest {
 }
 
 message GetSessionResponse {
+  Session session = 1;
+}
+
+message SetArchivedRequest {
+  string session = 1;
+  bool archived = 2;
+}
+
+message SetArchivedResponse {
+  // Snapshot committed under the same lock as the archive transition.
   Session session = 1;
 }
 
@@ -146,6 +167,10 @@ message TitleChanged {
   string title = 1;
 }
 
+message ArchiveChanged {
+  bool archived = 1;
+}
+
 message StatusChanged {
   SessionStatus status = 1;
 }
@@ -169,6 +194,7 @@ message Event {
     TitleChanged title_changed = 15;
     StatusChanged status_changed = 16;
     Failed failed = 17;
+    ArchiveChanged archive_changed = 19;
   }
 }
 
@@ -192,6 +218,8 @@ message ForegroundResponse {}
 // Prompt completion arrives asynchronously in TurnFinished.
 message TurnAccepted {
   string turn = 1;
+  // Cursor of the TurnStarted event. Zero means an older server omitted it.
+  uint64 cursor = 2;
 }
 
 message CancelResponse {}

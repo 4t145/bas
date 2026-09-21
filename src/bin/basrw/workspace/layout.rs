@@ -7,6 +7,19 @@ const PANEL_BORDER_WIDTH: f32 = 1.;
 const COMMAND_ROW_HEIGHT: f32 = 44.;
 const COMMAND_HINT_HEIGHT: f32 = 28.;
 const OUTPUT_HEIGHT: f32 = 440.;
+pub(super) const HEADER_HEIGHT: f32 = 44.;
+pub(super) const ICON_BUTTON_SIZE: f32 = 24.;
+
+pub(super) fn icon_button(id: impl Into<gpui_kit::ElementId>, icon: IconName) -> Button {
+    Button::new(id)
+        .ghost()
+        .xsmall()
+        .icon(icon)
+        .w(px(ICON_BUTTON_SIZE))
+        .h(px(ICON_BUTTON_SIZE))
+        .p_0()
+        .flex_shrink_0()
+}
 
 pub(crate) fn initial_size(compact: bool) -> Size<Pixels> {
     if compact {
@@ -67,7 +80,7 @@ impl Workspace {
         window.set_window_title(if self.compact {
             "BASR — Quick input"
         } else {
-            "BASR — Threads"
+            "BASR"
         });
         if let Some(placement) = &mut self.placement {
             placement.update(self.compact, size);
@@ -86,7 +99,6 @@ impl Workspace {
         }
         self.editing_workspace = false;
         self.editing_title = false;
-        self.deleting = None;
         self.resize_window(window, cx);
         self.list.remeasure_items(
             0..self
@@ -111,6 +123,9 @@ impl Workspace {
     }
 
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cancel_queue_edit(window, cx) {
+            return;
+        }
         if self.reply_preview.is_some() {
             self.close_reply_preview(window, cx);
         } else if self.menu.is_some() {
@@ -121,10 +136,9 @@ impl Workspace {
                 self.resize_window(window, cx);
             }
             cx.notify();
-        } else if self.editing_title || self.editing_workspace || self.deleting.is_some() {
+        } else if self.editing_title || self.editing_workspace {
             self.editing_title = false;
             self.editing_workspace = false;
-            self.deleting = None;
             self.focus_input(window, cx);
             cx.notify();
         } else if !self.compact {
@@ -137,20 +151,20 @@ impl Workspace {
     }
 
     pub(super) fn mode_button(&self, cx: &mut Context<Self>) -> Button {
-        Button::new("toggle-mode")
-            .ghost()
-            .xsmall()
-            .icon(if self.compact {
+        icon_button(
+            "toggle-mode",
+            if self.compact {
                 IconName::Maximize2
             } else {
                 IconName::Minimize2
-            })
-            .tooltip(if self.compact {
-                "展开窗口 · Ctrl Shift M"
-            } else {
-                "最小模式 · Ctrl Shift M"
-            })
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_mode(window, cx)))
+            },
+        )
+        .tooltip(if self.compact {
+            "展开窗口 · Ctrl Shift M"
+        } else {
+            "最小模式 · Ctrl Shift M"
+        })
+        .on_click(cx.listener(|this, _, window, cx| this.toggle_mode(window, cx)))
     }
 
     pub(super) fn render_layout(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -168,6 +182,14 @@ impl Workspace {
             ))
             .on_action(|_: &gpui_kit::component::input::Enter, _, _| {})
             .on_action(cx.listener(|this, _: &NewSession, window, cx| this.new_session(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &NextThread, window, cx| {
+                    this.cycle_thread(false, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &PreviousThread, window, cx| {
+                this.cycle_thread(true, window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &FocusComposer, window, cx| this.focus_input(window, cx)),
             )
@@ -188,11 +210,15 @@ impl Workspace {
             )
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss(window, cx)))
             .on_action(cx.listener(|this, _: &Refresh, _, cx| this.refresh(cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
+            )
             .child(if self.compact {
                 self.render_popup(cx)
             } else {
                 self.render_window(window, cx)
             })
+            .children(self.inline_context_menu())
             .into_any_element()
     }
 
@@ -255,18 +281,18 @@ impl Workspace {
                     .h(px(COMPACT_HEADER_HEIGHT))
                     .flex_shrink_0()
                     .child(
-                        Button::new("toggle-output")
-                            .ghost()
-                            .xsmall()
-                            .icon(if self.output_open {
+                        icon_button(
+                            "toggle-output",
+                            if self.output_open {
                                 IconName::ChevronDown
                             } else {
                                 IconName::ChevronRight
-                            })
-                            .tooltip("折叠 / 展开输出 · Ctrl O")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.toggle_output(window, cx)),
-                            ),
+                            },
+                        )
+                        .tooltip("折叠 / 展开输出 · Ctrl O")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.toggle_output(window, cx)),
+                        ),
                     )
                     .child(
                         div()
@@ -279,6 +305,10 @@ impl Workspace {
                             .gap_1()
                             .text_xs()
                             .child(self.connection_indicator("compact-connection", cx))
+                            .when(
+                                self.current().is_some_and(|session| session.archived),
+                                |status| status.child(caption("已归档", cx)),
+                            )
                             .children(
                                 self.activity_label()
                                     .map(|label| caption(label, cx).flex_1().min_w_0().truncate()),
@@ -290,12 +320,17 @@ impl Workspace {
                                 window.start_window_move()
                             }),
                     )
+                    .when_some(
+                        self.current().filter(|session| session.archived),
+                        |row, session| {
+                            row.child(self.archive_button(session, "compact-restore", cx))
+                        },
+                    )
+                    .child(self.application_button(cx))
+                    .child(self.settings_button(cx))
                     .child(self.workspace_button(cx))
                     .child(
-                        Button::new("new-session")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Plus)
+                        icon_button("new-session", IconName::Plus)
                             .tooltip("新 thread · Ctrl N")
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.new_session(window, cx)),

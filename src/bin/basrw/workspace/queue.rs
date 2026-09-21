@@ -1,6 +1,12 @@
 use super::*;
 
 impl Workspace {
+    pub(super) fn sending(&self, session: SessionId) -> bool {
+        self.outboxes
+            .get(&session)
+            .is_some_and(outbox::SessionOutbox::sending)
+    }
+
     pub(super) fn enqueue_draft(
         &mut self,
         session: SessionId,
@@ -8,15 +14,22 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.queued_paused.remove(&session);
-        self.queued.entry(session).or_default().push_back(Draft {
-            text,
-            attachments: self.attachments.clone(),
-        });
+        if self.archive_blocked(session) {
+            return;
+        }
+        let restored = self
+            .outboxes
+            .entry(session)
+            .or_default()
+            .enqueue(Draft {
+                text,
+                attachments: self.attachments.clone(),
+            })
+            .unwrap_or_default();
+        self.attachments = restored.attachments;
         self.composer
-            .update(cx, |input, cx| input.set_value("", window, cx));
-        self.attachments.clear();
-        self.drafts.remove(&session);
+            .update(cx, |input, cx| input.set_value(restored.text, window, cx));
+        self.save_draft(cx);
         self.error = None;
         self.flush_queue(cx);
         cx.notify();
@@ -26,72 +39,58 @@ impl Workspace {
         if !self.connected {
             return;
         }
-        // A send receipt can precede its TurnStarted event. Wait for newer session
-        // state before treating the old Idle snapshot as permission to send again.
-        self.awaiting_turn.retain(|id, sent_at| {
-            let meta = self
-                .conversation
-                .as_ref()
-                .filter(|c| c.session.id == *id)
-                .map(|c| &c.session)
-                .or_else(|| self.sessions.iter().find(|meta| meta.id == *id));
-            meta.is_none_or(|meta| meta.updated_at <= *sent_at)
-        });
-        let ready: Vec<_> = self
-            .queued
-            .iter()
-            .filter(|(id, queue)| {
-                !queue.is_empty()
-                    && !self.queued_paused.contains(id)
-                    && !self.sending.contains(id)
-                    && !self.awaiting_turn.contains_key(id)
-                    && !self.configuring.contains(id)
-                    && !self.cancelling.contains(id)
-                    && !self.queued_inflight.contains_key(id)
-            })
-            .filter_map(|(id, _)| {
-                let meta = self
-                    .conversation
-                    .as_ref()
-                    .filter(|c| c.session.id == *id)
-                    .map(|c| &c.session)
-                    .or_else(|| self.sessions.iter().find(|meta| meta.id == *id))?;
-                (meta.status == SessionStatus::Idle).then(|| meta.clone())
-            })
-            .collect();
-        for session in ready {
-            let Some(draft) = self
-                .queued
-                .get_mut(&session.id)
-                .and_then(|queue| queue.pop_front())
-            else {
+        let sessions = self.sessions.clone();
+        for session in sessions {
+            if self.archive_blocked(session.id) {
                 continue;
-            };
-            self.sending.insert(session.id);
-            self.awaiting_turn.insert(session.id, session.updated_at);
-            self.queued_inflight.insert(session.id, draft.clone());
-            self.command(Command::Prompt {
-                session: session.id,
-                text: draft.text,
-                attachments: draft.attachments,
-                capabilities: session
-                    .initialization
-                    .as_ref()
-                    .map(|init| init.agent_capabilities.prompt_capabilities.clone())
-                    .unwrap_or_default(),
-                title: None,
-            });
+            }
+            let allowed =
+                !self.configuring.contains(&session.id) && !self.cancelling.contains(&session.id);
+            let action = self
+                .outboxes
+                .get_mut(&session.id)
+                .and_then(|outbox| outbox.advance(&session, allowed));
+            if let Some(outbox::Action::Send(draft)) = action {
+                self.command(Command::Prompt {
+                    session: session.id,
+                    text: draft.text,
+                    attachments: draft.attachments,
+                    capabilities: session
+                        .initialization
+                        .as_ref()
+                        .map(|init| init.agent_capabilities.prompt_capabilities.clone())
+                        .unwrap_or_default(),
+                    title: None,
+                });
+            }
         }
         cx.notify();
     }
 
+    pub(super) fn cancel_queue_edit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(draft) = self
+            .active
+            .and_then(|id| self.outboxes.get_mut(&id))
+            .and_then(outbox::SessionOutbox::cancel_edit)
+        else {
+            return false;
+        };
+        self.attachments = draft.attachments;
+        self.composer
+            .update(cx, |input, cx| input.set_value(draft.text, window, cx));
+        self.save_draft(cx);
+        cx.notify();
+        true
+    }
+
     pub(super) fn render_queue(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let session = self.active?;
-        let queue = self
-            .queued
-            .get(&session)
-            .filter(|queue| !queue.is_empty())?;
-        let draft = queue.front()?;
+        let outbox = self.outboxes.get(&session)?;
+        let draft = outbox.front()?;
         let mut summary = draft.text.clone();
         for attachment in &draft.attachments {
             summary = summary.replace(&attachment.mention, &attachment.label);
@@ -104,43 +103,40 @@ impl Workspace {
             .take(120)
             .collect::<String>();
         let hint = format!(
-            "{} 条待发送消息{} · 点击取回编辑\n{summary}",
-            queue.len(),
-            if self.queued_paused.contains(&session) {
+            "{} 条待发送消息{} · 点击取回编辑 · Escape 取消编辑\n{summary}",
+            outbox.len(),
+            if outbox.paused() {
                 "（已暂停）"
             } else {
                 ""
-            }
+            },
         );
         Some(
             Button::new("pending-messages")
+                .disabled(self.sending(session))
                 .ghost()
                 .xsmall()
                 .icon(IconName::Clock)
-                .label(queue.len().to_string())
+                .label(outbox.len().to_string())
                 .tooltip(hint)
                 .on_click(cx.listener(move |this, _, window, cx| {
+                    let composition = Draft {
+                        text: this.composer.read(cx).value().to_string(),
+                        attachments: this.attachments.clone(),
+                    };
                     let Some(draft) = this
-                        .queued
+                        .outboxes
                         .get_mut(&session)
-                        .and_then(|queue| queue.pop_front())
+                        .and_then(|outbox| outbox.begin_edit(composition))
                     else {
                         return;
                     };
-                    this.queued_paused.insert(session);
-                    // Keep an existing composition as the next queued draft instead of overwriting it.
-                    let current = this.composer.read(cx).value().to_string();
-                    if !current.trim().is_empty() {
-                        this.queued.entry(session).or_default().push_front(Draft {
-                            text: current,
-                            attachments: this.attachments.clone(),
-                        });
-                    }
                     this.attachments = draft.attachments;
                     this.composer.update(cx, |input, cx| {
                         input.set_value(draft.text, window, cx);
                         input.focus(window, cx);
                     });
+                    this.save_draft(cx);
                     cx.notify();
                 }))
                 .into_any_element(),

@@ -1,5 +1,58 @@
 use super::*;
 
+#[test]
+fn old_history_builds_content_without_rolling_back_newer_metadata() {
+    let mut meta = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    let turn1 = TurnId::new();
+    let turn2 = TurnId::new();
+    meta.status = SessionStatus::Working;
+    meta.active_turn = Some(turn2);
+    meta.revision = Cursor::from_raw(10);
+    meta.title = Some("new".into());
+    let mut conversation = Conversation::new(meta.clone());
+    let events = [
+        EventKind::TurnStarted { turn: turn1 },
+        EventKind::TitleChanged {
+            title: "old".into(),
+        },
+        EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(
+            acp::ContentChunk::new("history".into()),
+        )),
+        EventKind::TurnFinished {
+            turn: turn1,
+            result: Ok(acp::PromptResponse::new(StopReason::EndTurn)),
+        },
+    ];
+    for (index, kind) in events.into_iter().enumerate() {
+        conversation.apply(Event::new(
+            meta.id,
+            Cursor::from_raw(index as u64 + 1),
+            kind,
+        ));
+    }
+    assert_eq!(conversation.session, meta);
+    assert_eq!(conversation.cursor, 4);
+    assert_eq!(conversation.items.len(), 1);
+    assert!(
+        matches!(&conversation.items[0], Item::Message { message, .. } if message.plain_text() == "history")
+    );
+}
+
+#[test]
+fn events_newer_than_snapshot_survive_history_replay() {
+    let meta = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    let mut conversation = Conversation::new(meta.clone());
+    let turn = TurnId::new();
+    conversation.apply(Event::new(
+        meta.id,
+        Cursor::from_raw(1),
+        EventKind::TurnStarted { turn },
+    ));
+    conversation.merge_meta(&meta);
+    assert_eq!(conversation.session.active_turn, Some(turn));
+    assert_eq!(conversation.session.revision, Cursor::from_raw(1));
+}
+
 fn conversation() -> Conversation {
     Conversation::new(SessionMeta::new(
         SessionId::new(),
@@ -47,7 +100,7 @@ fn live_and_replayed_acp_chunks_produce_the_same_messages() {
             .completed_reply
             .expect("completed final response");
         assert_eq!(reply.index, 1);
-        assert_eq!(reply.cursor, 5);
+        assert_eq!(reply.cursor, 4);
         assert_eq!(conversation.items.len(), 2);
         assert!(
             matches!(&conversation.items[0], Item::Message { message, streaming: false } if message.role == Role::Thought)
@@ -81,7 +134,7 @@ fn completion_selects_the_final_reply_and_never_reuses_a_previous_turn() {
     );
     let reply = conversation.completed_reply.expect("final answer");
     assert_eq!(reply.index, 2);
-    assert_eq!(reply.cursor, 5);
+    assert_eq!(reply.cursor, 4);
     apply(
         &mut conversation,
         6,

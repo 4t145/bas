@@ -102,6 +102,9 @@ fn file_catalog_only_falls_back_when_the_default_file_is_absent() {
         r#"[{"id":"","kind":"embedded"}]"#,
         r#"[{"id":"embedded","kind":"embedded","command":{"program":"ignored"}}]"#,
         r#"[{"id":"codex","kind":"acp","command":{"program":"codex-acp","argz":[]}}]"#,
+        r#"[{"id":"embedded","kind":"embedded","cancellation_grace_ms":0}]"#,
+        r#"[{"id":"embedded","kind":"embedded","cancellation_grace_ms":-1}]"#,
+        r#"[{"id":"embedded","kind":"embedded","cancellation_grace_ms":18446744073709551616}]"#,
     ] {
         std::fs::write(&path, invalid).expect("write invalid catalog");
         assert!(
@@ -109,4 +112,27 @@ fn file_catalog_only_falls_back_when_the_default_file_is_absent() {
             "must reject {invalid}"
         );
     }
+}
+
+#[test]
+fn file_catalog_can_override_cancellation_grace_without_changing_the_default() {
+    let directory = tempfile::tempdir().expect("test config directory");
+    let path = directory.path().join("agents.json");
+    std::fs::write(
+        &path,
+        r#"[
+            {"id":"default","kind":"embedded"},
+            {"id":"slow","kind":"acp","command":{"program":"agent"},"cancellation_grace_ms":12000}
+        ]"#,
+    )
+    .expect("write test catalog");
+    let agents = super::read_agents(&path).expect("valid catalog");
+    assert_eq!(
+        agents[0].cancellation_grace,
+        std::time::Duration::from_secs(5)
+    );
+    assert_eq!(
+        agents[1].cancellation_grace,
+        std::time::Duration::from_secs(12)
+    );
 }

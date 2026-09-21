@@ -15,6 +15,7 @@ let
     genericName = "Agent Workspace";
     comment = "Manage BASR sessions and chat with agents";
     exec = "basrw";
+    icon = "org.basr.Gui";
     terminal = false;
     categories = [
       "Development"
@@ -34,8 +35,8 @@ rustPlatform.buildRustPackage {
       ../Cargo.lock
       ../build.rs
       ../src
-      ../vendor
       ../proto
+      ../assets
       (lib.fileset.difference ../tests ../tests/system)
     ];
   };
@@ -65,6 +66,16 @@ rustPlatform.buildRustPackage {
           --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath desktopLibraries}
         install -Dm644 ${desktopItem}/share/applications/org.basr.Gui.desktop \
           "$out/share/applications/org.basr.Gui.desktop"
+        install -Dm644 assets/branding/ferris-dimensional.svg \
+          "$out/share/icons/hicolor/scalable/apps/org.basr.Gui.svg"
+        install -Dm644 assets/branding/ferris-dimensional-32.svg \
+          "$out/share/icons/hicolor/32x32/apps/org.basr.Gui.svg"
+        # Nix profile icons may be absent from a running launcher's theme index.
+        # Desktop Entry permits absolute Icon paths; bind both icon and executable
+        # to this immutable installation instead of relying on session caches/PATH.
+        substituteInPlace "$out/share/applications/org.basr.Gui.desktop" \
+          --replace-fail "Icon=org.basr.Gui" "Icon=$out/share/icons/hicolor/scalable/apps/org.basr.Gui.svg" \
+          --replace-fail "Exec=basrw" "Exec=$out/bin/basrw"
       ''
     else
       ''

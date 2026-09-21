@@ -26,17 +26,29 @@ pub(super) struct Conversation {
     pub commands: Vec<acp::AvailableCommand>,
     pub plan: Option<acp::Plan>,
     pub usage: Option<acp::UsageUpdate>,
-    pub completed_reply: Option<CompletedReply>,
+    pub completed_reply: Option<ReplyPosition>,
+    pub last_reply: Option<ReplyPosition>,
     turn_start: usize,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct CompletedReply {
+pub(super) struct ReplyPosition {
     pub index: usize,
+    /// The last content chunk, matching SessionMeta::last_reply rather than TurnFinished.
     pub cursor: u64,
 }
 
 impl Conversation {
+    pub fn merge_meta(&mut self, meta: &SessionMeta) {
+        if merge_meta(&mut self.session, meta) {
+            self.commands = meta
+                .available_commands
+                .as_ref()
+                .map(|update| update.available_commands.clone())
+                .unwrap_or_default();
+        }
+    }
+
     pub fn new(session: SessionMeta) -> Self {
         Self {
             commands: session
@@ -51,6 +63,7 @@ impl Conversation {
             plan: None,
             usage: None,
             completed_reply: None,
+            last_reply: None,
             turn_start: 0,
         }
     }
@@ -61,69 +74,67 @@ impl Conversation {
             return None;
         }
         self.cursor = event.cursor.raw();
-        self.session.updated_at = event.at;
+        let metadata_changed = self.session.apply_event(&event);
         match event.kind {
-            EventKind::Acp(update) => {
-                self.session.apply_acp(&update);
-                match update {
-                    acp::SessionUpdate::UserMessageChunk(chunk) => {
-                        self.chunk(Role::User, chunk.content, event.at)
-                    }
-                    acp::SessionUpdate::AgentMessageChunk(chunk) => {
-                        self.chunk(Role::Agent, chunk.content, event.at)
-                    }
-                    acp::SessionUpdate::AgentThoughtChunk(chunk) => {
-                        self.chunk(Role::Thought, chunk.content, event.at)
-                    }
-                    acp::SessionUpdate::ToolCall(tool) => {
-                        terminal::apply(&mut self.terminals, tool.meta.as_ref());
+            EventKind::Acp(update) => match update {
+                acp::SessionUpdate::UserMessageChunk(chunk) => {
+                    self.chunk(Role::User, chunk.content, event.at)
+                }
+                acp::SessionUpdate::AgentMessageChunk(chunk) => {
+                    let changed = self.chunk(Role::Agent, chunk.content, event.at);
+                    self.last_reply = Some(ReplyPosition {
+                        index: self.items.len() - 1,
+                        cursor: self.cursor,
+                    });
+                    changed
+                }
+                acp::SessionUpdate::AgentThoughtChunk(chunk) => {
+                    self.chunk(Role::Thought, chunk.content, event.at)
+                }
+                acp::SessionUpdate::ToolCall(tool) => {
+                    terminal::apply(&mut self.terminals, tool.meta.as_ref());
+                    Some(self.upsert_tool(tool))
+                }
+                acp::SessionUpdate::ToolCallUpdate(update) => {
+                    terminal::apply(&mut self.terminals, update.meta.as_ref());
+                    let index = self.items.iter().position(|item| matches!(item, Item::Tool(tool) if tool.tool_call_id == update.tool_call_id));
+                    if let Some(index) = index {
+                        if let Item::Tool(tool) = &mut self.items[index] {
+                            tool.update(update.fields);
+                        }
+                        Some(index)
+                    } else {
+                        let mut tool = ToolCall::new(update.tool_call_id, "");
+                        tool.update(update.fields);
                         Some(self.upsert_tool(tool))
                     }
-                    acp::SessionUpdate::ToolCallUpdate(update) => {
-                        terminal::apply(&mut self.terminals, update.meta.as_ref());
-                        let index = self.items.iter().position(|item| matches!(item, Item::Tool(tool) if tool.tool_call_id == update.tool_call_id));
-                        if let Some(index) = index {
-                            if let Item::Tool(tool) = &mut self.items[index] {
-                                tool.update(update.fields);
-                            }
-                            Some(index)
-                        } else {
-                            let mut tool = ToolCall::new(update.tool_call_id, "");
-                            tool.update(update.fields);
-                            Some(self.upsert_tool(tool))
-                        }
-                    }
-                    acp::SessionUpdate::AvailableCommandsUpdate(update) => {
-                        self.commands = update.available_commands;
-                        None
-                    }
-                    acp::SessionUpdate::Plan(plan) => {
-                        self.plan = Some(plan);
-                        None
-                    }
-                    acp::SessionUpdate::UsageUpdate(usage) => {
-                        self.usage = Some(usage);
-                        None
-                    }
-                    _ => None,
                 }
-            }
+                acp::SessionUpdate::AvailableCommandsUpdate(update) => {
+                    if metadata_changed {
+                        self.commands = update.available_commands;
+                    }
+                    None
+                }
+                acp::SessionUpdate::Plan(plan) => {
+                    self.plan = Some(plan);
+                    None
+                }
+                acp::SessionUpdate::UsageUpdate(usage) => {
+                    self.usage = Some(usage);
+                    None
+                }
+                _ => None,
+            },
             EventKind::TurnStarted { .. } => {
-                self.session.status = SessionStatus::Working;
                 self.turn_start = self.items.len();
                 self.completed_reply = None;
                 self.seal()
             }
             EventKind::TurnFinished { result, .. } => {
-                self.session.status = SessionStatus::Idle;
                 let changed = self.seal();
-                self.completed_reply = self.items[self.turn_start..]
-                    .iter()
-                    .rposition(|item| matches!(item, Item::Message { message, .. } if message.role == Role::Agent))
-                    .map(|offset| CompletedReply {
-                        index: self.turn_start + offset,
-                        cursor: self.cursor,
-                    });
+                self.completed_reply = self
+                    .last_reply
+                    .filter(|reply| reply.index >= self.turn_start);
                 let notice = match result.map(|response| response.stop_reason) {
                     Ok(StopReason::EndTurn) => None,
                     Ok(StopReason::Cancelled) => self.notice("本轮已停止"),
@@ -136,16 +147,10 @@ impl Conversation {
                 };
                 changed.or(notice)
             }
-            EventKind::TitleChanged { title } => {
-                self.session.title = Some(title);
-                None
-            }
-            EventKind::StatusChanged { status } => {
-                self.session.status = status;
-                None
-            }
+            EventKind::TitleChanged { .. }
+            | EventKind::ArchiveChanged { .. }
+            | EventKind::StatusChanged { .. } => None,
             EventKind::Failed { message } => {
-                self.session.status = SessionStatus::Failed;
                 let changed = self.seal();
                 let notice = self.notice(format!("Agent 已断开：{message}"));
                 changed.or(notice)
@@ -213,6 +218,14 @@ impl Conversation {
         });
         Some(self.items.len() - 1)
     }
+}
+
+pub(super) fn merge_meta(current: &mut SessionMeta, incoming: &SessionMeta) -> bool {
+    if current.id != incoming.id || incoming.revision <= current.revision {
+        return false;
+    }
+    *current = incoming.clone();
+    true
 }
 
 #[cfg(test)]

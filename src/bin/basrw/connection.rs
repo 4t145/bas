@@ -38,6 +38,10 @@ pub(super) enum Command {
         session: SessionId,
         title: String,
     },
+    Archive {
+        session: SessionId,
+        archived: bool,
+    },
     Delete(SessionId),
     Prompt {
         session: SessionId,
@@ -73,8 +77,11 @@ pub(super) enum Update {
     },
     Renamed {
         session: SessionId,
-        title: String,
         result: Result<(), String>,
+    },
+    Archived {
+        session: SessionId,
+        result: Result<SessionMeta, String>,
     },
     Deleted {
         session: SessionId,
@@ -84,7 +91,7 @@ pub(super) enum Update {
         session: SessionId,
         text: String,
         attachments: Vec<Attachment>,
-        result: Result<(), String>,
+        result: Result<TurnReceipt, String>,
     },
     Cancelled {
         session: SessionId,
@@ -225,7 +232,9 @@ async fn catalog_loop(mut client: Client, updates: mpsc::Sender<Update>, refresh
                 .into_inner()
                 .agents;
             let sessions = client
-                .list_sessions(pb::ListSessionsRequest {})
+                .list_sessions(pb::ListSessionsRequest {
+                    include_archived: true,
+                })
                 .await?
                 .into_inner()
                 .sessions;
@@ -296,11 +305,35 @@ async fn execute(mut client: Client, command: Command) -> Update {
                 Ok(())
             })
             .await;
-            Update::Renamed {
-                session,
-                title,
-                result,
-            }
+            Update::Renamed { session, result }
+        }
+        Command::Archive { session, archived } => {
+            let result = request(async {
+                let response = client
+                    .set_archived(pb::SetArchivedRequest {
+                        session: session.to_string(),
+                        archived,
+                    })
+                    .await
+                    .map_err(|error| {
+                        if error.code() == Code::Unimplemented {
+                            anyhow::anyhow!(
+                                "当前运行的 basrd 不支持归档。需要升级服务入口并重启后才能使用。\n\
+                                 注意：重启会结束 Agent 并清空内存会话和历史，请先确认可丢弃。\n当前会话未删除。"
+                            )
+                        } else {
+                            error.into()
+                        }
+                    })?
+                    .into_inner();
+                response
+                    .session
+                    .context("basrd 未返回归档后的会话")?
+                    .try_into()
+                    .map_err(Into::into)
+            })
+            .await;
+            Update::Archived { session, result }
         }
         Command::Delete(session) => {
             let result = request(async {
@@ -331,10 +364,10 @@ async fn execute(mut client: Client, command: Command) -> Update {
                         .await?;
                 }
                 let content = crate::attachment::prompt_content(&text, &attachments, &capabilities);
-                client
+                let accepted = client
                     .prompt_acp(&acp::PromptRequest::new(session.to_string(), content))
                     .await?;
-                Ok(())
+                accepted.try_into().map_err(Into::into)
             })
             .await;
             Update::Sent {

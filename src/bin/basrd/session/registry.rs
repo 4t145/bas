@@ -119,6 +119,9 @@ impl Registry {
         let cwd = tokio::fs::canonicalize(cwd)
             .await
             .map_err(CreateError::Cwd)?;
+        basr::service::utf8_cwd(&cwd).map_err(|error| {
+            CreateError::Cwd(std::io::Error::new(std::io::ErrorKind::InvalidInput, error))
+        })?;
         if !tokio::fs::metadata(&cwd)
             .await
             .map_err(CreateError::Cwd)?

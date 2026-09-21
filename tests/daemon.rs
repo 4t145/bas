@@ -9,6 +9,10 @@ use tokio::{
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+#[cfg(unix)]
+#[path = "daemon/archive.rs"]
+mod archive;
+
 fn command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_basrd"));
     for key in [
@@ -22,6 +26,7 @@ fn command() -> Command {
         "BASRD_PERMISSIONS",
         "BASRD_LOG_BACKEND",
         "RUST_LOG",
+        "JOURNAL_STREAM",
         "NOTIFY_SOCKET",
         "WATCHDOG_USEC",
     ] {
@@ -38,6 +43,9 @@ fn command() -> Command {
 struct Daemon {
     child: Child,
     _logs: Lines<BufReader<ChildStdout>>,
+    startup_logs: Vec<String>,
+    #[cfg(unix)]
+    address: std::net::SocketAddr,
     client: Client,
 }
 
@@ -45,6 +53,7 @@ impl Daemon {
     async fn start(mut command: Command) -> Self {
         let mut child = command.spawn().expect("daemon starts");
         let mut logs = BufReader::new(child.stdout.take().expect("stdout pipe")).lines();
+        let mut startup_logs = Vec::new();
         let address = tokio::time::timeout(TIMEOUT, async {
             loop {
                 let Some(line) = logs.next_line().await.expect("read daemon log") else {
@@ -58,6 +67,7 @@ impl Daemon {
                         .expect("read startup error");
                     panic!("daemon exited before readiness: {error}");
                 };
+                startup_logs.push(line.clone());
                 if line.contains("serving the basr.v1.Basr service") {
                     return line
                         .split("address=")
@@ -79,6 +89,9 @@ impl Daemon {
         Self {
             child,
             _logs: logs,
+            startup_logs,
+            #[cfg(unix)]
+            address,
             client,
         }
     }
@@ -99,6 +112,39 @@ impl Daemon {
             .expect("shutdown is bounded")
             .expect("wait for daemon");
         assert!(status.success(), "daemon exit: {status}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn auto_logging_rejects_inherited_nonmatching_journal_streams() {
+    for stream in ["", "not-a-stream", "0:0"] {
+        let mut command = command();
+        command.env("JOURNAL_STREAM", stream).args([
+            "--listen",
+            "127.0.0.1:0",
+            "--notify",
+            "never",
+            "--log-backend",
+            "auto",
+        ]);
+        let mut daemon = Daemon::start(command).await;
+        assert!(
+            daemon
+                .startup_logs
+                .iter()
+                .all(|line| !line.contains("journald is unavailable")),
+            "invalid JOURNAL_STREAM must not attempt journald: {:?}",
+            daemon.startup_logs
+        );
+        assert!(
+            daemon
+                .startup_logs
+                .iter()
+                .any(|line| line.contains("backend=stdout")),
+            "Auto should select stdout directly"
+        );
+        daemon.stop().await;
     }
 }
 

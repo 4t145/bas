@@ -17,6 +17,18 @@ fn update(value: serde_json::Value) -> v1::SessionUpdate {
 
 #[cfg(unix)]
 fn fixture(mode: &str, directory: &tempfile::TempDir, timeout: Duration) -> Registry {
+    fixture_with_limits(
+        mode,
+        directory,
+        Limits {
+            startup_timeout: timeout,
+            ..Limits::default()
+        },
+    )
+}
+
+#[cfg(unix)]
+fn fixture_with_limits(mode: &str, directory: &tempfile::TempDir, limits: Limits) -> Registry {
     let mut spec = AgentSpec::acp(
         "fixture",
         Command::new(
@@ -27,6 +39,7 @@ fn fixture(mode: &str, directory: &tempfile::TempDir, timeout: Duration) -> Regi
             ],
         ),
     );
+    spec.cancellation_grace = Duration::from_millis(50);
     spec.env.insert("BASR_FIXTURE_MODE".into(), mode.into());
     spec.env.insert(
         "BASR_FIXTURE_PID".into(),
@@ -36,14 +49,7 @@ fn fixture(mode: &str, directory: &tempfile::TempDir, timeout: Duration) -> Regi
     catalog
         .insert(spec, Arc::new(Driver::new()))
         .expect("fixture driver");
-    Registry::new(
-        Arc::new(catalog),
-        Arc::new(LocalHost::default()),
-        Limits {
-            startup_timeout: timeout,
-            ..Limits::default()
-        },
-    )
+    Registry::new(Arc::new(catalog), Arc::new(LocalHost::default()), limits)
 }
 
 #[cfg(unix)]
@@ -203,8 +209,13 @@ async fn acp_process_streams_native_content_and_is_reaped_on_shutdown() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn acp_disconnects_and_prompt_errors_fail_the_session() {
-    for mode in ["idle_exit", "prompt_error"] {
+async fn acp_disconnects_and_corrupt_responses_fail_the_session() {
+    for mode in [
+        "idle_exit",
+        "prompt_disconnect",
+        "malformed_prompt",
+        "corrupt_prompt",
+    ] {
         let directory = tempfile::tempdir().expect("fixture directory");
         let registry = fixture(mode, &directory, TIMEOUT);
         let session = registry
@@ -217,7 +228,7 @@ async fn acp_disconnects_and_prompt_errors_fail_the_session() {
                 cursor: None,
             })
             .expect("attach");
-        if mode == "prompt_error" {
+        if mode != "idle_exit" {
             session
                 .prompt(vec![ContentBlock::from("fail")])
                 .expect("prompt queued");
@@ -231,7 +242,7 @@ async fn acp_disconnects_and_prompt_errors_fail_the_session() {
             panic!("failure must be visible before closure");
         })
         .await
-        .expect("failure observed");
+        .unwrap_or_else(|_| panic!("failure observed for {mode}"));
         assert_eq!(session.meta().status, SessionStatus::Failed);
         assert_eq!(attachment.recv().await, Err(AttachError::Closed));
         registry.shutdown().await;
@@ -358,7 +369,7 @@ async fn a_peer_that_ignores_cancellation_is_failed_and_stopped() {
         .expect("prompt");
     wait_for_prompt(&directory).await;
     session.cancel().expect("cancel requested");
-    tokio::time::timeout(CANCEL_TIMEOUT + TIMEOUT, async {
+    tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             if let basr::model::EventKind::Failed { message } =
                 attachment.recv().await.expect("failure event").kind
@@ -544,7 +555,7 @@ async fn metadata_notifications_outside_a_turn_are_preserved_and_foreign_session
         )
         .await
         .expect("idle metadata");
-    assert_eq!(receiver.recv().await, Some(Update::Acp(update.clone())));
+    assert!(matches!(receiver.recv().await, Some(Update::Acp(actual)) if actual == update));
     assert!(
         state
             .on_notification(v1::SessionNotification::new("other", update), &sender)
@@ -558,7 +569,14 @@ async fn metadata_notifications_outside_a_turn_are_preserved_and_foreign_session
 #[tokio::test]
 async fn updates_during_session_creation_override_the_initial_snapshot() {
     let directory = tempfile::tempdir().expect("fixture directory");
-    let registry = fixture("early_update", &directory, TIMEOUT);
+    let registry = fixture_with_limits(
+        "early_update",
+        &directory,
+        Limits {
+            history_capacity: std::num::NonZeroUsize::new(1).expect("nonzero"),
+            ..Limits::default()
+        },
+    );
     let session = registry.create(request()).await.expect("session");
     let state = session.meta().acp.expect("ACP snapshot");
     assert_eq!(
@@ -571,4 +589,228 @@ async fn updates_during_session_creation_override_the_initial_snapshot() {
     );
     registry.shutdown().await;
     wait_for_exit(&directory).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn prompt_rejection_finishes_only_the_turn_and_the_next_prompt_succeeds() {
+    use basr::model::EventKind;
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let registry = fixture("prompt_error", &directory, TIMEOUT);
+    let session = registry.create(request()).await.expect("session");
+    let mut events = session
+        .attach(AttachOptions {
+            replay: 0,
+            cursor: None,
+        })
+        .expect("attach");
+    for rejected in [true, false] {
+        let receipt = session
+            .accept_prompt(v1::PromptRequest::new(
+                session.id().to_string(),
+                vec!["hello".into()],
+            ))
+            .expect("accepted");
+        let started = events.recv().await.expect("turn started");
+        assert_eq!(started.cursor, receipt.cursor);
+        assert!(matches!(started.kind, EventKind::TurnStarted { turn } if turn == receipt.turn));
+        tokio::time::timeout(TIMEOUT, async {
+            loop {
+                let event = events.recv().await.expect("session stays attached");
+                if let EventKind::TurnFinished { turn, result } = event.kind {
+                    assert_eq!(turn, receipt.turn);
+                    assert_eq!(result.is_err(), rejected);
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("turn finishes");
+        assert_eq!(session.meta().status, SessionStatus::Idle);
+        assert_eq!(session.meta().active_turn, None);
+    }
+    registry.shutdown().await;
+    wait_for_exit(&directory).await;
+}
+
+#[cfg(unix)]
+fn current_mode(session: &crate::session::Session) -> String {
+    session
+        .meta()
+        .acp
+        .expect("ACP metadata")
+        .modes
+        .expect("modes")
+        .current_mode_id
+        .to_string()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn mode_responses_commit_in_wire_order_not_caller_poll_order() {
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let registry = fixture("normal", &directory, TIMEOUT);
+    let session = registry.create(request()).await.expect("session");
+    let id = session.id().to_string();
+    let first = session.set_mode(v1::SetSessionModeRequest::new(id.clone(), "ask"));
+    tokio::pin!(first);
+    assert!(futures::poll!(&mut first).is_pending());
+    session
+        .set_mode(v1::SetSessionModeRequest::new(id, "code"))
+        .await
+        .expect("second response");
+    assert_eq!(current_mode(&session), "code");
+    first.await.expect("first response consumed last");
+    assert_eq!(current_mode(&session), "code");
+    registry.shutdown().await;
+    wait_for_exit(&directory).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_mode_waiter_does_not_drop_the_ordered_state_commit() {
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let registry = fixture("normal", &directory, TIMEOUT);
+    let session = registry.create(request()).await.expect("session");
+    let mut events = session
+        .attach(AttachOptions {
+            replay: 0,
+            cursor: None,
+        })
+        .expect("attach");
+    let mut response = Box::pin(session.set_mode(v1::SetSessionModeRequest::new(
+        session.id().to_string(),
+        "code",
+    )));
+    assert!(futures::poll!(&mut response).is_pending());
+    drop(response);
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if let basr::model::EventKind::Acp(v1::SessionUpdate::CurrentModeUpdate(update)) =
+                events.recv().await.expect("mode update").kind
+            {
+                assert_eq!(update.current_mode_id.to_string(), "code");
+                break;
+            }
+        }
+    })
+    .await
+    .expect("cancelled waiter still commits");
+    assert_eq!(current_mode(&session), "code");
+    registry.shutdown().await;
+    wait_for_exit(&directory).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn later_mode_notification_is_not_rolled_back_by_a_paused_response_waiter() {
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let registry = fixture("mode_notification", &directory, TIMEOUT);
+    let session = registry.create(request()).await.expect("session");
+    let mut events = session
+        .attach(AttachOptions {
+            replay: 0,
+            cursor: None,
+        })
+        .expect("attach");
+    let response = session.set_mode(v1::SetSessionModeRequest::new(
+        session.id().to_string(),
+        "ask",
+    ));
+    tokio::pin!(response);
+    assert!(futures::poll!(&mut response).is_pending());
+    tokio::time::timeout(TIMEOUT, async {
+        for expected in ["ask", "code"] {
+            let event = events.recv().await.expect("ordered update");
+            assert!(matches!(event.kind,
+                basr::model::EventKind::Acp(v1::SessionUpdate::CurrentModeUpdate(update))
+                if update.current_mode_id.to_string() == expected));
+        }
+    })
+    .await
+    .expect("response followed by notification");
+    response.await.expect("consume older response");
+    assert_eq!(current_mode(&session), "code");
+    registry.shutdown().await;
+    wait_for_exit(&directory).await;
+}
+
+#[cfg(unix)]
+fn config_value(session: &crate::session::Session) -> serde_json::Value {
+    serde_json::to_value(
+        session
+            .meta()
+            .acp
+            .expect("ACP metadata")
+            .config_options
+            .expect("options"),
+    )
+    .expect("options JSON")[0]["currentValue"]
+        .clone()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn configuration_responses_commit_in_wire_order_not_caller_poll_order() {
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let registry = fixture("normal", &directory, TIMEOUT);
+    let session = registry.create(request()).await.expect("session");
+    let id = session.id().to_string();
+    let first = session.set_config_option(v1::SetSessionConfigOptionRequest::new(
+        id.clone(),
+        "model",
+        "deep",
+    ));
+    tokio::pin!(first);
+    assert!(futures::poll!(&mut first).is_pending());
+    session
+        .set_config_option(v1::SetSessionConfigOptionRequest::new(id, "model", "fast"))
+        .await
+        .expect("second response");
+    assert_eq!(config_value(&session), "fast");
+    first.await.expect("first response consumed last");
+    assert_eq!(config_value(&session), "fast");
+    registry.shutdown().await;
+    wait_for_exit(&directory).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn configuration_commit_survives_cancelled_waiter_and_later_notification() {
+    for cancel_waiter in [true, false] {
+        let directory = tempfile::tempdir().expect("fixture directory");
+        let registry = fixture("config_notification", &directory, TIMEOUT);
+        let session = registry.create(request()).await.expect("session");
+        let mut events = session
+            .attach(AttachOptions {
+                replay: 0,
+                cursor: None,
+            })
+            .expect("attach");
+        let mut response = Box::pin(session.set_config_option(
+            v1::SetSessionConfigOptionRequest::new(session.id().to_string(), "model", "deep"),
+        ));
+        assert!(futures::poll!(&mut response).is_pending());
+        let response = if cancel_waiter {
+            drop(response);
+            None
+        } else {
+            Some(response)
+        };
+        tokio::time::timeout(TIMEOUT, async {
+            for expected in [json!("deep"), json!(true)] {
+                let event = events.recv().await.expect("ordered config update");
+                let basr::model::EventKind::Acp(v1::SessionUpdate::ConfigOptionUpdate(update)) = event.kind else {
+                    panic!("expected config update");
+                };
+                assert_eq!(serde_json::to_value(update.config_options).expect("options")[0]["currentValue"], expected);
+            }
+        }).await.expect("response then notification");
+        if let Some(response) = response {
+            response.await.expect("consume older response");
+        }
+        assert_eq!(config_value(&session), true);
+        registry.shutdown().await;
+        wait_for_exit(&directory).await;
+    }
 }

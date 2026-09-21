@@ -2,12 +2,15 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use basr::acp;
 use basr::model::{
-    Cursor, Event, EventKind, SessionId, SessionMeta, SessionStatus, StopReason, TurnId, TurnResult,
+    Cursor, Event, EventKind, SessionId, SessionMeta, SessionStatus, StopReason, TurnId,
+    TurnReceipt, TurnResult,
 };
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::task::AbortOnDropHandle;
 
-use super::{AttachOptions, Attachment, HistoryError, Limits, Page, history::Ring};
+#[cfg(test)]
+use super::Page;
+use super::{AttachOptions, Attachment, HistoryError, Limits, history::Ring};
 use crate::agent::{self, Agent, TurnUpdate, Update};
 
 /// A detached snapshot; notification delivery never retains the session.
@@ -21,6 +24,8 @@ pub struct Completion {
 pub enum SessionError {
     #[error("a turn is already running")]
     Busy,
+    #[error("session is archived")]
+    Archived,
     #[error("session is {0:?}")]
     Inactive(SessionStatus),
     #[error("a prompt must contain at least one content block")]
@@ -55,6 +60,8 @@ struct State {
     events: Option<broadcast::Sender<Event>>,
     completions: Option<mpsc::Sender<Completion>>,
     foreground_viewers: usize,
+    startup_config: Option<acp::ConfigOptionUpdate>,
+    startup_mode: Option<acp::CurrentModeUpdate>,
 }
 
 impl Session {
@@ -74,6 +81,8 @@ impl Session {
                 events: Some(events),
                 completions,
                 foreground_viewers: 0,
+                startup_config: None,
+                startup_mode: None,
             }),
             updates_task: Mutex::new(None),
         })
@@ -102,6 +111,16 @@ impl Session {
     }
     pub fn meta(&self) -> SessionMeta {
         self.lock().meta.clone()
+    }
+
+    /// Changes only archival metadata, including for starting or terminal sessions.
+    /// Repeating the current value does not publish an event or advance revision.
+    pub fn set_archived(&self, archived: bool) -> SessionMeta {
+        let mut state = self.lock();
+        if state.meta.archived != archived {
+            state.publish(EventKind::ArchiveChanged { archived });
+        }
+        state.meta.clone()
     }
 
     pub(super) fn listen(self: &Arc<Self>, mut inbox: mpsc::Receiver<Update>) {
@@ -138,16 +157,16 @@ impl Session {
             info.session_id = state.meta.id.to_string().into();
             info
         });
-        // Notifications may arrive during session/new, before launch returns.
-        for event in state
-            .history
-            .page(None, usize::MAX)
-            .expect("nonzero history page")
-            .events
-        {
-            if let EventKind::Acp(update) = event.kind {
-                state.meta.apply_acp(&update);
-            }
+        // Startup metadata must survive eviction from bounded content history.
+        if let Some(update) = state.startup_config.take() {
+            state
+                .meta
+                .apply_acp(&acp::SessionUpdate::ConfigOptionUpdate(update));
+        }
+        if let Some(update) = state.startup_mode.take() {
+            state
+                .meta
+                .apply_acp(&acp::SessionUpdate::CurrentModeUpdate(update));
         }
         state.agent = Some(agent);
         state.publish(EventKind::StatusChanged {
@@ -176,25 +195,50 @@ impl Session {
 
     /// # Errors
     /// Rejects expired/future cursors and a zero page size.
+    #[cfg(test)]
     pub fn page(&self, after: Option<Cursor>, limit: usize) -> Result<Page, HistoryError> {
         let state = self.lock();
         state.check_cursor(after)?;
         state.history.page(after, limit)
     }
 
+    /// Visits history under one snapshot lock without cloning an unbounded page.
+    ///
+    /// The visitor must not re-enter the session. Its boolean argument indicates
+    /// further history even beyond `limit`; returning false stops visitation.
+    ///
+    /// # Errors
+    /// Rejects expired/future cursors and a zero page size.
+    pub fn visit_history(
+        &self,
+        after: Option<Cursor>,
+        limit: usize,
+        visitor: impl FnMut(&Event, bool) -> bool,
+    ) -> Result<(), HistoryError> {
+        let state = self.lock();
+        state.check_cursor(after)?;
+        state.history.visit(after, limit, visitor)
+    }
+
     /// Accepts exactly one turn and commits the user message before its updates.
     ///
     /// # Errors
-    /// Rejects empty prompts, overlapping turns, inactive sessions and unsupported content.
+    /// Rejects empty prompts, overlapping turns, archived/inactive sessions and unsupported content.
     #[cfg(test)]
     pub fn prompt(&self, content: Vec<acp::ContentBlock>) -> Result<TurnId, SessionError> {
-        self.prompt_acp(acp::PromptRequest::new(self.id().to_string(), content))
+        self.accept_prompt(acp::PromptRequest::new(self.id().to_string(), content))
+            .map(|receipt| receipt.turn)
     }
 
+    /// Accepts a turn and returns the cursor of its TurnStarted event under the same lock.
+    ///
     /// # Errors
-    /// Rejects empty prompts, overlapping turns and inactive sessions.
-    pub fn prompt_acp(&self, request: acp::PromptRequest) -> Result<TurnId, SessionError> {
+    /// Rejects empty prompts, overlapping turns, archived/inactive sessions and backend refusals.
+    pub fn accept_prompt(&self, request: acp::PromptRequest) -> Result<TurnReceipt, SessionError> {
         let mut state = self.lock();
+        if state.meta.archived {
+            return Err(SessionError::Archived);
+        }
         state.require_ready()?;
         if state.active.is_some() {
             return Err(SessionError::Busy);
@@ -216,12 +260,16 @@ impl Session {
         }
         state.active = Some(turn);
         state.publish(EventKind::TurnStarted { turn });
+        let receipt = TurnReceipt {
+            turn,
+            cursor: state.cursor,
+        };
         for content in request.prompt {
             state.publish(EventKind::Acp(acp::SessionUpdate::UserMessageChunk(
                 acp::ContentChunk::new(content).meta(request.meta.clone()),
             )));
         }
-        Ok(turn)
+        Ok(receipt)
     }
 
     /// # Errors
@@ -269,12 +317,6 @@ impl Session {
                 .set_config_option(request)
         }
         .await?;
-        let mut state = self.lock();
-        state.require_ready()?;
-        state.publish(EventKind::Acp(acp::SessionUpdate::ConfigOptionUpdate(
-            acp::ConfigOptionUpdate::new(response.config_options.clone())
-                .meta(response.meta.clone()),
-        )));
         Ok(response)
     }
 
@@ -284,7 +326,6 @@ impl Session {
         &self,
         request: acp::SetSessionModeRequest,
     ) -> Result<acp::SetSessionModeResponse, SessionError> {
-        let mode = request.mode_id.clone();
         let response = {
             let state = self.lock();
             state.require_ready()?;
@@ -295,11 +336,6 @@ impl Session {
                 .set_mode(request)
         }
         .await?;
-        let mut state = self.lock();
-        state.require_ready()?;
-        state.publish(EventKind::Acp(acp::SessionUpdate::CurrentModeUpdate(
-            acp::CurrentModeUpdate::new(mode),
-        )));
         Ok(response)
     }
 
@@ -353,6 +389,10 @@ impl Session {
         }
         match update {
             Update::Acp(update) => state.publish(EventKind::Acp(update)),
+            Update::Commit { update, committed } => {
+                state.publish(EventKind::Acp(update));
+                let _ = committed.send(());
+            }
             Update::Failed(message) => state.fail(message),
             Update::Turn { turn, update } if state.active == Some(turn) => match update {
                 TurnUpdate::Acp(update) => state.publish(EventKind::Acp(update)),
@@ -442,15 +482,18 @@ impl State {
     fn publish(&mut self, kind: EventKind) {
         self.cursor = self.cursor.next();
         let event = Event::new(self.meta.id, self.cursor, kind);
-        match &event.kind {
-            EventKind::Acp(update) => self.meta.apply_acp(update),
-            EventKind::TitleChanged { title } => self.meta.title = Some(title.clone()),
-            EventKind::StatusChanged { status } => self.meta.status = *status,
-            EventKind::TurnStarted { .. } => self.meta.status = SessionStatus::Working,
-            EventKind::TurnFinished { .. } => self.meta.status = SessionStatus::Idle,
-            EventKind::Failed { .. } => self.meta.status = SessionStatus::Failed,
+        if self.meta.status == SessionStatus::Starting {
+            match &event.kind {
+                EventKind::Acp(acp::SessionUpdate::ConfigOptionUpdate(update)) => {
+                    self.startup_config = Some(update.clone());
+                }
+                EventKind::Acp(acp::SessionUpdate::CurrentModeUpdate(update)) => {
+                    self.startup_mode = Some(update.clone());
+                }
+                _ => {}
+            }
         }
-        self.meta.updated_at = event.at;
+        self.meta.apply_event(&event);
         self.history.push(event.clone());
         if let Some(events) = &self.events {
             let _ = events.send(event);

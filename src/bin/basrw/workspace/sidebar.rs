@@ -7,7 +7,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let query = self.search.read(cx).value().to_lowercase();
-        let groups = groups::group_threads(&self.sessions, &self.directories, &query);
+        let sessions = self.visible_sessions();
+        let groups = self.grouped_threads(&sessions, &query);
         div()
             .flex()
             .flex_col()
@@ -19,33 +20,36 @@ impl Workspace {
             .border_color(cx.theme().border)
             .child(
                 div()
+                    .id("sidebar-header")
+                    .test_support()
                     .flex()
+                    .flex_shrink_0()
+                    .h(px(layout::HEADER_HEIGHT))
                     .items_center()
-                    .gap_2()
-                    .px_4()
-                    .py_3()
+                    .gap_1()
+                    .px_3()
                     .child(
                         div()
+                            .id("application-menu-slot")
+                            .test_support()
                             .flex_1()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Threads"),
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .child(self.application_button(cx)),
                     )
+                    .child(self.settings_button(cx))
                     .child(
-                        Button::new("add-workspace-button")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::FolderPlus)
+                        layout::icon_button("add-workspace-button", IconName::FolderPlus)
+                            .accessibility_label("添加 workspace")
                             .tooltip("添加 workspace")
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.edit_workspace(window, cx)),
                             ),
                     )
                     .child(
-                        Button::new("new-session")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Plus)
+                        layout::icon_button("new-session", IconName::Plus)
+                            .accessibility_label("新 thread")
                             .tooltip("新 thread · Ctrl N")
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.new_session(window, cx)),
@@ -53,12 +57,46 @@ impl Workspace {
                     ),
             )
             .child(
-                div().px_3().pb_3().child(
-                    Input::new(&self.search)
-                        .small()
-                        .prefix(Icon::new(IconName::Search).small())
-                        .cleanable(true),
-                ),
+                div()
+                    .id("thread-search-row")
+                    .test_support()
+                    .px_3()
+                    .pb_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("thread-search")
+                            .test_support()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                Input::new(&self.search)
+                                    .small()
+                                    .prefix(Icon::new(IconName::Search).small())
+                                    .cleanable(true),
+                            ),
+                    )
+                    .child(
+                        layout::icon_button("archived-list", IconName::Archive)
+                            .selected(self.archived_list)
+                            .accessibility_label(if self.archived_list {
+                                "返回普通列表"
+                            } else {
+                                "查看已归档"
+                            })
+                            .tooltip(if self.archived_list {
+                                "已归档 · 点击返回普通列表"
+                            } else {
+                                "查看已归档"
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.archived_list = !this.archived_list;
+                                cx.notify();
+                            })),
+                    ),
             )
             .child(
                 div()
@@ -82,9 +120,12 @@ impl Workspace {
                             .mb_3()
                             .child(
                                 div()
+                                    .id(SharedString::from(format!("workspace-header-{index}")))
+                                    .test_support()
                                     .flex()
                                     .items_center()
                                     .gap_1()
+                                    .pr_3()
                                     .child(
                                         div()
                                             .id(SharedString::from(format!("workspace-{index}")))
@@ -127,12 +168,10 @@ impl Workspace {
                                             })),
                                     )
                                     .child(
-                                        Button::new(SharedString::from(format!(
-                                            "new-thread-{index}"
-                                        )))
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Plus)
+                                        layout::icon_button(
+                                            SharedString::from(format!("new-thread-{index}")),
+                                            IconName::Plus,
+                                        )
                                         .tooltip("在此 workspace 新建 thread")
                                         .on_click(
                                             cx.listener(move |this, _, window, cx| {
@@ -160,78 +199,14 @@ impl Workspace {
                                             caption("还没有 thread", cx).ml_5().px_3().py_2(),
                                         )
                                     })
-                                    .children(group.threads.into_iter().map(|session| {
-                                        let id = session.id;
-                                        let selected = self.active == Some(id);
-                                        div()
-                                            .id(SharedString::from(format!("session-{id}")))
-                                            .ml_5()
-                                            .px_3()
-                                            .py_2()
-                                            .mb_1()
-                                            .rounded_md()
-                                            .cursor_pointer()
-                                            .when(selected, |row| row.bg(cx.theme().sidebar_accent))
-                                            .hover(|row| row.bg(cx.theme().sidebar_accent))
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.select(id, window, cx)
-                                            }))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .min_w_0()
-                                                            .truncate()
-                                                            .text_sm()
-                                                            .child(title(session)),
-                                                    )
-                                                    .when(
-                                                        session.status == SessionStatus::Working,
-                                                        |row| {
-                                                            row.child(
-                                                                div()
-                                                                    .size_2()
-                                                                    .rounded_full()
-                                                                    .bg(cx.theme().primary),
-                                                            )
-                                                        },
-                                                    ),
-                                            )
-                                            .when(
-                                                session.status == SessionStatus::Failed
-                                                    || session.status == SessionStatus::Stopped,
-                                                |row| {
-                                                    row.child(caption(status(session.status), cx))
-                                                },
-                                            )
-                                    }))
+                                    .children(
+                                        group
+                                            .threads
+                                            .into_iter()
+                                            .map(|session| self.thread_row(session, cx)),
+                                    )
                             })
                     })),
-            )
-            .child(
-                div()
-                    .px_4()
-                    .py_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(self.connection_indicator("sidebar-connection", cx))
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("connection-details")
-                            .ghost()
-                            .xsmall()
-                            .label(
-                                cx.try_global::<theme::Appearance>()
-                                    .map(|theme| theme.name.replace("DankShell ", ""))
-                                    .unwrap_or_else(|| "System".into()),
-                            )
-                            .tooltip(format!("{} · 自动跟随 DMS / Zed 主题", self.server)),
-                    ),
             )
     }
 }

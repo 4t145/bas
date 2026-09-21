@@ -9,10 +9,13 @@ mod stdout;
 #[cfg(target_os = "linux")]
 mod journald;
 
+#[cfg(target_os = "linux")]
+mod journal_stream;
+
 #[cfg(test)]
 mod tests;
 
-use std::{env, fmt, str::FromStr};
+use std::{fmt, str::FromStr};
 
 #[cfg(not(target_os = "linux"))]
 use anyhow::bail;
@@ -180,19 +183,9 @@ impl Config {
     /// # Errors
     /// Returns an error if installing the selected subscriber fails.
     fn init_auto(&self, filter: EnvFilter) -> Result<Backend> {
-        let selected = Backend::for_environment(
-            env::var_os("JOURNAL_STREAM").is_some(),
-            cfg!(target_os = "linux"),
-        );
-
-        if selected == Backend::Stdout {
-            stdout::install(self, filter)?;
-            return Ok(Backend::Stdout);
-        }
-
         #[cfg(target_os = "linux")]
-        {
-            match journald::make_layer(self) {
+        if journal_stream::stdout_is_journal() {
+            return match journald::make_layer(self) {
                 Ok(layer) => {
                     journald::install(filter, layer)?;
                     Ok(Backend::Journald)
@@ -205,15 +198,11 @@ impl Config {
                     );
                     Ok(Backend::Stdout)
                 }
-            }
+            };
         }
 
-        #[cfg(not(target_os = "linux"))]
-        {
-            // `Backend::for_environment` selects stdout on this platform, so this is
-            // unreachable. Keeping the branch explicit makes the module portable.
-            unreachable!("auto selected journald on an unsupported platform")
-        }
+        stdout::install(self, filter)?;
+        Ok(Backend::Stdout)
     }
 
     /// # Errors
@@ -230,16 +219,6 @@ impl Config {
         {
             let _ = (self, filter);
             bail!("the journald tracing backend is only supported on Linux")
-        }
-    }
-}
-
-impl Backend {
-    fn for_environment(journal_stream_present: bool, journald_supported: bool) -> Self {
-        if journal_stream_present && journald_supported {
-            Backend::Journald
-        } else {
-            Backend::Stdout
         }
     }
 }

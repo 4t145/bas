@@ -53,6 +53,11 @@ NixOS / Home Manager 可将 `inputs.basr.packages.${pkgs.stdenv.hostPlatform.sys
 `command.args` 中。程序可用绝对路径；参数数组保留空格边界，不经过 shell 解析，也不会展开 `~` 或 `$HOME`。
 `env` 可为该后端覆盖环境变量；其余变量继承自 basrd。
 
+ACP 后端可设置 `cancellation_grace_ms`，表示发送取消后等待本轮结束的宽限期，
+单位为毫秒，必须大于零，默认 `5000`。例如需要较长工具清理时间的后端可以设置
+`"cancellation_grace_ms": 15000`。超过期限仍会判定后端不可继续并回收进程；
+该选项不会关闭强制清理机制。
+
 选择目录的优先级为：`--agents` / `BASRD_AGENTS` 简写目录、显式 JSON 文件、默认用户文件、
 内置 `embedded`。同一个参数的命令行值优先于环境变量。
 显式指定的文件不存在、JSON 无效、重复 ID 或 ACP 缺少启动程序都会使启动失败；

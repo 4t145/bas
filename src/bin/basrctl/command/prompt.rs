@@ -15,7 +15,7 @@ pub(super) async fn send(client: &mut Client, session: &str, text: Vec<String>) 
         .await
         .context("prompt failed")?;
 
-    println!("turn {}", response.turn);
+    crate::safe::safe_println!("turn {}", response.turn);
     Ok(())
 }
 
@@ -30,6 +30,6 @@ pub(super) async fn cancel(client: &mut Client, session: &str) -> Result<()> {
         .await
         .context("cancel failed")?;
 
-    println!("cancelled {session}");
+    crate::safe::safe_println!("cancelled {session}");
     Ok(())
 }
