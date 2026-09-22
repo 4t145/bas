@@ -51,7 +51,7 @@ async fn run(config: Config) -> Result<()> {
     let shutdown = system::shutdown_signal().context("cannot install shutdown handlers")?;
     let watcher = Watcher::connect(config.notify).await?;
     let mut registry = Registry::new(
-        Arc::new(Catalog::from_specs(config.agents)?),
+        Arc::new(Catalog::from_specs(config.agents.clone())?),
         Arc::new(LocalHost::new(config.permissions)),
         config.limits,
     );
@@ -66,6 +66,14 @@ async fn run(config: Config) -> Result<()> {
         .local_addr()
         .context("cannot read the bound address")?;
     let stopping = tokio_util::sync::CancellationToken::new();
+    let catalog_watcher = config.catalog_source.map(|source| {
+        config::watch_catalog(
+            source,
+            config.agents,
+            Arc::clone(&registry),
+            stopping.clone(),
+        )
+    });
     let server = tonic::transport::Server::builder()
         .add_service(service::Service::new(Arc::clone(&registry)).into_server())
         .serve_with_incoming_shutdown(
@@ -83,6 +91,9 @@ async fn run(config: Config) -> Result<()> {
     system::stopping();
     stopping.cancel();
     let cleanup = async {
+        if let Some(catalog_watcher) = catalog_watcher {
+            catalog_watcher.await.context("catalog watcher failed")?;
+        }
         let finish_server = async {
             match server_result {
                 Some(result) => result,

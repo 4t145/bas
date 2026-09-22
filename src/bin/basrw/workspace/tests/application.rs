@@ -139,7 +139,6 @@ fn application_menu_groups_labels_and_resolves_real_shortcut_hints(cx: &mut Test
         let popup = open_menu(&fixture, cx);
         cx.update_window(popup, |_, window, cx| {
             window.render_frame(cx);
-            let menu = window.within("popup-menu");
             let items = [
                 (0, "关于 BASR"),
                 (1, "查看更新"),
@@ -148,19 +147,36 @@ fn application_menu_groups_labels_and_resolves_real_shortcut_hints(cx: &mut Test
             ];
             let mut row_height = None;
             for (id, label) in items {
-                let row = menu.find(id);
-                assert_eq!(row.label(), Some(label));
+                let row = window.within("popup-menu").find(id);
+                assert_eq!(row.role(), Some(gpui_kit::Role::MenuItem));
+                assert_eq!(window.find(label).label(), Some(label));
                 assert!(row.visible());
                 assert_eq!(
                     *row_height.get_or_insert(row.bounds().size.height),
                     row.bounds().size.height
                 );
             }
+            for label in ["设置", "退出 BASR"] {
+                let text = window.within(label).find("label").bounds();
+                let shortcut = window.within(label).find("shortcut").bounds();
+                assert_eq!(
+                    text.size.height, shortcut.size.height,
+                    "same menu text size"
+                );
+                assert_eq!(text.bottom(), shortcut.bottom(), "same menu baseline");
+                assert!(text.right() <= shortcut.left());
+            }
             for id in [2, 4] {
-                let separator = menu.find(id);
+                let separator = window.within("popup-menu").find(id);
                 assert!(separator.bounds().size.height < row_height.expect("item height"));
-                assert!(separator.bounds().top() > menu.find(id - 1).bounds().bottom());
-                assert!(separator.bounds().bottom() < menu.find(id + 1).bounds().top());
+                assert!(
+                    separator.bounds().top()
+                        > window.within("popup-menu").find(id - 1).bounds().bottom()
+                );
+                assert!(
+                    separator.bounds().bottom()
+                        < window.within("popup-menu").find(id + 1).bounds().top()
+                );
             }
             for action in [
                 Box::new(crate::application::OpenSettings) as Box<dyn gpui_kit::Action>,

@@ -12,10 +12,14 @@ struct Fixture {
 
 fn fixture(cx: &mut TestAppContext, preferences: Preferences) -> Fixture {
     let directory = tempfile::tempdir().expect("settings test directory");
-    let path = directory.path().join("appearance.json");
+    let path = directory.path().join("settings.json");
     std::fs::write(
         &path,
-        serde_json::to_vec(&preferences).expect("preferences serialize"),
+        serde_json::to_vec(&basr::config::Settings {
+            appearance: preferences,
+            ..Default::default()
+        })
+        .expect("settings serialize"),
     )
     .expect("initial configuration");
     cx.update(|cx| {
@@ -44,8 +48,11 @@ fn builtin() -> Preferences {
 }
 
 fn read(fixture: &Fixture) -> Preferences {
-    Preferences::from_json(&std::fs::read_to_string(&fixture.path).expect("saved preferences"))
-        .expect("valid preferences")
+    basr::config::Store::at(fixture.path.clone())
+        .load()
+        .expect("valid settings")
+        .settings
+        .appearance
 }
 
 #[gpui_kit::test]
@@ -176,7 +183,7 @@ fn external_reload_updates_clean_controls_but_preserves_dirty_conflicts(cx: &mut
     };
     std::fs::write(
         &fixture.path,
-        serde_json::to_vec(&external).expect("serialize"),
+        serde_json::to_vec(&serde_json::json!({"appearance": external})).expect("serialize"),
     )
     .expect("external edit");
     cx.update(|cx| theme::init(None, Some(fixture.path.clone()), cx));
@@ -196,7 +203,7 @@ fn external_reload_updates_clean_controls_but_preserves_dirty_conflicts(cx: &mut
     };
     std::fs::write(
         &fixture.path,
-        serde_json::to_vec(&newer).expect("serialize"),
+        serde_json::to_vec(&serde_json::json!({"appearance": newer})).expect("serialize"),
     )
     .expect("concurrent edit");
     cx.update(|cx| theme::init(None, Some(fixture.path.clone()), cx));

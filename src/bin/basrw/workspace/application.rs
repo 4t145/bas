@@ -1,5 +1,41 @@
 use super::*;
+use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::PopupMenuItem;
+
+// Plain keybinding text inherits the same typography and baseline as its label.
+fn application_item(
+    label: &'static str,
+    action: Option<Box<dyn gpui_kit::Action>>,
+) -> PopupMenuItem {
+    let hint_action = action.as_ref().map(|action| action.boxed_clone());
+    let item = PopupMenuItem::element(move |window, cx| {
+        div()
+            .id(label)
+            .test_support()
+            .role(gpui_kit::Role::Label)
+            .aria_label(label)
+            .flex()
+            .flex_1()
+            .items_baseline()
+            .gap_4()
+            .text_sm()
+            .child(div().id("label").test_support().flex_1().child(label))
+            .children(hint_action.as_ref().and_then(|action| {
+                Kbd::binding_for_action(action.as_ref(), None, window).map(|kbd| {
+                    div()
+                        .id("shortcut")
+                        .test_support()
+                        .flex_shrink_0()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(kbd.appearance(false))
+                })
+            }))
+    });
+    match action {
+        Some(action) => item.action(action),
+        None => item,
+    }
+}
 
 impl Workspace {
     pub(super) fn application_button(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -18,7 +54,7 @@ impl Workspace {
                 menu.min_w(px(280.))
                     .max_w(px(320.))
                     .item(
-                        PopupMenuItem::new("关于 BASR").on_click(move |_, window, cx| {
+                        application_item("关于 BASR", None).on_click(move |_, window, cx| {
                             menus::in_parent(parent, window, cx, |window, cx| {
                                 let _ = about.update(cx, |this, cx| {
                                     this.close_menu(window, cx);
@@ -31,7 +67,7 @@ impl Workspace {
                         }),
                     )
                     .item(
-                        PopupMenuItem::new("查看更新").on_click(move |_, window, cx| {
+                        application_item("查看更新", None).on_click(move |_, window, cx| {
                             menus::in_parent(parent, window, cx, |_, cx| {
                                 crate::application::open_releases(cx)
                             });
@@ -39,8 +75,7 @@ impl Workspace {
                     )
                     .separator()
                     .item(
-                        PopupMenuItem::new("设置")
-                            .action(Box::new(crate::application::OpenSettings))
+                        application_item("设置", Some(Box::new(crate::application::OpenSettings)))
                             .on_click(move |_, window, cx| {
                                 menus::in_parent(parent, window, cx, |window, cx| {
                                     let _ = settings
@@ -50,8 +85,7 @@ impl Workspace {
                     )
                     .separator()
                     .item(
-                        PopupMenuItem::new("退出 BASR")
-                            .action(Box::new(crate::application::Quit))
+                        application_item("退出 BASR", Some(Box::new(crate::application::Quit)))
                             .on_click(move |_, window, cx| {
                                 menus::in_parent(parent, window, cx, |window, cx| {
                                     let _ = quit.update(cx, |this, cx| {

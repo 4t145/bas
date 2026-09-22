@@ -82,7 +82,7 @@ rustPlatform.buildRustPackage {
         install -Dm644 ${../contrib/basrd-user.service} "$out/share/systemd/user/basrd.service"
         substituteInPlace "$out/share/systemd/user/basrd.service" \
           --replace-fail '@basrd@' "$out/bin/basrd"
-        install -Dm644 ${../contrib/agents.json} "$out/share/basr/agents.example.json"
+        install -Dm644 ${../contrib/settings.json} "$out/share/basr/settings.example.json"
       '';
 
   meta = {

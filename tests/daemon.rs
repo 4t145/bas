@@ -13,12 +13,17 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 #[path = "daemon/archive.rs"]
 mod archive;
 
+#[cfg(unix)]
+#[path = "daemon/config.rs"]
+mod config;
+
 fn command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_basrd"));
     for key in [
         "BASRD_LISTEN",
         "BASRD_AGENTS",
         "BASRD_AGENTS_FILE",
+        "BASR_SETTINGS_FILE",
         "BASRD_NOTIFY",
         "BASRD_HISTORY",
         "BASRD_BUFFER",

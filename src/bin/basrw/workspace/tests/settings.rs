@@ -17,7 +17,7 @@ fn close_settings(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn native_close_flushes_valid_text_before_the_debounce_deadline(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
-    let path = fixture._appearance.path().join("appearance.json");
+    let path = fixture._appearance.path().join("settings.json");
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture
             .view
@@ -33,17 +33,17 @@ fn native_close_flushes_valid_text_before_the_debounce_deadline(cx: &mut TestApp
         window.input("27", cx);
     })
     .expect("type a value without waiting for autosave");
-    let before: crate::theme::preferences::Preferences =
+    let before: basr::config::Settings =
         serde_json::from_slice(&std::fs::read(&path).expect("original")).expect("preferences");
-    assert_eq!(before.ui_font_size, None);
+    assert_eq!(before.appearance.ui_font_size, None);
     let mut visual = gpui_kit::VisualTestContext::from_window(settings.into(), cx);
     assert!(
         visual.simulate_close(),
         "native close callback accepts closure"
     );
-    let after: crate::theme::preferences::Preferences =
+    let after: basr::config::Settings =
         serde_json::from_slice(&std::fs::read(&path).expect("saved")).expect("preferences");
-    assert_eq!(after.ui_font_size, Some(27.));
+    assert_eq!(after.appearance.ui_font_size, Some(27.));
     cx.update(|cx| assert_eq!(Theme::global(cx).font_size, px(27.)));
 }
 

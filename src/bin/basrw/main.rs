@@ -43,9 +43,9 @@ struct Args {
     /// Override the DMS-generated Zed theme file; changes are reloaded live.
     #[arg(long)]
     theme_file: Option<PathBuf>,
-    /// BASR appearance preferences (default: $XDG_CONFIG_HOME/basr/appearance.json).
-    #[arg(long)]
-    appearance_file: Option<PathBuf>,
+    /// Unified BASR settings (default: $XDG_CONFIG_HOME/basr/settings.json).
+    #[arg(long, env = "BASR_SETTINGS_FILE")]
+    settings_file: Option<PathBuf>,
     #[cfg(feature = "gui-tests")]
     #[arg(long, hide = true, value_parser = ["empty", "sample", "layout", "connecting", "disconnected", "menus", "files", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "clipboard", "settings"])]
     preview_panel: Option<String>,
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            theme::init(args.theme_file, args.appearance_file, cx);
+            theme::init(args.theme_file, args.settings_file, cx);
             theme::watch(cx);
             application::init(cx);
             workspace::bind_keys(cx);

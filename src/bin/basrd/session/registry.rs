@@ -58,7 +58,7 @@ pub enum CreateError {
 pub struct NotFound(pub SessionId);
 
 pub struct Registry {
-    catalog: Arc<Catalog>,
+    catalog: std::sync::RwLock<Arc<Catalog>>,
     host: Arc<dyn Host>,
     limits: Limits,
     sessions: RwLock<BTreeMap<SessionId, Arc<Session>>>,
@@ -69,7 +69,7 @@ pub struct Registry {
 impl Registry {
     pub fn new(catalog: Arc<Catalog>, host: Arc<dyn Host>, limits: Limits) -> Self {
         Self {
-            catalog,
+            catalog: std::sync::RwLock::new(catalog),
             host,
             limits,
             sessions: RwLock::new(BTreeMap::new()),
@@ -83,8 +83,13 @@ impl Registry {
         self
     }
 
-    pub fn catalog(&self) -> &Catalog {
-        &self.catalog
+    pub fn catalog(&self) -> Arc<Catalog> {
+        Arc::clone(&self.catalog.read().expect("catalog lock poisoned"))
+    }
+
+    /// Publishing a catalog never mutates or stops existing sessions.
+    pub fn replace_catalog(&self, catalog: Arc<Catalog>) {
+        *self.catalog.write().expect("catalog lock poisoned") = catalog;
     }
 
     /// Lets connection-scoped streams end before the server finishes draining.
@@ -107,8 +112,9 @@ impl Registry {
     }
 
     async fn launch(&self, request: CreateRequest) -> Result<Arc<Session>, CreateError> {
-        let spec = self
-            .catalog
+        // Resolve both the specification and driver from one generation.
+        let catalog = self.catalog();
+        let spec = catalog
             .spec(&request.agent)
             .cloned()
             .ok_or_else(|| CreateError::UnknownAgent(request.agent.clone()))?;
@@ -140,8 +146,7 @@ impl Registry {
         let (updates, inbox) = mpsc::channel(self.limits.live_capacity.get());
         // Drain initialization updates too, so protocol startup cannot deadlock on a full queue.
         session.listen(inbox);
-        let agent = self
-            .catalog
+        let agent = catalog
             .launch(LaunchRequest {
                 session: id,
                 spec,

@@ -42,7 +42,7 @@ impl DriverTrait for Driver {
     async fn launch(&self, request: LaunchRequest) -> Result<Box<dyn AgentTrait>, Error> {
         let (corrupt, mut corruption) = mpsc::channel(1);
         let transport =
-            AcpAgent::try_from(request.spec.as_ref())?.with_debug(move |line, direction| {
+            convert::agent(request.spec.as_ref())?.with_debug(move |line, direction| {
                 tracing::trace!(?direction, bytes = line.len(), "ACP transport line");
                 // The SDK answers parse errors and keeps reading. A daemon-owned peer
                 // emitting damaged protocol data must not leave a prompt hung forever.

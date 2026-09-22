@@ -5,6 +5,7 @@ use super::{
     source::{self, Files, Sources},
 };
 use anyhow::{Context as _, Result};
+use basr::config::{Document as SettingsDocument, Store};
 use std::path::PathBuf;
 
 #[cfg(test)]
@@ -13,20 +14,12 @@ mod tests;
 #[derive(Clone)]
 pub(crate) struct Document {
     pub preferences: Preferences,
-    original: Option<String>,
-}
-
-#[derive(Debug, thiserror::Error)]
-enum SaveError {
-    #[error("配置已被外部修改；请关闭并重新打开设置后再保存")]
-    Conflict,
-    #[error("配置是符号链接（可能由 Nix 管理）；请修改其声明来源，而不是在此覆盖")]
-    Symlink,
+    settings: SettingsDocument,
 }
 
 #[derive(Clone)]
 pub(super) struct Loader {
-    pub appearance_file: PathBuf,
+    pub store: Store,
     pub theme_file: Option<PathBuf>,
     #[cfg(test)]
     pub test_imports: Option<Files>,
@@ -70,14 +63,9 @@ impl Reload {
 }
 
 impl Loader {
-    pub fn new(appearance_file: Option<PathBuf>, theme_file: Option<PathBuf>) -> Self {
-        let config = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
-            });
+    pub fn new(settings_file: Option<PathBuf>, theme_file: Option<PathBuf>) -> Self {
         Self {
-            appearance_file: appearance_file.unwrap_or_else(|| config.join("basr/appearance.json")),
+            store: Store::new(settings_file),
             theme_file,
             #[cfg(test)]
             test_imports: None,
@@ -93,16 +81,10 @@ impl Loader {
     /// # Errors
     /// Reports unreadable or malformed preferences without replacing them.
     pub fn document(&self) -> Result<Document> {
-        let original = source::read(&self.appearance_file)?;
-        let preferences = original
-            .as_deref()
-            .map(Preferences::from_json)
-            .transpose()
-            .with_context(|| format!("appearance preferences {}", self.appearance_file.display()))?
-            .unwrap_or_default();
+        let settings = self.store.load()?;
         Ok(Document {
-            preferences,
-            original,
+            preferences: settings.settings.appearance.clone(),
+            settings,
         })
     }
 
@@ -140,46 +122,11 @@ impl Loader {
         preferences: Preferences,
         dark: bool,
     ) -> Result<Effective> {
-        use std::io::Write as _;
         let effective = self.snapshot(preferences.clone())?.resolve(dark)?;
-        let text = serde_json::to_string_pretty(&preferences)? + "\n";
-        self.check_original(document)?;
-        let parent = self
-            .appearance_file
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(std::path::Path::new("."));
-        std::fs::create_dir_all(parent).context("无法创建配置目录")?;
-        let mut temporary =
-            tempfile::NamedTempFile::new_in(parent).context("无法创建临时配置文件")?;
-        temporary
-            .write_all(text.as_bytes())
-            .context("无法写入配置")?;
-        temporary.as_file().sync_all().context("无法同步配置")?;
-        self.check_original(document)?;
-        temporary
-            .persist(&self.appearance_file)
-            .context("无法原子替换配置")?;
+        self.store
+            .save_appearance(&mut document.settings, preferences.clone())?;
         document.preferences = preferences;
-        document.original = Some(text);
         Ok(effective)
-    }
-
-    /// # Errors
-    /// Rejects conflicting edits, symbolic links, or an unreadable target.
-    fn check_original(&self, document: &Document) -> Result<()> {
-        match std::fs::symlink_metadata(&self.appearance_file) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(SaveError::Symlink.into());
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-        if source::read(&self.appearance_file)? != document.original {
-            return Err(SaveError::Conflict.into());
-        }
-        Ok(())
     }
 
     fn theme_path(&self, preferences: &Preferences) -> Option<PathBuf> {
@@ -188,7 +135,8 @@ impl Loader {
                 if path.is_absolute() {
                     path.clone()
                 } else {
-                    self.appearance_file
+                    self.store
+                        .path()
                         .parent()
                         .unwrap_or(std::path::Path::new("."))
                         .join(path)

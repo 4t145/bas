@@ -19,9 +19,12 @@ fn application_watcher_survives_window_closure_and_updates_all_views(cx: &mut Te
     }
 
     let directory = tempfile::tempdir().expect("isolated preferences");
-    let path = directory.path().join("appearance.json");
-    std::fs::write(&path, r#"{"theme_source":"builtin","ui_font_size":16}"#)
-        .expect("initial appearance");
+    let path = directory.path().join("settings.json");
+    std::fs::write(
+        &path,
+        r#"{"appearance":{"theme_source":"builtin","ui_font_size":16}}"#,
+    )
+    .expect("initial appearance");
     cx.update(|cx| {
         gpui_kit::init(cx);
         init(None, Some(path.clone()), cx);
@@ -37,8 +40,11 @@ fn application_watcher_survives_window_closure_and_updates_all_views(cx: &mut Te
         Root::new(cx.new(|_| Probe(second_size.clone())), window, cx)
     });
     cx.executor().run_until_parked();
-    std::fs::write(&path, r#"{"theme_source":"builtin","ui_font_size":22}"#)
-        .expect("external update");
+    std::fs::write(
+        &path,
+        r#"{"appearance":{"theme_source":"builtin","ui_font_size":22}}"#,
+    )
+    .expect("external update");
     cx.executor().advance_clock(REFRESH_INTERVAL);
     cx.executor().run_until_parked();
     for handle in [first, second] {
@@ -49,14 +55,17 @@ fn application_watcher_survives_window_closure_and_updates_all_views(cx: &mut Te
     assert_eq!(second_size.get(), 22.);
     cx.update_window(first.into(), |_, window, _| window.remove_window())
         .expect("close original window");
-    std::fs::write(&path, r#"{"theme_source":"builtin","ui_font_size":25}"#)
-        .expect("update with only settings left");
+    std::fs::write(
+        &path,
+        r#"{"appearance":{"theme_source":"builtin","ui_font_size":25}}"#,
+    )
+    .expect("update with only settings left");
     cx.executor().advance_clock(REFRESH_INTERVAL);
     cx.executor().run_until_parked();
     cx.update_window(second.into(), |_, window, cx| window.render_frame(cx))
         .expect("remaining window still receives changes");
     assert_eq!(second_size.get(), 25.);
-    std::fs::write(&path, r#"{"ui_font_size":0}"#).expect("invalid external update");
+    std::fs::write(&path, r#"{"appearance":{"ui_font_size":0}}"#).expect("invalid external update");
     cx.executor().advance_clock(REFRESH_INTERVAL);
     cx.executor().run_until_parked();
     cx.update(|cx| assert_eq!(Theme::global(cx).font_size, px(25.)));

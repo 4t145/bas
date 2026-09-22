@@ -18,7 +18,8 @@ workspace 按钮左侧的齿轮或 `Ctrl+,` 打开设置，完整窗口与最小
 标题栏关闭按钮或 `Ctrl+W`（macOS 为 `Cmd+W`）只关闭设置窗口。
 
 左侧分类导航和搜索由通用设置入口负责，具体配置由分类页面负责；
-当前实现“外观”分类，含主题、字体和布局，后续类别不需要塞进外观表单。
+“外观”是可展开的父分类，主题、字体和布局是缩进的子节点。
+“Agent 服务”提供本机 ACP agents 配置，后续类别不需要塞进外观表单。
 尚未实现的终端、模型供应商等功能不显示占位开关。
 
 字体选择将 `Default`（继承桌面或内置配置）与具体字体放在同一个可搜索下拉框内，
@@ -34,12 +35,22 @@ Fallback 用逗号分隔，留空继承，`[]` 表示不指定额外 fallback。
 应用级监听持续检查外部配置变化；主题、字体和尺寸同时更新所有窗口，
 不依赖某个聊天窗口仍然打开。
 
-外观页面继续使用原来的配置路径（默认 `$XDG_CONFIG_HOME/basr/appearance.json`，未设置 XDG 时为
-`~/.config/basr/appearance.json`，`--appearance-file` 优先）及当前有效主题。
+所有设置共用 `$XDG_CONFIG_HOME/basr/settings.json`（未设置 XDG 时为
+`~/.config/basr/settings.json`），`--settings-file` / `BASR_SETTINGS_FILE` 可覆盖路径。
+外观存入 `appearance`，Agent 目录存入 `daemon.agents`；保存某一 section 不覆盖另一 section。
+默认新文件缺失时只读合并旧 `appearance.json` 和 `agents.json`，首次保存写入新文件，旧文件保留。
 `--theme-file` 优先于表单中的主题文件；内置来源不会读取外部主题。
 保存使用同目录临时文件和原子替换；无法解析的原文件、打开页面后的外部内容变更、
 符号链接（例如 Nix 管理的配置）均不会被静默覆盖。
 没有未提交编辑时，页面同步外部有效配置；有未提交编辑时保留输入并报告冲突。
+
+Agent 服务页提供 Codex、OpenCode、Pi 和自定义 ACP 模板，分别使用 `codex-acp`、
+`opencode acp`、`pi-acp`；不会自动安装或启动。程序与参数分开编辑，参数是 JSON 字符串数组，
+不经过 shell。命令修改需点击“保存 Agent”，不随半输入的文本自动提交；未保存草稿可取消。
+本机新版 `basrd` 每秒读取文件目录，成功后仅影响新建 thread；现有会话保持原后端。
+显式 `--agents` / `--agents-file` 覆盖统一配置时，服务不跟随这里的修改。
+页面不远程修改服务、不检测 daemon 的 PATH，也不把“已保存”冒充“已在 daemon 应用”。
+可用重新加载读取外部修改，有草稿时需先保存或取消。依赖和认证参见[后端配置](install.md)。
 
 主窗口左上角为应用菜单，不再显示难以辨识的小尺寸 logo。
 菜单按“关于 / 查看更新”、“设置”、“退出”分组，以分隔线区分，菜单项不加省略号。
@@ -248,11 +259,11 @@ BASR 只读取桌面主题，不修改 Zed 或 DMS 配置。实现参考
 [Zed workspace / thread 侧栏](https://github.com/zed-industries/zed/blob/main/crates/sidebar/src/sidebar.rs)
 及 [Agent thread 视图](https://github.com/zed-industries/zed/blob/main/crates/agent_ui/src/conversation_view/thread_view.rs)。
 
-### BASR 自己的外观偏好
+### 统一设置中的外观偏好
 
-`$XDG_CONFIG_HOME/basr/appearance.json`（默认 `~/.config/basr/appearance.json`）
-保存 BASR 偏好；也可用 `--appearance-file /path/to/appearance.json` 指定位置。
-文件不存在时沿用默认和桌面导入，不创建空文件。可在独立设置窗口修改，也可直接编辑 JSON；
+`$XDG_CONFIG_HOME/basr/settings.json`（默认 `~/.config/basr/settings.json`）
+保存 BASR 偏好和 Agent 配置；也可用 `--settings-file /path/to/settings.json` 指定位置。
+文件不存在时读取旧格式作为迁移来源；没有旧文件则沿用默认，不创建空文件。可在独立设置窗口修改，也可直接编辑 JSON；
 两种入口共用校验、合并及热更新规则。
 这是严格 JSON：未知字段、非法枚举、空字体名、非正数或非有限字号/行高，以及不在 `[0, 1]`
 内的不透明度都会被拒绝。外部 Zed/DMS 文件仍兼容 JSONC 和未知字段。
@@ -261,16 +272,18 @@ BASR 只读取桌面主题，不修改 Zed 或 DMS 配置。实现参考
 
 ```json
 {
-  "ui_font_family": "Inter",
-  "mono_font_family": "Fira Code",
-  "font_fallbacks": ["Sarasa UI SC"],
-  "ui_font_size": 16,
-  "content_font_size": 14,
-  "content_line_height": 1.6,
-  "content_opacity": 0.94,
-  "background": "blurred",
-  "theme_source": "desktop",
-  "theme_mode": "desktop"
+  "appearance": {
+    "ui_font_family": "Inter",
+    "mono_font_family": "Fira Code",
+    "font_fallbacks": ["Sarasa UI SC"],
+    "ui_font_size": 16,
+    "content_font_size": 14,
+    "content_line_height": 1.6,
+    "content_opacity": 0.94,
+    "background": "blurred",
+    "theme_source": "desktop",
+    "theme_mode": "desktop"
+  }
 }
 ```
 

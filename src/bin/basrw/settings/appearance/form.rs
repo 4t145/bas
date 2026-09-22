@@ -17,54 +17,57 @@ pub(super) struct Form {
     pub line_height: Entity<InputState>,
     pub opacity: Entity<InputState>,
     pub theme_file: Entity<InputState>,
-    pub source: Entity<SelectState<Vec<ThemeSource>>>,
-    pub mode: Entity<SelectState<Vec<ThemeMode>>>,
-    pub background: Entity<SelectState<Vec<Background>>>,
+    pub source: Entity<SelectState<Vec<Choice<ThemeSource>>>>,
+    pub mode: Entity<SelectState<Vec<Choice<ThemeMode>>>>,
+    pub background: Entity<SelectState<Vec<Choice<Background>>>>,
 }
 
-impl SelectItem for ThemeSource {
-    type Value = Self;
+#[derive(Clone)]
+pub(super) struct Choice<T>(T);
+
+impl SelectItem for Choice<ThemeSource> {
+    type Value = ThemeSource;
     fn title(&self) -> gpui_kit::SharedString {
-        match self {
-            Self::Desktop => "Default · 桌面",
-            Self::Builtin => "内置",
+        match self.0 {
+            ThemeSource::Desktop => "Default · 桌面",
+            ThemeSource::Builtin => "内置",
         }
         .into()
     }
-    fn value(&self) -> &Self {
-        self
+    fn value(&self) -> &ThemeSource {
+        &self.0
     }
 }
 
-impl SelectItem for ThemeMode {
-    type Value = Self;
+impl SelectItem for Choice<ThemeMode> {
+    type Value = ThemeMode;
     fn title(&self) -> gpui_kit::SharedString {
-        match self {
-            Self::Desktop => "Default · 桌面",
-            Self::System => "系统",
-            Self::Light => "浅色",
-            Self::Dark => "深色",
+        match self.0 {
+            ThemeMode::Desktop => "Default · 桌面",
+            ThemeMode::System => "系统",
+            ThemeMode::Light => "浅色",
+            ThemeMode::Dark => "深色",
         }
         .into()
     }
-    fn value(&self) -> &Self {
-        self
+    fn value(&self) -> &ThemeMode {
+        &self.0
     }
 }
 
-impl SelectItem for Background {
-    type Value = Self;
+impl SelectItem for Choice<Background> {
+    type Value = Background;
     fn title(&self) -> gpui_kit::SharedString {
-        match self {
-            Self::Auto => "自动",
-            Self::Opaque => "不透明",
-            Self::Transparent => "透明",
-            Self::Blurred => "Default · 模糊",
+        match self.0 {
+            Background::Auto => "自动",
+            Background::Opaque => "不透明",
+            Background::Transparent => "透明",
+            Background::Blurred => "Default · 模糊",
         }
         .into()
     }
-    fn value(&self) -> &Self {
-        self
+    fn value(&self) -> &Background {
+        &self.0
     }
 }
 
@@ -208,17 +211,20 @@ impl Form {
     }
 }
 
-fn choice<T: SelectItem<Value = T> + PartialEq + 'static>(
+fn choice<T: Clone + PartialEq + 'static>(
     items: Vec<T>,
     selected: T,
     window: &mut Window,
     cx: &mut Context<AppearancePage>,
-) -> Entity<SelectState<Vec<T>>> {
+) -> Entity<SelectState<Vec<Choice<T>>>>
+where
+    Choice<T>: SelectItem<Value = T>,
+{
     let index = items
         .iter()
         .position(|item| *item == selected)
         .map(IndexPath::new);
-    cx.new(|cx| SelectState::new(items, index, window, cx))
+    cx.new(|cx| SelectState::new(items.into_iter().map(Choice).collect(), index, window, cx))
 }
 
 #[derive(Clone, Debug, PartialEq)]

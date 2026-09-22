@@ -70,6 +70,7 @@ pub struct Config {
     pub listen: SocketAddr,
     pub notify: Notify,
     pub agents: Vec<AgentSpec>,
+    pub catalog_source: Option<super::CatalogSource>,
     pub limits: Limits,
     pub permissions: PermissionPolicy,
 }
@@ -82,6 +83,7 @@ impl Default for Config {
                 .expect("the default listen address is a valid socket address"),
             notify: Notify::default(),
             agents: vec![AgentSpec::embedded()],
+            catalog_source: None,
             limits: Limits::default(),
             permissions: PermissionPolicy::default(),
         }

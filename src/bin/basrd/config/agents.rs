@@ -6,7 +6,6 @@ use std::{
 use crate::agent::{AgentSpec, Kind, ParseSpecError};
 
 pub const AGENTS_FILE_ENV: &str = "BASRD_AGENTS_FILE";
-const AGENTS_FILE_NAME: &str = "basr/agents.json";
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentsFileError {
@@ -30,14 +29,6 @@ pub enum AgentsFileError {
         id: String,
         reason: &'static str,
     },
-}
-
-pub fn default_agents_file() -> Option<PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| Path::new(value).is_absolute())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .map(|directory| directory.join(AGENTS_FILE_NAME))
 }
 
 /// Reads the native agent specifications, preserving argument and environment boundaries.
@@ -83,30 +74,6 @@ pub fn read_agents(path: &Path) -> Result<Vec<AgentSpec>, AgentsFileError> {
         }
     }
     Ok(agents)
-}
-
-/// Loads an explicit catalog, the user's default catalog, or the embedded backend.
-///
-/// # Errors
-/// Explicit paths and existing default files must be readable and valid.
-pub fn configured_agents(
-    path: Option<&Path>,
-    default: Option<&Path>,
-) -> Result<Vec<AgentSpec>, AgentsFileError> {
-    if let Some(path) = path {
-        return read_agents(path);
-    }
-    if let Some(path) = default {
-        return match read_agents(path) {
-            Err(AgentsFileError::Read { source, .. })
-                if source.kind() == io::ErrorKind::NotFound =>
-            {
-                Ok(vec![AgentSpec::embedded()])
-            }
-            result => result,
-        };
-    }
-    Ok(vec![AgentSpec::embedded()])
 }
 
 /// Parses the `BASRD_AGENTS` environment variable.

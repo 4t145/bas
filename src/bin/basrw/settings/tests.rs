@@ -2,10 +2,88 @@ use super::*;
 use gpui_kit::{TestAppContext, size, test::TestWindowExt};
 
 #[gpui_kit::test]
+fn categories_are_nested_and_agent_drafts_survive_navigation(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("isolated unified settings");
+    let path = directory.path().join("settings.json");
+    let initial = r#"{"appearance":{"theme_source":"builtin","content_opacity":0.75}}"#;
+    std::fs::write(&path, initial).expect("initial settings");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::init(None, Some(path.clone()), cx);
+    });
+    let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        let settings = cx.new(|cx| Settings::new(window, cx));
+        Root::new(settings, window, cx)
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let parent = window.find("settings-appearance").bounds();
+        for id in ["settings-theme", "settings-fonts", "settings-layout"] {
+            let child = window.find(id).bounds();
+            assert!(child.left() > parent.left(), "children are indented");
+            assert!(child.top() >= parent.bottom());
+        }
+        window.click("settings-fonts", cx);
+        window.render_frame(cx);
+        window.click("settings-appearance-expand", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("settings-fonts").is_none());
+        assert!(
+            window.find("appearance-ui-size").visible(),
+            "collapsing only hides navigation"
+        );
+        window.click("settings-appearance-expand", cx);
+        window.render_frame(cx);
+        assert!(window.find("settings-fonts").visible());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("unchanged file"),
+            initial
+        );
+        window.click("settings-acp-agents", cx);
+        window.render_frame(cx);
+        assert!(window.find("agents-page").visible());
+        window.click("agents-preset-codex", cx);
+        window.render_frame(cx);
+        window.click("agents-program", cx);
+        window.press("ctrl-a", cx);
+        window.input("/test/codex-acp", cx);
+        window.click("settings-layout", cx);
+        window.render_frame(cx);
+        assert!(window.find("appearance-opacity-row").visible());
+        window.click("settings-search", cx);
+        window.input("codex", cx);
+    })
+    .expect("tree and page navigation");
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.find("agents-page").visible(),
+            "search finds the agent category"
+        );
+        window.click("agents-save", cx);
+    })
+    .expect("save the retained agent draft");
+    let settings = basr::config::Store::at(path)
+        .load()
+        .expect("saved unified config")
+        .settings;
+    assert_eq!(settings.appearance.content_opacity, Some(0.75));
+    assert_eq!(settings.daemon.agents.len(), 2);
+    assert_eq!(
+        settings.daemon.agents[1]
+            .command
+            .as_ref()
+            .expect("ACP command")
+            .program,
+        std::path::PathBuf::from("/test/codex-acp")
+    );
+}
+
+#[gpui_kit::test]
 fn navigation_and_search_filter_settings_without_a_save_button(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("settings config");
-    let path = directory.path().join("appearance.json");
-    std::fs::write(&path, r#"{"theme_source":"builtin"}"#).expect("builtin config");
+    let path = directory.path().join("settings.json");
+    std::fs::write(&path, r#"{"appearance":{"theme_source":"builtin"}}"#).expect("builtin config");
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::theme::init(None, Some(path), cx);
@@ -56,10 +134,10 @@ fn compact_settings_actions_render_and_persist_without_save(cx: &mut TestAppCont
     use std::{cell::Cell, rc::Rc};
 
     let directory = tempfile::tempdir().expect("settings fixture");
-    let path = directory.path().join("appearance.json");
+    let path = directory.path().join("settings.json");
     std::fs::write(
         &path,
-        r#"{"theme_source":"builtin","content_opacity":0.7,"content_line_height":1.8}"#,
+        r#"{"appearance":{"theme_source":"builtin","content_opacity":0.7,"content_line_height":1.8}}"#,
     )
     .expect("fixture preferences");
     cx.update(|cx| {
@@ -75,8 +153,11 @@ fn compact_settings_actions_render_and_persist_without_save(cx: &mut TestAppCont
         Root::new(settings, window, cx)
     });
     let read = || {
-        Preferences::from_json(&std::fs::read_to_string(&path).expect("saved fixture"))
-            .expect("valid preferences")
+        basr::config::Store::at(path.clone())
+            .load()
+            .expect("valid settings")
+            .settings
+            .appearance
     };
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
@@ -125,7 +206,7 @@ fn compact_settings_actions_render_and_persist_without_save(cx: &mut TestAppCont
 #[gpui_kit::test]
 fn unreadable_preferences_keep_reset_visible_but_inert(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("settings fixture");
-    let path = directory.path().join("appearance.json");
+    let path = directory.path().join("settings.json");
     std::fs::write(&path, "invalid fixture").expect("invalid preferences");
     cx.update(|cx| {
         gpui_kit::init(cx);

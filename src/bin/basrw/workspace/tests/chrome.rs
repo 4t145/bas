@@ -30,11 +30,24 @@ fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext
         assert!(menu.top() >= sidebar.top() && menu.bottom() <= sidebar.bottom());
         assert_eq!(menu.size, settings.size);
         assert!(window.try_find("project-logo-slot").is_none());
+        window.click("sidebar-toggle", cx);
+        window.render_frame(cx);
+        assert!(
+            window.find("app-menu").bounds().right()
+                < window.find("sidebar-toggle").bounds().left()
+        );
+        assert_eq!(
+            window.find("app-menu").bounds().top(),
+            window.find("sidebar-toggle").bounds().top()
+        );
+        window.click("sidebar-toggle", cx);
+        window.render_frame(cx);
         fixture
             .view
             .update(cx, |view, cx| view.toggle_mode(window, cx));
         window.render_frame(cx);
         let compact = [
+            "app-menu",
             "open-settings",
             "workspace-picker",
             "new-session",

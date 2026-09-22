@@ -25,9 +25,12 @@ pub struct Args {
     /// Agent catalog, for example `embedded;opencode=acp:opencode acp`.
     #[arg(long, env = config::AGENTS_ENV, value_name = "SPEC")]
     agents: Option<String>,
-    /// JSON agent catalog; defaults to $XDG_CONFIG_HOME/basr/agents.json.
+    /// Explicit legacy JSON agent catalog.
     #[arg(long, env = config::AGENTS_FILE_ENV, value_name = "PATH")]
     agents_file: Option<PathBuf>,
+    /// Unified settings file; defaults to the user's basr/settings.json.
+    #[arg(long, env = "BASR_SETTINGS_FILE", value_name = "PATH")]
+    settings_file: Option<PathBuf>,
     /// Desktop notification policy: auto, always (required), or never.
     #[arg(long, env = config::NOTIFY_ENV, default_value = "auto")]
     notify: Notify,
@@ -57,19 +60,25 @@ impl Args {
     /// # Errors
     /// Returns an error if the selected agent catalog is invalid or empty.
     pub fn config(&self) -> Result<Config> {
-        let agents = if let Some(agents) = &self.agents {
-            config::parse_agents(agents).context("invalid agent catalog")?
+        let (agents, catalog_source) = if let Some(agents) = &self.agents {
+            (
+                config::parse_agents(agents).context("invalid agent catalog")?,
+                None,
+            )
         } else {
-            config::configured_agents(
-                self.agents_file.as_deref(),
-                config::default_agents_file().as_deref(),
-            )?
+            let mut source = match &self.agents_file {
+                Some(path) => config::CatalogSource::legacy(path.clone()),
+                None => config::CatalogSource::settings(self.settings_file.clone())?,
+            };
+            let agents = source.load()?;
+            (agents, Some(source))
         };
         anyhow::ensure!(!agents.is_empty(), "at least one agent must be configured");
         Ok(Config {
             listen: self.listen,
             notify: self.notify,
             agents,
+            catalog_source,
             permissions: self.permissions,
             limits: Limits {
                 history_capacity: self.history,

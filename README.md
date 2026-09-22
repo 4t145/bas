@@ -109,13 +109,15 @@ Codex 登录、添加其他 ACP 后端、服务管理和更新方式见 [安装�
 
 ## 配置
 
-服务参数通过命令行或环境变量设置，命令行同名参数优先；ACP 后端推荐使用用户 JSON 配置文件。
+应用外观和 ACP 后端统一保存在 `basr/settings.json`，可在设置窗口中编辑。
+服务监听、权限及容量等启动参数仍通过命令行或环境变量设置，命令行同名参数优先。
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `BASRD_LISTEN` | `127.0.0.1:7337` | gRPC 监听地址（默认仅回环） |
 | `BASRD_AGENTS` | 未设置 | 简写后端目录，设置后覆盖 JSON 配置，见下 |
-| `BASRD_AGENTS_FILE` | `$XDG_CONFIG_HOME/basr/agents.json` | JSON 后端目录；XDG 未设置时使用 `~/.config/basr/agents.json` |
+| `BASR_SETTINGS_FILE` | `$XDG_CONFIG_HOME/basr/settings.json` | GUI 与 daemon 共用配置；XDG 未设置时使用 `~/.config/basr/settings.json` |
+| `BASRD_AGENTS_FILE` | 未设置 | 显式兼容旧版独立 agent 数组；设置后覆盖统一文件的 agent 目录 |
 | `BASRD_NOTIFY` | `auto` | `auto` 允许无桌面运行，`always` 要求通知服务可用，`never` 禁用 |
 | `BASRD_HISTORY` | `4096` | 每个会话保留的可回放事件数，必须大于 0 |
 | `BASRD_BUFFER` | `1024` | 后端更新队列与直播广播容量，必须大于 0 |
@@ -131,9 +133,12 @@ $ BASRD_AGENTS='embedded;opencode=acp:opencode acp;gemini=acp:gemini --acp' basr
 ```
 
 `kind` 取 `embedded` 或 `acp`；外部后端必须给出命令行（按空白切分，不支持引号）。
-未设置简写目录时，读取 `--agents-file` / `BASRD_AGENTS_FILE` 指定的文件或默认用户文件；
-只有默认文件不存在时才回退为 `embedded`。JSON 格式支持完整的参数数组与后端环境变量，示例见
-[contrib/agents.json](contrib/agents.json)。修改目录后需重启 basrd。
+未设置简写目录时，读取显式 `--agents-file` 兼容文件，否则读取 `--settings-file` /
+`BASR_SETTINGS_FILE` 或默认 `settings.json` 的 `daemon.agents`。
+JSON 支持完整参数数组，示例见 [contrib/settings.json](contrib/settings.json)。
+文件目录每秒热更新，新建会话采用新配置，已有会话保持原后端，不需要重启。
+默认统一文件不存在时只读导入原 `appearance.json` 和 `agents.json`；设置窗口首次保存后写入
+统一文件，保留旧文件。两者也都不存在时使用 `embedded`。
 
 ## basrw
 
@@ -148,9 +153,10 @@ basrw --server 127.0.0.1:7337
 `nix profile install .#basrw`；开发运行使用 `nix develop .#gui -c cargo run --features gui --bin basrw`。
 支持会话创建、搜索、切换、重命名、可恢复归档、流式对话与停止回合。默认构建不启用图形依赖。
 默认打开最小输入弹窗，Ctrl+Shift+M 展开 workspace / thread 窗口，并自动跟随 DMS 的 Zed 主题。
-应用自己的字体、字号、行高、透明度和主题偏好可放在 `$XDG_CONFIG_HOME/basr/appearance.json`，
-或通过 `--appearance-file` 指定；也可用 `Ctrl+,` 打开独立的设置窗口，
-在分类页面中搜索并修改。有效修改自动保存并热更新所有窗口，非法配置不会覆盖当前外观。
+应用自己的字体、字号、行高、透明度和主题偏好保存在统一 JSON 的 `appearance` section；
+`--settings-file` 可指定位置。用 `Ctrl+,` 打开独立设置窗口，外观按“主题 / 字体 / 布局”分组。
+有效外观修改自动保存并热更新所有窗口，非法配置不会覆盖当前外观。
+Agent 服务页提供 Codex、OpenCode、Pi 与自定义 ACP 模板；命令编辑需明确保存，不自动安装或启动。
 使用方式和测试命令见 [GUI 说明](docs/gui.md)。
 
 第一方代码保持 MIT；UI 使用许可兼容的 GPUI 组件，不复制或链接 Zed 的 GPL 上层面板。

@@ -11,9 +11,9 @@ while [[ $# -gt 0 ]]; do
             cat <<'USAGE'
 Usage: scripts/install-basrd [--with-codex] [--service] [nix profile install options...]
 Install basrd and basrctl into your Nix profile.
-  --with-codex  Install the pinned Codex ACP adapter and create agents.json if absent.
+  --with-codex  Install the pinned Codex ACP adapter and create settings.json for a new setup.
   --service     Link and enable the systemd user service, starting it immediately.
-Agent catalog: $XDG_CONFIG_HOME/basr/agents.json (default: ~/.config/basr/agents.json).
+Settings: $XDG_CONFIG_HOME/basr/settings.json (default: ~/.config/basr/settings.json).
 Existing configuration is preserved. basrd also works as a foreground command.
 USAGE
             exit 0 ;;
@@ -58,9 +58,14 @@ if $codex; then
     config_dir=${XDG_CONFIG_HOME:-$HOME/.config}
     if [[ $config_dir != /* ]]; then config_dir=$HOME/.config; fi
     config_dir+=/basr
-    if [[ ! -e "$config_dir/agents.json" ]]; then
-        mkdir -p "$config_dir"
-        install -m600 "$package_path/share/basr/agents.example.json" "$config_dir/agents.json"
+    if [[ ! -e "$config_dir/settings.json" && ! -L "$config_dir/settings.json" ]]; then
+        if [[ -e "$config_dir/agents.json" || -L "$config_dir/agents.json" ||
+              -e "$config_dir/appearance.json" || -L "$config_dir/appearance.json" ]]; then
+            echo 'Existing legacy configuration is preserved; save from BASR settings to migrate it.'
+        else
+            mkdir -p "$config_dir"
+            install -m600 "$package_path/share/basr/settings.example.json" "$config_dir/settings.json"
+        fi
     fi
 fi
 if $service; then

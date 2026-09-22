@@ -253,6 +253,15 @@ impl AppearancePage {
                 None => "未应用：请修复配置文件后重新打开设置".into(),
                 Some(document) => match self.editor.save(document, candidate, window, cx) {
                     Ok(()) => "已保存并应用".into(),
+                    Err(error)
+                        if matches!(
+                            error.downcast_ref::<basr::config::Error>(),
+                            Some(basr::config::Error::Conflict { .. })
+                        ) =>
+                    {
+                        "未应用：外观配置已被外部修改；当前输入保留，请重新打开设置后再修改。"
+                            .into()
+                    }
                     Err(error) => format!("未应用：{error:#}"),
                 },
             },

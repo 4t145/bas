@@ -1,9 +1,37 @@
 use super::*;
 
 #[test]
+fn appearance_save_keeps_agents_written_since_the_form_was_opened() {
+    use basr::config::agent::{AgentSpec, Command};
+    let directory = tempfile::tempdir().expect("isolated settings");
+    let loader = Loader::new(Some(directory.path().join("settings.json")), None);
+    let mut appearance = loader.document().expect("appearance baseline");
+    let mut agents = loader.store.load().expect("agents baseline");
+    let catalog = vec![AgentSpec::acp(
+        "custom",
+        Command::new("test-acp", vec!["argument with spaces".into()]),
+    )];
+    loader
+        .store
+        .save_agents(&mut agents, catalog.clone())
+        .expect("save agents");
+    let candidate = Preferences {
+        theme_source: ThemeSource::Builtin,
+        ui_font_size: Some(19.),
+        ..Default::default()
+    };
+    loader
+        .save(&mut appearance, candidate.clone(), true)
+        .expect("save appearance");
+    let saved = loader.store.load().expect("unified file").settings;
+    assert_eq!(saved.appearance, candidate);
+    assert_eq!(saved.daemon.agents, catalog);
+}
+
+#[test]
 fn safe_save_roundtrip_validation_conflict_and_inheritance() {
     let dir = tempfile::tempdir().expect("directory");
-    let path = dir.path().join("appearance.json");
+    let path = dir.path().join("settings.json");
     let loader = Loader::new(Some(path.clone()), None);
     let mut document = loader.document().expect("missing config");
     let candidate = Preferences {
@@ -49,7 +77,7 @@ fn safe_save_roundtrip_validation_conflict_and_inheritance() {
 #[test]
 fn save_io_failure_preserves_document() {
     let dir = tempfile::tempdir().expect("directory");
-    let path = dir.path().join("appearance.json");
+    let path = dir.path().join("settings.json");
     let loader = Loader::new(Some(path.clone()), None);
     let mut document = loader.document().expect("missing");
     std::fs::create_dir(&path).expect("directory at target");
@@ -65,7 +93,8 @@ fn save_io_failure_preserves_document() {
             )
             .is_err()
     );
-    assert!(document.original.is_none());
+    assert_eq!(document.preferences, Preferences::default());
+    assert!(document.settings.source_paths().is_empty());
 }
 
 #[cfg(unix)]
@@ -73,8 +102,9 @@ fn save_io_failure_preserves_document() {
 fn save_rejects_symlinks_without_modifying_target() {
     let dir = tempfile::tempdir().expect("directory");
     let target = dir.path().join("managed.json");
-    let path = dir.path().join("appearance.json");
-    std::fs::write(&target, r#"{"theme_source":"builtin"}"#).expect("managed config");
+    let path = dir.path().join("settings.json");
+    std::fs::write(&target, r#"{"appearance":{"theme_source":"builtin"}}"#)
+        .expect("managed config");
     std::os::unix::fs::symlink(&target, &path).expect("symlink");
     let loader = Loader::new(Some(path.clone()), None);
     let mut document = loader.document().expect("read link");
@@ -83,11 +113,14 @@ fn save_rejects_symlinks_without_modifying_target() {
         .save(&mut document, candidate, true)
         .err()
         .expect("reject link");
-    assert!(error.to_string().contains("符号链接"));
+    assert!(
+        error.downcast_ref::<basr::config::Error>().is_some(),
+        "shared settings store reports the refused write"
+    );
     assert!(path.is_symlink());
     assert_eq!(
         std::fs::read_to_string(target).expect("unchanged"),
-        r#"{"theme_source":"builtin"}"#
+        r#"{"appearance":{"theme_source":"builtin"}}"#
     );
 }
 
@@ -102,8 +135,8 @@ fn snapshot(preferences: Preferences, files: Files) -> Snapshot {
 #[test]
 fn save_between_polls_invalidates_the_pre_save_deduplication_snapshot() {
     let directory = tempfile::tempdir().expect("isolated config directory");
-    let path = directory.path().join("appearance.json");
-    let original = r#"{"theme_source":"builtin","content_font_size":19}"#;
+    let path = directory.path().join("settings.json");
+    let original = r#"{"appearance":{"theme_source":"builtin","content_font_size":19}}"#;
     std::fs::write(&path, original).expect("original config");
     let loader = Loader::new(Some(path.clone()), None);
     let mut reload = Reload::default();
@@ -302,11 +335,14 @@ fn malformed_style_or_unicode_color_returns_an_error_without_replacing_the_snaps
 #[test]
 fn preference_file_reads_distinguish_missing_invalid_and_io_errors() {
     let directory = tempfile::tempdir().expect("test directory");
-    let path = directory.path().join("appearance.json");
+    let path = directory.path().join("settings.json");
     assert!(source::read(&path).expect("missing is optional").is_none());
     assert!(!path.exists());
-    std::fs::write(&path, r#"{"theme_source":"builtin","ui_font_size":19}"#)
-        .expect("write preferences");
+    std::fs::write(
+        &path,
+        r#"{"appearance":{"theme_source":"builtin","ui_font_size":19}}"#,
+    )
+    .expect("write preferences");
     let loader = Loader::new(Some(path.clone()), None);
     let first = loader.read().expect("read valid preferences");
     let mut reload = Reload::default();
@@ -320,7 +356,8 @@ fn preference_file_reads_distinguish_missing_invalid_and_io_errors() {
             .font_size,
         Some(19.)
     );
-    std::fs::write(&path, r#"{"ui_font_size":0}"#).expect("write invalid preferences");
+    std::fs::write(&path, r#"{"appearance":{"ui_font_size":0}}"#)
+        .expect("write invalid preferences");
     let error = loader.read().err().expect("invalid preferences rejected");
     assert!(format!("{error:#}").contains(path.to_str().expect("path")));
     assert!(
@@ -341,7 +378,7 @@ fn cli_theme_path_wins_and_preferences_paths_are_relative_to_their_file() {
         theme_file: Some("themes/custom.json".into()),
         ..Preferences::default()
     };
-    let mut loader = Loader::new(Some("/test/basr/appearance.json".into()), None);
+    let mut loader = Loader::new(Some("/test/basr/settings.json".into()), None);
     assert_eq!(
         loader.theme_path(&preferences),
         Some("/test/basr/themes/custom.json".into())

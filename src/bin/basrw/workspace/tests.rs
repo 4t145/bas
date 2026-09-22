@@ -31,10 +31,10 @@ struct Fixture {
 
 fn fixture(cx: &mut TestAppContext) -> Fixture {
     let appearance = tempfile::tempdir().expect("isolated appearance directory");
-    let appearance_path = appearance.path().join("appearance.json");
+    let appearance_path = appearance.path().join("settings.json");
     std::fs::write(
         &appearance_path,
-        r#"{"theme_source":"builtin","theme_mode":"dark"}"#,
+        r#"{"appearance":{"theme_source":"builtin","theme_mode":"dark"}}"#,
     )
     .expect("write deterministic appearance");
     cx.update(|cx| {

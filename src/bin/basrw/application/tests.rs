@@ -145,8 +145,8 @@ fn confirm_quit_flushes_valid_settings_before_debounce_without_a_workspace(
     cx: &mut TestAppContext,
 ) {
     let directory = tempfile::tempdir().expect("temporary appearance");
-    let path = directory.path().join("appearance.json");
-    std::fs::write(&path, r#"{"theme_source":"builtin"}"#).expect("test config");
+    let path = directory.path().join("settings.json");
+    std::fs::write(&path, r#"{"appearance":{"theme_source":"builtin"}}"#).expect("test config");
     cx.update(|cx| {
         gpui_kit::init(cx);
         theme::init(None, Some(path.clone()), cx);
@@ -166,8 +166,8 @@ fn confirm_quit_flushes_valid_settings_before_debounce_without_a_workspace(
         window.click("quit-confirm", cx);
     })
     .expect("flush then quit");
-    let saved: theme::preferences::Preferences =
+    let saved: basr::config::Settings =
         serde_json::from_slice(&std::fs::read(&path).expect("saved settings"))
             .expect("preferences");
-    assert_eq!(saved.ui_font_size, Some(27.));
+    assert_eq!(saved.appearance.ui_font_size, Some(27.));
 }

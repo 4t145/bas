@@ -79,21 +79,14 @@ fn file_catalog_preserves_arguments_and_environment() {
         .env
         .insert("CUSTOM_SETTING".into(), "a=b; c".into());
     std::fs::write(&path, serde_json::to_vec(&configured).expect("serialize")).expect("write");
-    assert_eq!(
-        super::configured_agents(Some(&path), None).expect("catalog"),
-        configured
-    );
+    assert_eq!(super::read_agents(&path).expect("catalog"), configured);
 }
 
 #[test]
-fn file_catalog_only_falls_back_when_the_default_file_is_absent() {
+fn explicit_legacy_catalog_never_falls_back_when_missing_or_invalid() {
     let directory = tempfile::tempdir().expect("directory");
     let path = directory.path().join("agents.json");
-    assert_eq!(
-        super::configured_agents(None, Some(&path)).expect("defaults"),
-        vec![crate::agent::AgentSpec::embedded()]
-    );
-    assert!(super::configured_agents(Some(&path), None).is_err());
+    assert!(super::read_agents(&path).is_err());
     for invalid in [
         "not json",
         "[]",
@@ -107,10 +100,7 @@ fn file_catalog_only_falls_back_when_the_default_file_is_absent() {
         r#"[{"id":"embedded","kind":"embedded","cancellation_grace_ms":18446744073709551616}]"#,
     ] {
         std::fs::write(&path, invalid).expect("write invalid catalog");
-        assert!(
-            super::configured_agents(None, Some(&path)).is_err(),
-            "must reject {invalid}"
-        );
+        assert!(super::read_agents(&path).is_err(), "must reject {invalid}");
     }
 }
 

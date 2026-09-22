@@ -33,7 +33,11 @@ impl Editor {
     }
 
     pub(crate) fn path(&self) -> &std::path::Path {
-        &self.loader.appearance_file
+        self.loader.store.path()
+    }
+
+    pub(crate) fn store(&self) -> basr::config::Store {
+        self.loader.store.clone()
     }
 
     pub(crate) fn theme_override(&self) -> Option<&std::path::Path> {
@@ -119,8 +123,8 @@ pub(super) fn init_default(cx: &mut App) {
     apply(effective, None, cx);
 }
 
-pub(super) fn init(theme_file: Option<PathBuf>, appearance_file: Option<PathBuf>, cx: &mut App) {
-    let loader = Loader::new(appearance_file, theme_file);
+pub(super) fn init(theme_file: Option<PathBuf>, settings_file: Option<PathBuf>, cx: &mut App) {
+    let loader = Loader::new(settings_file, theme_file);
     let dark = ThemeMode::from(cx.window_appearance()).is_dark();
     let effective = loader.read().and_then(|snapshot| snapshot.resolve(dark))
         .unwrap_or_else(|error| {

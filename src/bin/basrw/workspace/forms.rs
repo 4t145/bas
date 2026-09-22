@@ -116,6 +116,9 @@ impl Workspace {
                     .items_center()
                     .gap_1()
                     .px_3()
+                    .when(!self.sidebar_visible, |row| {
+                        row.child(self.application_button(cx))
+                    })
                     .child(
                         layout::icon_button("sidebar-toggle", IconName::PanelLeft)
                             .tooltip("Threads · Ctrl B")
@@ -124,8 +127,7 @@ impl Workspace {
                             ),
                     )
                     .when(!self.sidebar_visible, |row| {
-                        row.child(self.application_button(cx))
-                            .child(self.settings_button(cx))
+                        row.child(self.settings_button(cx))
                     })
                     .child(self.workspace_button(cx))
                     .child(caption("/", cx))
