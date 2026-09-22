@@ -16,4 +16,4 @@ command -v nix >/dev/null || { echo 'Nix with flakes enabled is required.' >&2; 
 [[ $(uname -s) = Linux ]] || { echo 'The basrw package currently requires Linux.' >&2; exit 1; }
 
 source_path=$("$root/scripts/nix-source")
-exec nix profile install "$source_path#basrw" "$@"
+exec "$root/scripts/nix-profile-install" "$source_path" basrw -- "$@"

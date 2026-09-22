@@ -23,13 +23,18 @@ fn categories_are_nested_and_agent_drafts_survive_navigation(cx: &mut TestAppCon
             assert!(child.left() > parent.left(), "children are indented");
             assert!(child.top() >= parent.bottom());
         }
+        let fonts = window.find("appearance-fonts-card").bounds();
         window.click("settings-fonts", cx);
         window.render_frame(cx);
+        assert!(
+            window.find("appearance-fonts-card").bounds().top() < fonts.top(),
+            "a section entry scrolls the page instead of replacing it"
+        );
         window.click("settings-appearance-expand", cx);
         window.render_frame(cx);
         assert!(window.try_find("settings-fonts").is_none());
         assert!(
-            window.find("appearance-ui-size").visible(),
+            window.try_find("appearance-fonts-card").is_some(),
             "collapsing only hides navigation"
         );
         window.click("settings-appearance-expand", cx);
@@ -39,10 +44,18 @@ fn categories_are_nested_and_agent_drafts_survive_navigation(cx: &mut TestAppCon
             std::fs::read_to_string(&path).expect("unchanged file"),
             initial
         );
-        window.click("settings-acp-agents", cx);
+        window.click("settings-agents", cx);
         window.render_frame(cx);
         assert!(window.find("agents-page").visible());
+        assert!(
+            window.find("settings-agent-0").visible(),
+            "configured agents are listed as sections"
+        );
+        window.click("settings-agents-add", cx);
+        window.render_frame(cx);
         window.click("agents-preset-codex", cx);
+        window.render_frame(cx);
+        window.click("settings-agents-add", cx);
         window.render_frame(cx);
         window.click("agents-program", cx);
         window.press("ctrl-a", cx);
@@ -80,7 +93,7 @@ fn categories_are_nested_and_agent_drafts_survive_navigation(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn navigation_and_search_filter_settings_without_a_save_button(cx: &mut TestAppContext) {
+fn navigation_reveals_sections_and_search_filters_settings(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("settings config");
     let path = directory.path().join("settings.json");
     std::fs::write(&path, r#"{"appearance":{"theme_source":"builtin"}}"#).expect("builtin config");
@@ -98,10 +111,14 @@ fn navigation_and_search_filter_settings_without_a_save_button(cx: &mut TestAppC
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("settings-save").is_none());
+        let fonts = window.find("appearance-fonts-card").bounds();
         window.click("settings-layout", cx);
         window.render_frame(cx);
-        assert!(window.try_find("appearance-opacity-row").is_some());
-        assert!(window.try_find("appearance-ui-font-row").is_none());
+        assert!(
+            window.try_find("appearance-ui-font-row").is_some(),
+            "sections share one page instead of replacing each other"
+        );
+        assert!(window.find("appearance-layout-card").bounds().top() < fonts.top());
         window.click("settings-search", cx);
         window.input("UI 字体", cx);
     })

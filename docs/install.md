@@ -133,13 +133,15 @@ BASRD_HISTORY=8192
 服务的 PATH 包含 `~/.local/bin`、`~/.nix-profile/bin` 和系统软件路径；
 其他位置的 ACP 程序应在 `settings.json` 的 `daemon.agents` 中使用绝对路径。此运行时环境文件不进入 Nix 安装包。
 
-更新本地安装时，先停止并禁用服务（同时移除旧服务链接），再替换 profile 条目；后端配置保留：
+更新本地安装时重新运行安装脚本即可：脚本会替换同名的旧 profile 条目，`--service` 还会重启
+用户服务，让新可执行文件立即生效；后端配置保留。
 
 ```sh
-systemctl --user disable --now basrd
-nix profile remove basrd codex-acp
 ./scripts/install-basrd --with-codex --service
+./scripts/install-basrw
 ```
 
-如果只安装了 basrd，省略未安装的 `codex-acp` 条目；实际名称可用 `nix profile list` 查看。
-卸载时执行前两条即可。GUI 的安装、更新与卸载见 [GUI 说明](gui.md)。
+重启会停止当前会话，会话与回放窗口只保存在内存中；只换 GUI 时不需要重启服务。
+卸载执行 `nix profile remove basrd codex-acp basrw`（未安装的条目可省略，实际名称用
+`nix profile list` 查看），再 `systemctl --user disable basrd`。GUI 的安装、更新与卸载见
+[GUI 说明](gui.md)。

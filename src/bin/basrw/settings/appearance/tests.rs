@@ -59,11 +59,16 @@ fn read(fixture: &Fixture) -> Preferences {
 fn text_edits_debounce_flush_and_reject_invalid_values(cx: &mut TestAppContext) {
     let fixture = fixture(cx, builtin());
     cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
         fixture.view.update(cx, |page, cx| {
-            page.group = Some(Group::Fonts);
+            page.scroll_to = Some(Group::Fonts.index());
             cx.notify();
         });
         window.render_frame(cx);
+        assert!(
+            window.find("appearance-content-size").visible(),
+            "the sidebar scrolls the fonts section into view"
+        );
         window.click("appearance-content-size", cx);
         window.input("23", cx);
     })
@@ -143,10 +148,6 @@ fn font_default_can_be_chosen_with_the_real_searchable_dropdown(cx: &mut TestApp
         },
     );
     cx.update_window(fixture.window.into(), |_, window, cx| {
-        fixture.view.update(cx, |page, cx| {
-            page.group = Some(Group::Fonts);
-            cx.notify();
-        });
         window.render_frame(cx);
         let select = fixture.view.read(cx).form.ui_font.clone();
         select.update(cx, |select, cx| select.focus(window, cx));

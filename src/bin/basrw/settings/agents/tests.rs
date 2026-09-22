@@ -3,7 +3,7 @@ use gpui_kit::{ScrollDelta, TestAppContext, point, px, size, test::TestWindowExt
 
 /// Reach controls with native wheel events, without bypassing viewport hit testing.
 fn click(window: &mut Window, id: &'static str, cx: &mut App) {
-    for _ in 0..16 {
+    for _ in 0..24 {
         window.render_frame(cx);
         let target = window.find(id);
         let bounds = target.bounds();
@@ -11,30 +11,16 @@ fn click(window: &mut Window, id: &'static str, cx: &mut App) {
             window.click(id, cx);
             return;
         }
-        let anchor = [
-            "agents-reload",
-            "agents-preset-codex",
-            "agents-id",
-            "agents-program",
-            "agents-args",
-            "agents-grace",
-            "agents-save",
-            "agents-dirty",
-        ]
-        .into_iter()
-        .find(|anchor| {
-            window.try_find(*anchor).is_some_and(|element| {
-                let bounds = element.bounds();
-                element.visible() && bounds.origin.y >= px(0.) && bounds.bottom() <= px(680.)
-            })
-        })
-        .expect("a visible editor control can receive native wheel events");
         let delta = if bounds.origin.y < px(0.) {
             180.
         } else {
             -180.
         };
-        window.scroll(anchor, ScrollDelta::Pixels(point(px(0.), px(delta))), cx);
+        window.scroll(
+            "agents-sections",
+            ScrollDelta::Pixels(point(px(0.), px(delta))),
+            cx,
+        );
     }
     panic!("control {id} was not reachable by scrolling the settings viewport");
 }
@@ -116,7 +102,7 @@ fn presets_are_drafts_and_save_preserves_other_settings(cx: &mut TestAppContext)
     assert_eq!(saved.settings.daemon.agents[0].env["KEEP"], "original");
     assert_eq!(saved.settings.appearance, initial_settings.appearance);
     cx.update_window(window.into(), |_, window, cx| {
-        click(window, "agents-select-1", cx);
+        click(window, "agents-edit-1", cx);
         click(window, "agents-delete", cx);
         window.render_frame(cx);
         assert_eq!(window.find("agents-save").label(), Some("确认移除配置"));
@@ -169,7 +155,7 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
         );
         assert!(view.read(cx).dirty(cx));
         click(window, "agents-cancel", cx);
-        click(window, "agents-select-1", cx);
+        click(window, "agents-edit-1", cx);
         click(window, "agents-args", cx);
         window.press("ctrl-a", cx);
         window.input("[\"edited argument\"]", cx);
@@ -203,7 +189,7 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
         assert!(view.read(cx).dirty(cx));
         click(window, "agents-cancel", cx);
         click(window, "agents-reload", cx);
-        click(window, "agents-select-0", cx);
+        click(window, "agents-edit-0", cx);
         click(window, "agents-delete", cx);
         click(window, "agents-save", cx);
         assert_eq!(

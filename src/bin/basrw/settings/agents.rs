@@ -7,8 +7,8 @@ use basr::config::{
     validate_agents,
 };
 use gpui_kit::{
-    App, Context, Entity, Render, Subscription, TestSupportExt, Window,
-    component::{input::*, *},
+    App, Context, Entity, Render, ScrollHandle, Subscription, TestSupportExt, Window,
+    component::{group_box::*, input::*, *},
     div,
     prelude::*,
 };
@@ -159,7 +159,16 @@ pub(super) struct Agents {
     deleting: bool,
     form: Form<Entity<InputState>>,
     message: String,
+    /// Section the sidebar asked to reveal; consumed by the next render.
+    pub(super) scroll_to: Option<usize>,
+    scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
+}
+
+/// One navigable section of the agents page.
+pub(super) struct Section {
+    pub id: String,
+    pub title: String,
 }
 
 impl Agents {
@@ -178,10 +187,37 @@ impl Agents {
             deleting: false,
             form,
             message: String::new(),
+            scroll_to: None,
+            scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         };
         page.reload(cx);
         page
+    }
+
+    fn catalog(&self) -> Vec<AgentSpec> {
+        self.document
+            .as_ref()
+            .map(|document| document.settings.daemon.agents.clone())
+            .unwrap_or_default()
+    }
+
+    /// Sidebar entries: every configured agent, then the template card.
+    pub(super) fn sections(&self) -> Vec<Section> {
+        let mut sections: Vec<_> = self
+            .catalog()
+            .iter()
+            .enumerate()
+            .map(|(index, spec)| Section {
+                id: format!("settings-agent-{index}"),
+                title: spec.id.to_string(),
+            })
+            .collect();
+        sections.push(Section {
+            id: "settings-agents-add".to_owned(),
+            title: "添加 Agent".to_owned(),
+        });
+        sections
     }
 
     fn dirty(&self, cx: &App) -> bool {
@@ -298,68 +334,299 @@ impl Agents {
     }
 }
 
-impl Render for Agents {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let dirty = self.dirty(cx);
-        let catalog = self
-            .document
-            .as_ref()
-            .map(|document| document.settings.daemon.agents.clone())
-            .unwrap_or_default();
+/// One-line description of how a backend is driven.
+fn summary(spec: &AgentSpec) -> String {
+    match (spec.kind, spec.command()) {
+        (Kind::Embedded, _) => "embedded · 内置 echo 后端，无需外部程序".to_owned(),
+        (Kind::Acp, Some(command)) => format!("acp · {command}"),
+        (Kind::Acp, None) => "acp · 缺少启动命令".to_owned(),
+    }
+}
+
+impl Agents {
+    /// A section card: title, one-line description, then the section body.
+    fn card(
+        &self,
+        id: String,
+        title: String,
+        description: String,
+        content: gpui_kit::AnyElement,
+        cx: &App,
+    ) -> gpui_kit::AnyElement {
+        div()
+            .id(id)
+            .test_support()
+            .child(
+                GroupBox::new()
+                    .outline()
+                    .title(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .text_color(cx.theme().foreground)
+                                    .child(title),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(description),
+                            ),
+                    )
+                    .child(content),
+            )
+            .into_any_element()
+    }
+
+    fn summary_content(
+        &self,
+        index: usize,
+        spec: &AgentSpec,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let edit = spec.clone();
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!(
+                        "取消等待 {} ms · 编辑可修改 ID、命令与参数",
+                        spec.cancellation_grace.as_millis()
+                    )),
+            )
+            .child(
+                button(gpui_kit::SharedString::from(format!("agents-edit-{index}")))
+                    .label("编辑")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.edit(edit.clone(), Some(index), window, cx)
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn form_content(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let embedded = self
             .draft
             .as_ref()
             .is_some_and(|spec| spec.kind == Kind::Embedded);
-        div().id("agents-page").test_support().size_full().overflow_y_scroll().p_4()
-            .flex().flex_col().gap_3()
-            .child(div().text_lg().child("ACP agents · 本机 Agent 服务"))
-            .child(div().text_sm().text_color(cx.theme().muted_foreground)
-                .flex().flex_col().gap_1()
-                .child("仅编辑此电脑的 basrd 配置，不修改远端服务器。")
-                .child("本机 basrd 自动加载，新会话生效；现有会话不受影响。显式 --agents / --agents-file 覆盖时不跟随此文件。")
-                .child(format!("配置文件：{}", self.store.path().display())))
-            .child(button("agents-reload").label("重新加载").on_click(cx.listener(|this, _, _, cx| this.reload(cx))))
-            .child(div().flex().flex_wrap().gap_2().children(Preset::ALL.map(|preset| {
-                button(preset.id()).label(format!("添加 {}", preset.label()))
-                    .disabled(self.document.is_none())
-                    .on_click(cx.listener(move |this, _, window, cx| this.edit(preset.spec(), None, window, cx)))
-            })))
-            .child(div().flex().flex_wrap().gap_2().children(catalog.into_iter().enumerate().map(|(index, spec)| {
-                button(gpui_kit::SharedString::from(format!("agents-select-{index}"))).label(format!("{} · {}", spec.id, spec.kind))
-                    .on_click(cx.listener(move |this, _, window, cx| this.edit(spec.clone(), Some(index), window, cx)))
-            })))
-            .when(self.draft.is_some(), |view| {
-                view.child(if embedded { "embedded 旧条目（非 ACP）：保留类型，不编辑外部命令。" } else { "ACP 命令草稿" })
-                    .children(self.form.rows(embedded).into_iter().map(|(id, label, input)| {
-                        div().flex().flex_col().gap_1().child(label)
-                            .child(div().id(id).test_support().child(Input::new(input).disabled(self.deleting)))
-                    }))
-                    .child(div().flex().flex_wrap().gap_2()
-                        .child(button("agents-save").label(if self.deleting { "确认移除配置" } else { "保存 Agent" }).on_click(cx.listener(|this, _, _, cx| this.save(cx))))
-                        .child(button("agents-cancel").label("取消编辑").on_click(cx.listener(|this, _, _, cx| {
-                            this.draft = None;
-                            this.selected = None;
-                            this.deleting = false;
-                            this.message = "已丢弃草稿，磁盘未改变；可重新加载外部修改。".into();
-                            cx.notify();
-                        })))
-                        .child(button("agents-delete").label("标记删除")
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .children(self.form.rows(embedded).into_iter().map(
+                |(id, label, input)| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_sm().child(label))
+                        .child(
+                            div()
+                                .id(id)
+                                .test_support()
+                                .child(Input::new(input).disabled(self.deleting)),
+                        )
+                },
+            ))
+            .when(self.deleting, |form| {
+                form.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(
+                            "待移除配置：确认后仅从 Agent 目录移除，不删除或停止任何会话；不能移除最后一个 Agent。",
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        button("agents-save")
+                            .label(if self.deleting {
+                                "确认移除配置"
+                            } else {
+                                "保存 Agent"
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
+                    )
+                    .child(
+                        button("agents-cancel")
+                            .label("取消编辑")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.draft = None;
+                                this.selected = None;
+                                this.deleting = false;
+                                this.message =
+                                    "已丢弃草稿，磁盘未改变；可重新加载外部修改。".into();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        button("agents-delete")
+                            .label("标记删除")
                             .disabled(self.selected.is_none() || self.deleting)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.deleting = true;
                                 cx.notify();
-                            }))))
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn add_content(&self, drafting: bool, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let mut content = div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                div().flex().flex_wrap().gap_2().children(Preset::ALL.map(|preset| {
+                    button(preset.id())
+                        .label(format!("添加 {}", preset.label()))
+                        .disabled(self.document.is_none())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.edit(preset.spec(), None, window, cx)
+                        }))
+                })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("模板只准备草稿，不下载、不安装、不启动；此页面不检测可执行文件是否就绪。")
+                    .child("Codex 使用 codex-acp；OpenCode 使用 opencode acp；Pi 需要 Pi 本体与 pi-acp adapter。")
+                    .child("命令名称由 basrd 进程的 PATH 解析，可能与当前终端不同；也可使用绝对路径。")
+                    .child("认证交给各 Agent 原有登录 / 环境；既有 env 原样保留，不在此收集 API key。"),
+            );
+        if drafting {
+            content = content.child(self.form_content(cx));
+        }
+        content.into_any_element()
+    }
+}
+
+impl Render for Agents {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let dirty = self.dirty(cx);
+        let catalog = self.catalog();
+        let drafting = self.draft.is_some() && self.selected.is_none();
+        let section_count = catalog.len() + 1;
+        if let Some(index) = self.scroll_to.take() {
+            self.scroll
+                .scroll_to_top_of_item(index.min(section_count.saturating_sub(1)));
+        }
+        let cards: Vec<gpui_kit::AnyElement> = catalog
+            .iter()
+            .enumerate()
+            .map(|(index, spec)| {
+                let content = if self.selected == Some(index) {
+                    self.form_content(cx)
+                } else {
+                    self.summary_content(index, spec, cx)
+                };
+                self.card(
+                    format!("agents-card-{index}"),
+                    spec.id.to_string(),
+                    summary(spec),
+                    content,
+                    cx,
+                )
             })
-            .when(self.deleting, |view| view.child("待移除配置：确认后仅从 Agent 目录移除，不删除或停止任何会话；不能移除最后一个 Agent。"))
-            .child(div().id("agents-dirty").test_support().child(if dirty {
-                "尚未确认：请保存或取消当前操作；关闭窗口不会应用草稿。"
-            } else { "无未保存更改" }))
-            .child(div().id("agents-message").test_support().child(self.message.clone()))
-            .child(div().text_sm().text_color(cx.theme().muted_foreground)
-                .flex().flex_col().gap_1()
-                .child("模板只准备草稿，不下载、不安装、不启动。请自行安装依赖，或填写服务可访问的绝对路径；此页面不检测可执行文件是否就绪。")
-                .child("Codex 使用 codex-acp；OpenCode 使用 opencode acp；Pi 需要 Pi 本体与 pi-acp adapter。")
-                .child("命令名称由 basrd 进程的 PATH 解析，可能与当前终端不同；也可使用绝对路径。")
-                .child("认证交给各 Agent 原有登录 / 环境；既有 env 原样保留，不在此收集 API key。"))
+            .collect();
+        let add = self.card(
+            "agents-card-add".to_owned(),
+            "添加 Agent".to_owned(),
+            "从模板开始一个新的本机后端；保存后才写入配置文件。".to_owned(),
+            self.add_content(drafting, cx),
+            cx,
+        );
+        div()
+            .id("agents-page")
+            .test_support()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .p_5()
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
+                            .child(div().text_xl().child("Agent 服务"))
+                            .child(
+                                button("agents-reload")
+                                    .label("重新加载")
+                                    .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child("仅编辑此电脑的 basrd 配置，不修改远端服务器。")
+                            .child("本机 basrd 自动加载，新会话生效；现有会话不受影响。显式 --agents / --agents-file 覆盖时不跟随此文件。")
+                            .child(format!("配置文件：{}", self.store.path().display())),
+                    )
+                    .child(
+                        div()
+                            .id("agents-dirty")
+                            .test_support()
+                            .text_sm()
+                            .child(if dirty {
+                                "尚未确认：请保存或取消当前操作；关闭窗口不会应用草稿。"
+                            } else {
+                                "无未保存更改"
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("agents-message")
+                            .test_support()
+                            .text_sm()
+                            .child(self.message.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .id("agents-sections")
+                    .test_support()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .p_5()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .children(cards)
+                    .child(add),
+            )
     }
 }

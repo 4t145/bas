@@ -70,6 +70,9 @@ pub(crate) struct Settings {
     appearance: Entity<appearance::AppearancePage>,
     agents: Entity<agents::Agents>,
     category: Category,
+    /// Section the sidebar points at inside each page.
+    appearance_group: Option<appearance::Group>,
+    agent_section: Option<usize>,
     expanded: HashSet<Category>,
     _subscriptions: Vec<Subscription>,
 }
@@ -100,6 +103,8 @@ impl Settings {
             appearance,
             agents,
             category: Category::Appearance,
+            appearance_group: None,
+            agent_section: None,
             expanded: Category::ALL.into_iter().collect(),
             _subscriptions: subscriptions,
         }
@@ -110,6 +115,7 @@ impl Settings {
             .update(cx, |page, cx| page.flush_pending(window, cx));
     }
 
+    /// Point the appearance page at one of its sections without hiding the others.
     fn select_appearance(
         &mut self,
         group: Option<appearance::Group>,
@@ -118,22 +124,79 @@ impl Settings {
     ) {
         self.category = Category::Appearance;
         self.expanded.insert(Category::Appearance);
+        self.appearance_group = group;
         self.search
             .update(cx, |input, cx| input.set_value("", window, cx));
+        let target = group.map_or(0, appearance::Group::index);
         self.appearance.update(cx, |page, cx| {
-            page.group = group;
+            page.scroll_to = Some(target);
             page.query.clear();
             cx.notify();
         });
         cx.notify();
     }
 
-    fn select_agents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Point the agents page at one agent section; `None` selects the templates.
+    fn select_agents(
+        &mut self,
+        section: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.category = Category::Agents;
         self.expanded.insert(Category::Agents);
+        self.agent_section = section;
         self.search
             .update(cx, |input, cx| input.set_value("", window, cx));
+        self.agents.update(cx, |page, cx| {
+            page.scroll_to = Some(section.unwrap_or(0));
+            cx.notify();
+        });
         cx.notify();
+    }
+
+    /// Sidebar entries below a category, in the order the page renders them.
+    fn section_navigation(
+        &self,
+        category: Category,
+        selected: bool,
+        searching: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui_kit::AnyElement> {
+        match category {
+            Category::Appearance => appearance::Group::ALL
+                .into_iter()
+                .map(|item| {
+                    Button::new(item.id())
+                        .ghost()
+                        .justify_start()
+                        .label(item.title())
+                        .selected(selected && !searching && self.appearance_group == Some(item))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.select_appearance(Some(item), window, cx)
+                        }))
+                        .into_any_element()
+                })
+                .collect(),
+            Category::Agents => self
+                .agents
+                .read(cx)
+                .sections()
+                .into_iter()
+                .enumerate()
+                .map(|(index, section)| {
+                    Button::new(gpui_kit::SharedString::from(section.id))
+                        .ghost()
+                        .justify_start()
+                        .label(section.title)
+                        .selected(selected && !searching && self.agent_section == Some(index))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.select_agents(Some(index), window, cx)
+                        }))
+                        .into_any_element()
+                })
+                .collect(),
+        }
     }
 
     fn category_navigation(
@@ -142,9 +205,13 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let expanded = self.expanded.contains(&category);
-        let group = self.appearance.read(cx).group;
         let searching = !self.search.read(cx).value().is_empty();
         let selected = self.category == category;
+        let pointing_at_section = match category {
+            Category::Appearance => self.appearance_group.is_some(),
+            Category::Agents => self.agent_section.is_some(),
+        };
+        let sections = self.section_navigation(category, selected, searching, cx);
         div()
             .flex()
             .flex_col()
@@ -180,15 +247,10 @@ impl Settings {
                             .flex_1()
                             .justify_start()
                             .label(category.title())
-                            .selected(
-                                selected
-                                    && (!expanded
-                                        || (category == Category::Appearance
-                                            && (group.is_none() || searching))),
-                            )
+                            .selected(selected && (!expanded || !pointing_at_section || searching))
                             .on_click(cx.listener(move |this, _, window, cx| match category {
                                 Category::Appearance => this.select_appearance(None, window, cx),
-                                Category::Agents => this.select_agents(window, cx),
+                                Category::Agents => this.select_agents(None, window, cx),
                             })),
                     ),
             )
@@ -202,30 +264,7 @@ impl Settings {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .when(category == Category::Appearance, |children| {
-                            children.children(appearance::Group::ALL.into_iter().map(|item| {
-                                Button::new(item.id())
-                                    .ghost()
-                                    .justify_start()
-                                    .label(item.title())
-                                    .selected(selected && !searching && group == Some(item))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.select_appearance(Some(item), window, cx)
-                                    }))
-                            }))
-                        })
-                        .when(category == Category::Agents, |children| {
-                            children.child(
-                                Button::new("settings-acp-agents")
-                                    .ghost()
-                                    .justify_start()
-                                    .label("ACP agents")
-                                    .selected(selected)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.select_agents(window, cx)
-                                    })),
-                            )
-                        }),
+                        .children(sections),
                 )
             })
             .into_any_element()

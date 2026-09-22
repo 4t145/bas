@@ -27,32 +27,9 @@ command -v nix >/dev/null || { echo 'Nix with flakes enabled is required.' >&2; 
 source_path=$("$root/scripts/nix-source")
 package_path=$(nix eval --raw "$source_path#basrd.outPath")
 
-# Snapshots have different URLs even when their package outputs are identical.
-# Keep repeat installations from accumulating duplicate profile entries.
-profile_args=()
-options=("$@")
-for ((i = 0; i < ${#options[@]}; i++)); do
-    case "${options[i]}" in
-        --profile)
-            [[ $((i + 1)) -lt ${#options[@]} ]] || { echo '--profile requires a path.' >&2; exit 1; }
-            profile_args=(--profile "${options[i + 1]}")
-            ((i += 1)) ;;
-        --profile=*) profile_args=(--profile "${options[i]#--profile=}") ;;
-    esac
-done
-installed=$(nix profile list "${profile_args[@]}" --json 2>/dev/null || true)
 attributes=(basrd)
 if $codex; then attributes+=(codex-acp); fi
-packages=()
-for attribute in "${attributes[@]}"; do
-    output=$(nix eval --raw "$source_path#$attribute.outPath")
-    if [[ $installed != *\""$output"\"* ]]; then
-        packages+=("$source_path#$attribute")
-    fi
-done
-if [[ ${#packages[@]} -gt 0 ]]; then
-    nix profile install "${packages[@]}" "$@"
-fi
+"$root/scripts/nix-profile-install" "$source_path" "${attributes[@]}" -- "$@"
 
 if $codex; then
     config_dir=${XDG_CONFIG_HOME:-$HOME/.config}
@@ -71,6 +48,8 @@ fi
 if $service; then
     systemctl --user link "$package_path/share/systemd/user/basrd.service"
     systemctl --user daemon-reload
-    systemctl --user enable --now basrd.service
+    systemctl --user enable basrd.service
+    # Restart so a running daemon picks up the freshly installed binary.
+    systemctl --user restart basrd.service
 fi
 echo 'Installed basrd and basrctl. Run basrd, or manage the service with systemctl --user.'

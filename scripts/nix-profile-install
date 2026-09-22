@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Install or update flake outputs in the Nix profile.
+#
+# `nix profile install` refuses to add a package that owns files already
+# provided by an existing entry, and snapshots get different URLs even when
+# their outputs are identical. Entries already pointing at the wanted store
+# path are left alone; a stale entry with the same flake attribute is removed
+# first so the new one can take its place.
+#
+# Usage: scripts/nix-profile-install <flake-source> <attribute>... [-- <nix profile install options>...]
+set -euo pipefail
+
+source_path=$1
+shift
+attributes=()
+options=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --)
+            shift
+            options=("$@")
+            break
+            ;;
+        *)
+            attributes+=("$1")
+            shift
+            ;;
+    esac
+done
+if [[ ${#attributes[@]} -eq 0 ]]; then
+    echo 'At least one flake attribute is required.' >&2
+    exit 1
+fi
+
+installed=$(nix profile list "${options[@]}" --json 2>/dev/null || true)
+packages=()
+for attribute in "${attributes[@]}"; do
+    output=$(nix eval --raw "$source_path#$attribute.outPath")
+    if [[ $installed == *\""$output"\"* ]]; then
+        continue
+    fi
+    # A flake install names its profile entry after the attribute it came from.
+    nix profile remove "${options[@]}" "$attribute" >/dev/null 2>&1 || true
+    packages+=("$source_path#$attribute")
+done
+if [[ ${#packages[@]} -gt 0 ]]; then
+    nix profile install "${packages[@]}" "${options[@]}"
+fi

@@ -78,7 +78,8 @@ basrw --window
 测试目录和构建输出。安装包包含运行时图形库的启动包装与 `BASR` 桌面菜单入口，
 日常启动不需要 `nix develop`。桌面标识仍为 `org.basr.Gui`，现有窗口规则可继续使用。
 安装不启动 basrd；服务可用 `./scripts/install-basrd --with-codex --service` 安装，见 [安装与后端配置](install.md)。
-卸载使用 `nix profile remove basrw`；安装新的本地版本时，移除旧项后重新运行安装脚本。
+卸载使用 `nix profile remove basrw`；安装新的本地版本直接重跑 `./scripts/install-basrw`，
+脚本会替换同名的旧 profile 条目。
 
 源码均已加入 Git 后，也可以直接使用 flake 输出：
 

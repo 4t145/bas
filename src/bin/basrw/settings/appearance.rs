@@ -4,8 +4,8 @@ mod form;
 use crate::theme::{self, preferences::Preferences};
 use form::{DraftError, Form};
 use gpui_kit::{
-    App, Context, Render, Subscription, Task, TestSupportExt, Window,
-    component::{input::*, select::*, *},
+    App, Context, Render, ScrollHandle, Subscription, Task, TestSupportExt, Window,
+    component::{group_box::*, input::*, select::*, *},
     div,
     prelude::*,
     px,
@@ -31,11 +31,34 @@ impl Group {
             Self::Layout => "布局",
         }
     }
+    pub fn help(self) -> &'static str {
+        match self {
+            Self::Theme => "主题来源、明暗模式与窗口背景。",
+            Self::Fonts => "界面与正文使用的字体和字号。",
+            Self::Layout => "正文行高与内容不透明度。",
+        }
+    }
+    /// Navigation entry in the settings sidebar.
     pub fn id(self) -> &'static str {
         match self {
             Self::Theme => "settings-theme",
             Self::Fonts => "settings-fonts",
             Self::Layout => "settings-layout",
+        }
+    }
+    /// Card that holds this group's rows in the page body.
+    fn card_id(self) -> &'static str {
+        match self {
+            Self::Theme => "appearance-theme-card",
+            Self::Fonts => "appearance-fonts-card",
+            Self::Layout => "appearance-layout-card",
+        }
+    }
+    pub(super) fn index(self) -> usize {
+        match self {
+            Self::Theme => 0,
+            Self::Fonts => 1,
+            Self::Layout => 2,
         }
     }
 }
@@ -138,7 +161,9 @@ pub(super) struct AppearancePage {
     document: Option<theme::Document>,
     form: Form,
     pub(super) query: String,
-    pub(super) group: Option<Group>,
+    /// Section the sidebar asked to reveal; consumed by the next render.
+    pub(super) scroll_to: Option<usize>,
+    scroll: ScrollHandle,
     message: String,
     pending: Option<Task<()>>,
     reload: bool,
@@ -162,7 +187,8 @@ impl AppearancePage {
             document,
             form,
             query: String::new(),
-            group: None,
+            scroll_to: None,
+            scroll: ScrollHandle::new(),
             message,
             pending: None,
             reload: false,
@@ -352,6 +378,99 @@ impl AppearancePage {
             }
         }
     }
+    fn row(&self, field: Field, last: bool, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        div()
+            .id(format!("{}-row", field.id()))
+            .test_support()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .py_3()
+            .when(!last, |row| {
+                row.border_b_1().border_color(cx.theme().border)
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(field.label())
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(field.help()),
+                    ),
+            )
+            .child(
+                div()
+                    .w(px(250.))
+                    .flex_shrink_0()
+                    .child(self.control(field, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn group_card(
+        &self,
+        group: Group,
+        fields: &[Field],
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let last = fields.len().saturating_sub(1);
+        div()
+            .id(group.card_id())
+            .test_support()
+            .child(
+                GroupBox::new()
+                    .outline()
+                    .title(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .text_color(cx.theme().foreground)
+                                    .child(group.title()),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(group.help()),
+                            ),
+                    )
+                    .children(
+                        fields
+                            .iter()
+                            .enumerate()
+                            .map(|(index, field)| self.row(*field, index == last, cx)),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Sections rendered for the current search, in page order.
+    fn sections(&self) -> Vec<(Group, Vec<Field>)> {
+        let query = self.query.trim().to_lowercase();
+        Group::ALL
+            .into_iter()
+            .filter_map(|group| {
+                let fields: Vec<_> = Field::ALL
+                    .into_iter()
+                    .filter(|field| field.group() == group)
+                    .filter(|field| query.is_empty() || field.matches(&query))
+                    .collect();
+                (!fields.is_empty()).then_some((group, fields))
+            })
+            .collect()
+    }
 }
 
 impl Render for AppearancePage {
@@ -359,26 +478,17 @@ impl Render for AppearancePage {
         if self.reload {
             self.refresh(window, cx);
         }
-        let query = self.query.trim().to_lowercase();
-        let fields: Vec<_> = Field::ALL
-            .into_iter()
-            .filter(|field| {
-                if query.is_empty() {
-                    self.group.is_none_or(|group| field.group() == group)
-                } else {
-                    field.matches(&query)
-                }
-            })
-            .collect();
-        let mut body = div()
-            .id("appearance-page")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
+        let sections = self.sections();
+        if let Some(index) = self.scroll_to.take() {
+            self.scroll
+                .scroll_to_top_of_item(index.min(sections.len().saturating_sub(1)));
+        }
+        let mut header = div()
             .p_5()
+            .flex_shrink_0()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap_2()
             .child(div().text_xl().child("外观"))
             .child(
                 div()
@@ -396,87 +506,72 @@ impl Render for AppearancePage {
                     .child("更改自动保存并立即生效。Default 使用桌面或内置默认值。"),
             );
         if let Some(path) = self.editor.theme_override() {
-            body = body.child(format!("CLI --theme-file 优先：{}", path.display()));
-        }
-        let mut group = None;
-        for field in &fields {
-            if group != Some(field.group()) {
-                group = Some(field.group());
-                body = body.child(div().mt_4().text_lg().child(field.group().title()));
-            }
-            body = body.child(
+            header = header.child(
                 div()
-                    .id(format!("{}-row", field.id()))
-                    .test_support()
-                    .flex()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("CLI --theme-file 优先：{}", path.display())),
+            );
+        }
+        let body = div()
+            .id("appearance-sections")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .p_5()
+            .flex()
+            .flex_col()
+            .gap_5()
+            .when(sections.is_empty(), |body| {
+                body.child(
+                    div()
+                        .id("settings-no-results")
+                        .test_support()
+                        .child("没有匹配的设置。尝试其他名称或描述。"),
+                )
+            })
+            .children(
+                sections
+                    .iter()
+                    .map(|(group, fields)| self.group_card(*group, fields, cx)),
+            );
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(body)
+            .child(
+                div()
+                    .p_3()
                     .flex_shrink_0()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .py_3()
-                    .border_b_1()
+                    .border_t_1()
                     .border_color(cx.theme().border)
+                    .child(div().text_sm().child(self.message.clone()))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
                             .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(field.label())
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
                             .child(
                                 div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(field.help()),
+                                    .min_w_0()
+                                    .text_xs()
+                                    .truncate()
+                                    .child(format!("配置：{}", self.editor.path().display())),
+                            )
+                            .child(
+                                super::action_button("settings-reset")
+                                    .label("恢复全部默认")
+                                    .disabled(self.document.is_none())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.replace_form(&Preferences::default(), window, cx);
+                                        this.save(window, cx);
+                                    })),
                             ),
-                    )
-                    .child(
-                        div()
-                            .w(px(250.))
-                            .flex_shrink_0()
-                            .child(self.control(*field, cx)),
                     ),
-            );
-        }
-        if fields.is_empty() {
-            body = body.child(
-                div()
-                    .id("settings-no-results")
-                    .test_support()
-                    .child("没有匹配的设置。尝试其他名称或描述。"),
-            );
-        }
-        div().size_full().flex().flex_col().child(body).child(
-            div()
-                .p_3()
-                .flex_shrink_0()
-                .border_t_1()
-                .border_color(cx.theme().border)
-                .child(div().text_sm().child(self.message.clone()))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .child(
-                            div()
-                                .min_w_0()
-                                .text_xs()
-                                .truncate()
-                                .child(format!("配置：{}", self.editor.path().display())),
-                        )
-                        .child(
-                            super::action_button("settings-reset")
-                                .label("恢复全部默认")
-                                .disabled(self.document.is_none())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.replace_form(&Preferences::default(), window, cx);
-                                    this.save(window, cx);
-                                })),
-                        ),
-                ),
-        )
+            )
     }
 }
