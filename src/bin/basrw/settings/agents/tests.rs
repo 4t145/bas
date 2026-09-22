@@ -1,0 +1,215 @@
+use super::*;
+use gpui_kit::{ScrollDelta, TestAppContext, point, px, size, test::TestWindowExt};
+
+/// Reach controls with native wheel events, without bypassing viewport hit testing.
+fn click(window: &mut Window, id: &'static str, cx: &mut App) {
+    for _ in 0..16 {
+        window.render_frame(cx);
+        let target = window.find(id);
+        let bounds = target.bounds();
+        if target.visible() && bounds.origin.y >= px(0.) && bounds.bottom() <= px(680.) {
+            window.click(id, cx);
+            return;
+        }
+        let anchor = [
+            "agents-reload",
+            "agents-preset-codex",
+            "agents-id",
+            "agents-program",
+            "agents-args",
+            "agents-grace",
+            "agents-save",
+            "agents-dirty",
+        ]
+        .into_iter()
+        .find(|anchor| {
+            window.try_find(*anchor).is_some_and(|element| {
+                let bounds = element.bounds();
+                element.visible() && bounds.origin.y >= px(0.) && bounds.bottom() <= px(680.)
+            })
+        })
+        .expect("a visible editor control can receive native wheel events");
+        let delta = if bounds.origin.y < px(0.) {
+            180.
+        } else {
+            -180.
+        };
+        window.scroll(anchor, ScrollDelta::Pixels(point(px(0.), px(delta))), cx);
+    }
+    panic!("control {id} was not reachable by scrolling the settings viewport");
+}
+
+#[gpui_kit::test]
+fn presets_are_drafts_and_save_preserves_other_settings(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("temporary settings directory");
+    let path = directory.path().join("settings.json");
+    let initial = serde_json::json!({
+        "appearance": {"theme_source": "builtin"},
+        "daemon": {"agents": [{
+            "id": "embedded", "kind": "embedded", "env": {"KEEP": "original"},
+            "cancellation_grace_ms": 5000
+        }]}
+    });
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&initial).expect("serialize fixture"),
+    )
+    .expect("write initial settings");
+    let initial_settings: basr::config::Settings =
+        serde_json::from_value(initial.clone()).expect("typed initial settings");
+    cx.update(gpui_kit::init);
+    let mut view = None;
+    let window = cx.open_window(size(px(760.), px(680.)), |window, cx| {
+        let page = cx.new(|cx| Agents::new(Store::at(path.clone()), window, cx));
+        view = Some(page.clone());
+        Root::new(page, window, cx)
+    });
+    let view = view.expect("created Agents view");
+    for (preset, program, args) in [
+        ("agents-preset-codex", "codex-acp", vec![]),
+        ("agents-preset-opencode", "opencode", vec!["acp"]),
+        ("agents-preset-pi", "pi-acp", vec![]),
+    ] {
+        cx.update_window(window.into(), |_, window, cx| {
+            click(window, preset, cx);
+            window.render_frame(cx);
+            let candidate = view.read(cx).candidate(cx).expect("valid preset catalog");
+            let command = candidate
+                .last()
+                .expect("appended preset")
+                .command
+                .as_ref()
+                .expect("ACP preset command");
+            assert_eq!(command.program, std::path::PathBuf::from(program));
+            assert_eq!(command.args, args);
+            assert!(view.read(cx).dirty(cx));
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(
+                    &std::fs::read(&path).expect("read unchanged fixture")
+                )
+                .expect("fixture remains valid JSON"),
+                initial
+            );
+            click(window, "agents-cancel", cx);
+        })
+        .expect("prepare and cancel preset through UI");
+    }
+    cx.update_window(window.into(), |_, window, cx| {
+        click(window, "agents-preset-codex", cx);
+        click(window, "agents-args", cx);
+        window.press("ctrl-a", cx);
+        window.input("[\"a b\", \"\", \"--literal=$HOME\"]", cx);
+        click(window, "agents-save", cx);
+    })
+    .expect("save arguments through UI");
+    let saved = Store::at(path.clone())
+        .load()
+        .expect("load saved arguments");
+    assert_eq!(
+        saved.settings.daemon.agents[1]
+            .command
+            .as_ref()
+            .expect("saved ACP command")
+            .args,
+        ["a b", "", "--literal=$HOME"]
+    );
+    assert_eq!(saved.settings.daemon.agents[0].env["KEEP"], "original");
+    assert_eq!(saved.settings.appearance, initial_settings.appearance);
+    cx.update_window(window.into(), |_, window, cx| {
+        click(window, "agents-select-1", cx);
+        click(window, "agents-delete", cx);
+        window.render_frame(cx);
+        assert_eq!(window.find("agents-save").label(), Some("确认移除配置"));
+        // Deletion, like command editing, requires explicit saving.
+        assert_eq!(
+            Store::at(path.clone())
+                .load()
+                .expect("read before deletion save")
+                .settings
+                .daemon
+                .agents
+                .len(),
+            2
+        );
+        click(window, "agents-save", cx);
+    })
+    .expect("delete selected agent through UI");
+    let saved = Store::at(path.clone()).load().expect("load saved deletion");
+    assert_eq!(saved.settings.daemon.agents.len(), 1);
+    assert_eq!(saved.settings.daemon.agents[0].env["KEEP"], "original");
+    assert_eq!(saved.settings.appearance, initial_settings.appearance);
+}
+
+#[gpui_kit::test]
+fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("temporary settings directory");
+    let path = directory.path().join("settings.json");
+    let store = Store::at(path.clone());
+    let mut document = store.load().expect("default settings for missing fixture");
+    let mut spec = Preset::Codex.spec();
+    spec.env.insert("KEEP".into(), "original".into());
+    store
+        .save_agents(&mut document, vec![AgentSpec::embedded(), spec])
+        .expect("write initial agent catalog");
+    cx.update(gpui_kit::init);
+    let mut view = None;
+    let window = cx.open_window(size(px(760.), px(680.)), |window, cx| {
+        let page = cx.new(|cx| Agents::new(Store::at(path.clone()), window, cx));
+        view = Some(page.clone());
+        Root::new(page, window, cx)
+    });
+    let view = view.expect("created Agents view");
+    let before = std::fs::read(&path).expect("read initial catalog bytes");
+    cx.update_window(window.into(), |_, window, cx| {
+        click(window, "agents-preset-custom", cx);
+        click(window, "agents-save", cx);
+        assert_eq!(
+            std::fs::read(&path).expect("read rejected-save bytes"),
+            before
+        );
+        assert!(view.read(cx).dirty(cx));
+        click(window, "agents-cancel", cx);
+        click(window, "agents-select-1", cx);
+        click(window, "agents-args", cx);
+        window.press("ctrl-a", cx);
+        window.input("[\"edited argument\"]", cx);
+        click(window, "agents-save", cx);
+    })
+    .expect("reject invalid draft then edit existing agent through UI");
+    assert_eq!(
+        store
+            .load()
+            .expect("load edited agent")
+            .settings
+            .daemon
+            .agents[1]
+            .env["KEEP"],
+        "original"
+    );
+    cx.update_window(window.into(), |_, window, cx| {
+        click(window, "agents-preset-pi", cx);
+        let mut external = store.load().expect("load independent external document");
+        store
+            .save_agents(&mut external, vec![AgentSpec::embedded()])
+            .expect("persist external catalog modification");
+        let external_bytes = std::fs::read(&path).expect("read external catalog bytes");
+        click(window, "agents-save", cx);
+        assert!(view.read(cx).dirty(cx));
+        assert_eq!(
+            std::fs::read(&path).expect("read after conflicting save"),
+            external_bytes
+        );
+        click(window, "agents-reload", cx);
+        assert!(view.read(cx).dirty(cx));
+        click(window, "agents-cancel", cx);
+        click(window, "agents-reload", cx);
+        click(window, "agents-select-0", cx);
+        click(window, "agents-delete", cx);
+        click(window, "agents-save", cx);
+        assert_eq!(
+            std::fs::read(&path).expect("read rejected empty catalog bytes"),
+            external_bytes
+        );
+    })
+    .expect("preserve conflict draft and reject empty catalog through UI");
+}

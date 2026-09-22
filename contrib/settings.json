@@ -1,0 +1,19 @@
+{
+  "appearance": {},
+  "daemon": {
+    "agents": [
+      {
+        "id": "embedded",
+        "kind": "embedded"
+      },
+      {
+        "id": "codex",
+        "kind": "acp",
+        "command": {
+          "program": "codex-acp",
+          "args": []
+        }
+      }
+    ]
+  }
+}
