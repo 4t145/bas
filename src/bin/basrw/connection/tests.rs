@@ -8,6 +8,37 @@ use super::*;
 use pb::basr_server::{Basr, BasrServer};
 mod archive;
 
+#[test]
+fn native_auth_required_is_typed_but_transport_failures_stay_errors() {
+    let status = Status::with_details(
+        Code::Unauthenticated,
+        "localized login message",
+        serde_json::to_vec(&acp::Error::auth_required())
+            .expect("ACP error")
+            .into(),
+    );
+    assert!(matches!(
+        creation_result(7, "tool".into(), Err(status)),
+        Update::AuthenticationRequired { epoch: 7, agent } if agent == "tool"
+    ));
+    for status in [
+        Status::unavailable("Authentication required"),
+        Status::unauthenticated("daemon access denied, not an ACP error"),
+        Status::with_details(
+            Code::Unauthenticated,
+            "other",
+            serde_json::to_vec(&acp::Error::internal_error())
+                .expect("ACP")
+                .into(),
+        ),
+    ] {
+        assert!(matches!(
+            creation_result(7, "tool".into(), Err(status)),
+            Update::Created { result: Err(_), .. }
+        ));
+    }
+}
+
 struct Fixture {
     client: Client,
     session: SessionId,
@@ -128,6 +159,12 @@ impl Basr for Service {
         _: Request<pb::ListAgentsRequest>,
     ) -> Result<Response<pb::ListAgentsResponse>, Status> {
         Ok(Response::new(pb::ListAgentsResponse { agents: Vec::new() }))
+    }
+    async fn check_agent(
+        &self,
+        _: Request<pb::CheckAgentRequest>,
+    ) -> Result<Response<pb::CheckAgentResponse>, Status> {
+        Err(Status::unimplemented("old daemon"))
     }
     async fn list_sessions(
         &self,

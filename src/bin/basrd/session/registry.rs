@@ -87,6 +87,10 @@ impl Registry {
         Arc::clone(&self.catalog.read().expect("catalog lock poisoned"))
     }
 
+    pub fn startup_timeout(&self) -> Duration {
+        self.limits.startup_timeout
+    }
+
     /// Publishing a catalog never mutates or stops existing sessions.
     pub fn replace_catalog(&self, catalog: Arc<Catalog>) {
         *self.catalog.write().expect("catalog lock poisoned") = catalog;

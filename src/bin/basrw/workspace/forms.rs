@@ -97,7 +97,11 @@ impl Workspace {
             })
     }
 
-    pub(super) fn render_header(&self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_header(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let current = self.current();
         div()
             .id("thread-header")
@@ -154,7 +158,35 @@ impl Workspace {
                             .tooltip("刷新 · F5")
                             .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     )
-                    .child(self.mode_button(cx)),
+                    .child(self.mode_button(cx))
+                    .child(
+                        layout::icon_button(
+                            "window-maximize",
+                            if window.is_maximized() {
+                                IconName::WindowRestore
+                            } else {
+                                IconName::WindowMaximize
+                            },
+                        )
+                        .tooltip(if window.is_maximized() {
+                            "还原窗口"
+                        } else {
+                            "最大化窗口"
+                        })
+                        .on_click(cx.listener(|this, _, window, _| {
+                            if !window.is_maximized() {
+                                this.window_size = window.bounds().size;
+                            }
+                            window.zoom_window();
+                        })),
+                    )
+                    .child(
+                        layout::icon_button("window-close", IconName::WindowClose)
+                            .tooltip("关闭窗口")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.close_window(window, cx)),
+                            ),
+                    ),
             )
             .when_some(
                 current.filter(|session| session.archived),
@@ -182,6 +214,7 @@ impl Workspace {
         let groups = self.grouped_threads(&sessions, "");
         let directories: Vec<_> = groups.into_iter().map(|group| group.directory).collect();
         let selected = self.selected_directory.clone();
+        let hint = groups::path_label(selected.as_deref());
         let view = cx.entity().downgrade();
         let parent = self.window;
         let button = Button::new("workspace-picker")
@@ -196,9 +229,8 @@ impl Workspace {
             })
             .when(!self.compact, |button| {
                 button.label(groups::name(selected.as_deref()))
-            })
-            .tooltip(groups::path_label(selected.as_deref()));
-        self.menu_button(
+            });
+        let menu = self.menu_button(
             button,
             directories.len() + 2,
             false,
@@ -233,7 +265,8 @@ impl Workspace {
                 )
             },
             cx,
-        )
+        );
+        crate::tooltip::bounded("workspace-picker-hint", menu, hint)
     }
 
     pub(super) fn agent_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -242,6 +275,11 @@ impl Workspace {
             .current()
             .map(|session| session.agent.to_string())
             .unwrap_or_else(|| self.selected_agent.clone());
+        let hint = if selected.is_empty() {
+            "无可用 Agent".into()
+        } else {
+            format!("切换 Agent · {selected}")
+        };
         let view = cx.entity().downgrade();
         let parent = self.window;
         let disabled = self.active.is_some()
@@ -255,13 +293,8 @@ impl Workspace {
             .ghost()
             .xsmall()
             .icon(IconName::Bot)
-            .tooltip(if selected.is_empty() {
-                "无可用 Agent".into()
-            } else {
-                format!("切换 Agent · {selected}")
-            })
             .disabled(disabled);
-        self.menu_button(
+        let menu = self.menu_button(
             button,
             agents.len(),
             disabled,
@@ -284,7 +317,8 @@ impl Workspace {
                 menu
             },
             cx,
-        )
+        );
+        crate::tooltip::bounded("agent-picker-hint", menu, hint)
     }
 
     pub(super) fn edit_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -416,7 +450,12 @@ impl Workspace {
                         .find(|value| value.value == current)
                         .map(|value| value.name.clone())
                         .unwrap_or_else(|| current.to_string());
-                    row = row.child(
+                    let hint = option.description.as_ref().map_or_else(
+                        || option.name.clone(),
+                        |description| format!("{} · {description}", option.name),
+                    );
+                    row = row.child(crate::tooltip::bounded(
+                        SharedString::from(format!("config-hint-{}", option.id)),
                         self.menu_button(
                             Button::new(id)
                                 .flex_shrink_0()
@@ -424,15 +463,6 @@ impl Workspace {
                                 .ghost()
                                 .xsmall()
                                 .label(name)
-                                .tooltip(
-                                    option
-                                        .description
-                                        .as_ref()
-                                        .map(|description| {
-                                            format!("{} · {description}", option.name)
-                                        })
-                                        .unwrap_or_else(|| option.name.clone()),
-                                )
                                 .max_w(px(130.))
                                 .icon(IconName::ChevronDown),
                             choices.len(),
@@ -459,7 +489,8 @@ impl Workspace {
                             },
                             cx,
                         ),
-                    );
+                        hint,
+                    ));
                 }
                 acp::SessionConfigKind::Boolean(boolean) => {
                     let request = acp::SetSessionConfigOptionRequest::new(

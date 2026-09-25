@@ -44,6 +44,7 @@ journald、D-Bus 通知、CLI 和 ACP 进程。首次运行需要下载构建依
 
 虚拟机还包含真实 pi 与 pi-acp，注册为 `pi` 后端。`pi` 入口会实际调用 DeepSeek，
 验证文件工具与进程回收；运行时读取仓库根目录 `.env` 中的 `DEEPSEEK_API_KEY`。
+这些固定依赖仅供开发和测试，不随 BASR 安装，也不作为用户安装适配器的渠道。
 
 操作步骤、日志位置和新增测试的方法见 [测试环境说明](docs/testing.md)。
 
@@ -99,13 +100,15 @@ $ ./target/release/basrctl session create --title demo
 Linux / NixOS 在仓库根目录运行：
 
 ```sh
-./scripts/install-basrd --with-codex --service
+./scripts/install-basrd --service
 basrctl agents
 ```
 
-安装 `basrd`、`basrctl` 和 Codex ACP 适配器，创建缺省的用户后端配置，并启用 systemd 用户服务。
-已有后端配置会保留。只安装可执行程序可省略 `--service`，不需要 Codex 可省略 `--with-codex`。
-Codex 登录、添加其他 ACP 后端、服务管理和更新方式见 [安装与后端配置](docs/install.md)。
+只安装 `basrd`、`basrctl` 并启用 systemd 用户服务；不创建或修改用户配置。
+只安装可执行程序可省略 `--service`。Codex、OpenCode、Pi 等外部 CLI 与 ACP 适配器
+由用户按官方说明独立安装、登录和更新，再配置 daemon 可用的可执行文件路径。
+旧 `--with-codex` 已移除，已有捆绑包和配置不会被自动删除或改写。
+官方安装链接、路径配置、迁移及服务管理见 [安装与后端配置](docs/install.md)。
 
 ## 配置
 

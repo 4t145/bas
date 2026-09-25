@@ -2,19 +2,24 @@
 set -euo pipefail
 
 service=false
-codex=false
+for argument in "$@"; do
+    case "$argument" in
+        --with-codex|--with-codex=*)
+            echo '--with-codex is no longer supported: BASR installs only BASR. Install ACP adapters independently; see docs/install.md (Codex and migration). Existing packages and configuration are unchanged.' >&2
+            exit 2 ;;
+    esac
+done
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --service) service=true; shift ;;
-        --with-codex) codex=true; shift ;;
         -h|--help)
             cat <<'USAGE'
-Usage: scripts/install-basrd [--with-codex] [--service] [nix profile install options...]
+Usage: scripts/install-basrd [--service] [nix profile install options...]
 Install basrd and basrctl into your Nix profile.
-  --with-codex  Install the pinned Codex ACP adapter and create settings.json for a new setup.
   --service     Link and enable the systemd user service, starting it immediately.
-Settings: $XDG_CONFIG_HOME/basr/settings.json (default: ~/.config/basr/settings.json).
-Existing configuration is preserved. basrd also works as a foreground command.
+ACP adapters and their CLIs are installed and managed independently by you.
+No user configuration is created or changed. See docs/install.md.
+basrd also works as a foreground command.
 USAGE
             exit 0 ;;
         *) break ;;
@@ -27,24 +32,8 @@ command -v nix >/dev/null || { echo 'Nix with flakes enabled is required.' >&2; 
 source_path=$("$root/scripts/nix-source")
 package_path=$(nix eval --raw "$source_path#basrd.outPath")
 
-attributes=(basrd)
-if $codex; then attributes+=(codex-acp); fi
-"$root/scripts/nix-profile-install" "$source_path" "${attributes[@]}" -- "$@"
+"$root/scripts/nix-profile-install" "$source_path" basrd -- "$@"
 
-if $codex; then
-    config_dir=${XDG_CONFIG_HOME:-$HOME/.config}
-    if [[ $config_dir != /* ]]; then config_dir=$HOME/.config; fi
-    config_dir+=/basr
-    if [[ ! -e "$config_dir/settings.json" && ! -L "$config_dir/settings.json" ]]; then
-        if [[ -e "$config_dir/agents.json" || -L "$config_dir/agents.json" ||
-              -e "$config_dir/appearance.json" || -L "$config_dir/appearance.json" ]]; then
-            echo 'Existing legacy configuration is preserved; save from BASR settings to migrate it.'
-        else
-            mkdir -p "$config_dir"
-            install -m600 "$package_path/share/basr/settings.example.json" "$config_dir/settings.json"
-        fi
-    fi
-fi
 if $service; then
     systemctl --user link "$package_path/share/systemd/user/basrd.service"
     systemctl --user daemon-reload

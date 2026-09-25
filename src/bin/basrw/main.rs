@@ -11,6 +11,7 @@ mod http;
 mod settings;
 mod settings_window;
 mod theme;
+mod tooltip;
 mod workspace;
 
 use std::{net::SocketAddr, path::PathBuf};
@@ -52,6 +53,7 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    settings::run_helper_if_requested();
     let args = Args::parse();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -73,6 +75,7 @@ fn main() -> Result<()> {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            settings::init_checks(args.server, handle.clone(), cx);
             theme::init(args.theme_file, args.settings_file, cx);
             theme::watch(cx);
             application::init(cx);

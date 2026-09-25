@@ -72,8 +72,6 @@
         system-test-driver = (testFor system).driverInteractive;
         system-test-shell = (shellFor system).driver;
         system-test-pi = (piTestFor system).driver;
-        pi-acp = (pkgsFor system).callPackage ./nix/pi-acp { };
-        codex-acp = (pkgsFor system).callPackage ./nix/codex-acp { };
       });
       checks = eachLinux (system: {
         package = packageFor system;

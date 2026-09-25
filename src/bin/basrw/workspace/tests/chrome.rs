@@ -30,6 +30,17 @@ fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext
         assert!(menu.top() >= sidebar.top() && menu.bottom() <= sidebar.bottom());
         assert_eq!(menu.size, settings.size);
         assert!(window.try_find("project-logo-slot").is_none());
+        let controls =
+            ["toggle-mode", "window-maximize", "window-close"].map(|id| window.find(id).bounds());
+        for control in controls {
+            assert_eq!(control.size, settings.size);
+            assert_eq!(control.top(), settings.top());
+            assert!(control.right() <= conversation.right());
+        }
+        assert_eq!(
+            controls[1].left() - controls[0].right(),
+            controls[2].left() - controls[1].right()
+        );
         window.click("sidebar-toggle", cx);
         window.render_frame(cx);
         assert!(
@@ -46,6 +57,8 @@ fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext
             .view
             .update(cx, |view, cx| view.toggle_mode(window, cx));
         window.render_frame(cx);
+        assert!(window.try_find("window-maximize").is_none());
+        assert!(window.try_find("window-close").is_none());
         let compact = [
             "app-menu",
             "open-settings",
@@ -65,6 +78,41 @@ fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext
         assert!(gaps.iter().all(|gap| *gap == gaps[0]));
     })
     .expect("aligned header layout");
+}
+
+#[gpui_kit::test]
+fn window_close_preserves_other_windows_and_cleans_up_workspace(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    let directory = tempfile::tempdir().expect("temporary restore store");
+    let path = directory.path().join("window.json");
+    let about = cx.update(|cx| crate::application::open_about(cx).expect("independent about"));
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, _| {
+            view.restore_store = Some(restore::Store::open(path.clone()));
+        });
+        window.render_frame(cx);
+        window.click("window-close", cx);
+        let view = fixture.view.read(cx);
+        assert!(view.menu.is_none());
+        assert!(view.reply_preview.is_none());
+    })
+    .expect("close workspace");
+    assert_eq!(restore::Store::open(path).thread(), Some(meta.id));
+    assert!(
+        cx.update_window(fixture.window.into(), |_, _, _| ())
+            .is_err()
+    );
+    cx.update_window(about.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("about-window").visible());
+    })
+    .expect("closing a workspace does not quit the app");
+    while let Ok(command) = fixture.commands.try_recv() {
+        assert!(matches!(command, Command::Foreground(_)));
+    }
 }
 
 #[gpui_kit::test]

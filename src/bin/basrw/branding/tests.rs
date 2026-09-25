@@ -1,11 +1,9 @@
 use std::{borrow::Cow, sync::Arc};
 
-use gpui_kit::{
-    AssetSource, DevicePixels, SvgRenderer, SvgSize, TestApp, component::ThemeMode, size,
-};
+use gpui_kit::{AssetSource, DevicePixels, SvgRenderer, SvgSize, size};
 
 use super::*;
-use crate::assets::Assets;
+use crate::assets::{Assets, OUTLINE, OUTLINE_LIGHT};
 
 #[test]
 fn assets_use_the_confirmed_regular_v4_outlines() {
@@ -124,7 +122,7 @@ fn assets_decode_with_gpui_svg_renderer_preserving_color_and_transparency() {
         let parsed = renderer
             .parse_svg(&bytes)
             .expect("GPUI parses original SVG");
-        for pixels in [28, 32, 64] {
+        for pixels in [28, 32, 64, 96] {
             let dimensions = size(DevicePixels(pixels), DevicePixels(pixels));
             let image = renderer
                 .render_parsed(&parsed, SvgSize::ExactSize(dimensions))
@@ -174,15 +172,8 @@ fn assets_decode_with_gpui_svg_renderer_preserving_color_and_transparency() {
 }
 
 #[test]
-fn assets_logo_follows_theme_and_can_be_resized() {
-    let mut app = TestApp::new();
-    app.update(|cx| {
-        gpui_kit::init(cx);
-        Theme::change(ThemeMode::Light, None, cx);
-        assert_eq!(logo_path(cx), OUTLINE);
-        let _small = logo(cx).size(px(28.));
-        Theme::change(ThemeMode::Dark, None, cx);
-        assert_eq!(logo_path(cx), OUTLINE_LIGHT);
-        let _default = logo(cx);
-    });
+fn dimensional_logo_uses_the_original_artwork_and_can_be_resized() {
+    assert_eq!(DIMENSIONAL, "branding/ferris-dimensional.svg");
+    let _small = dimensional_logo().size(px(28.));
+    let _about = dimensional_logo().size(px(96.));
 }

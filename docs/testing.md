@@ -5,6 +5,12 @@ QEMU 的 NixOS 虚拟机中。Nix 依赖由 `flake.lock` 固定，Rust 依赖由
 
 ## 日常测试
 
+安装脚本的离线回归测试使用临时目录和模拟 Nix，不安装包或操作真实服务：
+
+```sh
+python3 tests/install_basrd.py -v
+```
+
 本机直接测试 GUI 和真实 pi 后端可使用 `./scripts/dev-local`，自动验证使用
 `./scripts/dev-local smoke`；二者读取仓库根目录 `.env` 中的 DeepSeek 密钥。
 详见 [本机运行说明](local.md)。以下虚拟机入口继续用于系统集成与隔离测试。
@@ -112,6 +118,8 @@ journalctl -u basrd --no-pager -n 100
 （由 `nix/pi-acp/package-lock.json` 与 Nix 哈希固定），BASR 将其注册为 `pi` 后端。
 使用已有的 [pi-acp 适配器](https://github.com/svkozak/pi-acp) 连接 pi 的 RPC 模式。
 适配器 0.0.33 要求较新的 pi，本环境使用与当前锁定的 pi 配套的 0.0.32。
+这些固定依赖仅供虚拟机测试和本地开发 shell，保留以复现 ACP 集成测试，
+不作为 BASR 产品包导出或安装到用户 profile。真实用户按 [安装说明](install.md) 自行安装外部工具。
 
 默认模型为 `deepseek-flash`，通过 DeepSeek 官方的 OpenAI 兼容接口调用。
 基础地址与模型名称见 [DeepSeek API 文档](https://api-docs.deepseek.com/)。

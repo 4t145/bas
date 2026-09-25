@@ -112,34 +112,37 @@ impl Workspace {
             },
         );
         Some(
-            Button::new("pending-messages")
-                .disabled(self.sending(session))
-                .ghost()
-                .xsmall()
-                .icon(IconName::Clock)
-                .label(outbox.len().to_string())
-                .tooltip(hint)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    let composition = Draft {
-                        text: this.composer.read(cx).value().to_string(),
-                        attachments: this.attachments.clone(),
-                    };
-                    let Some(draft) = this
-                        .outboxes
-                        .get_mut(&session)
-                        .and_then(|outbox| outbox.begin_edit(composition))
-                    else {
-                        return;
-                    };
-                    this.attachments = draft.attachments;
-                    this.composer.update(cx, |input, cx| {
-                        input.set_value(draft.text, window, cx);
-                        input.focus(window, cx);
-                    });
-                    this.save_draft(cx);
-                    cx.notify();
-                }))
-                .into_any_element(),
+            crate::tooltip::bounded(
+                "pending-messages-hint",
+                Button::new("pending-messages")
+                    .disabled(self.sending(session))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Clock)
+                    .label(outbox.len().to_string())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let composition = Draft {
+                            text: this.composer.read(cx).value().to_string(),
+                            attachments: this.attachments.clone(),
+                        };
+                        let Some(draft) = this
+                            .outboxes
+                            .get_mut(&session)
+                            .and_then(|outbox| outbox.begin_edit(composition))
+                        else {
+                            return;
+                        };
+                        this.attachments = draft.attachments;
+                        this.composer.update(cx, |input, cx| {
+                            input.set_value(draft.text, window, cx);
+                            input.focus(window, cx);
+                        });
+                        this.save_draft(cx);
+                        cx.notify();
+                    })),
+                hint,
+            )
+            .into_any_element(),
         )
     }
 }

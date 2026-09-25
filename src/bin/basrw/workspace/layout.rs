@@ -30,6 +30,18 @@ pub(crate) fn initial_size(compact: bool) -> Size<Pixels> {
 }
 
 impl Workspace {
+    pub(super) fn prepare_to_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.remember_thread();
+        self.close_reply_preview(window, cx);
+        self.close_menu(window, cx);
+    }
+
+    pub(super) fn close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Programmatic removal does not invoke the native should-close callback.
+        self.prepare_to_close(window, cx);
+        window.remove_window();
+    }
+
     pub(super) fn resize_window(&mut self, window: &mut Window, cx: &App) {
         let command_count = self
             .command_candidates(cx)
@@ -91,7 +103,11 @@ impl Workspace {
         self.close_reply_preview(window, cx);
         self.close_menu(window, cx);
         if !self.compact {
-            self.window_size = window.bounds().size;
+            if window.is_maximized() {
+                window.zoom_window();
+            } else {
+                self.window_size = window.bounds().size;
+            }
         }
         self.compact = !self.compact;
         if !self.compact {
@@ -146,7 +162,7 @@ impl Workspace {
         } else if self.output_open {
             self.toggle_output(window, cx);
         } else {
-            window.remove_window();
+            self.close_window(window, cx);
         }
     }
 
@@ -326,6 +342,9 @@ impl Workspace {
                             row.child(self.archive_button(session, "compact-restore", cx))
                         },
                     )
+                    .when(self.authentication_required.is_some(), |row| {
+                        row.child(self.authentication_button(cx))
+                    })
                     .child(self.application_button(cx))
                     .child(self.settings_button(cx))
                     .child(self.workspace_button(cx))

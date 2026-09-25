@@ -237,12 +237,24 @@ impl Host {
         div()
             .flex()
             .flex_col()
+            .flex_1()
+            .min_h_0()
             .gap_6()
             .p_6()
-            .child(self.message.clone())
+            .child(
+                div()
+                    .id("application-message-body")
+                    .test_support()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .whitespace_normal()
+                    .child(crate::tooltip::wrap_tokens(&self.message)),
+            )
             .child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .justify_end()
                     .gap_3()
                     .child(
@@ -266,14 +278,20 @@ impl Host {
             )
     }
 
-    fn about(&self, cx: &App) -> impl IntoElement {
+    fn about(&self) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
             .items_center()
             .gap_3()
             .p_6()
-            .child(branding::logo(cx).size(px(96.)))
+            .child(
+                div()
+                    .id("about-dimensional-logo")
+                    .test_support()
+                    .size(px(96.))
+                    .child(branding::dimensional_logo().size_full()),
+            )
             .child(format!("BASR {}", env!("CARGO_PKG_VERSION")))
             .child(env!("CARGO_PKG_DESCRIPTION"))
             .child("BASR 代码许可证：MIT")
@@ -341,7 +359,7 @@ impl Render for Host {
                     .on_close_window(|_, window, _| Self::close(window)),
             )
             .child(match self.kind {
-                InfoWindow::About => self.about(cx).into_any_element(),
+                InfoWindow::About => self.about().into_any_element(),
                 InfoWindow::Quit => self.quit().into_any_element(),
                 InfoWindow::Message | InfoWindow::Confirmation => {
                     self.message(cx).into_any_element()

@@ -122,6 +122,7 @@ pub(super) struct Workspace {
     connected: bool,
     connection_error: Option<String>,
     error: Option<String>,
+    authentication_required: Option<String>,
     search: Entity<InputState>,
     composer: Entity<EditorState>,
     mention_decorations: TextDecorationCollection,
@@ -197,9 +198,7 @@ impl Workspace {
         let view = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             let _ = view.update(cx, |this, cx| {
-                this.remember_thread();
-                this.close_reply_preview(window, cx);
-                this.close_menu(window, cx);
+                this.prepare_to_close(window, cx);
             });
             true
         });
@@ -332,6 +331,7 @@ impl Workspace {
             connected: false,
             connection_error: None,
             error: None,
+            authentication_required: None,
             search,
             composer,
             mention_decorations,
@@ -412,6 +412,7 @@ impl Workspace {
     fn composer_error(&self, cx: &App) -> Option<String> {
         self.error
             .clone()
+            .or_else(|| self.authentication_hint())
             .or_else(|| self.connection_error.clone())
             .or_else(|| match &self.stream {
                 StreamState::Reconnecting(error) | StreamState::Unavailable(error) => {
@@ -444,6 +445,10 @@ impl Workspace {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.command(Command::Refresh);
         if self.active.is_none() {
+            if self.authentication_required.take().is_some() {
+                self.epoch += 1;
+                self.creating = false;
+            }
             self.error = None;
             self.prepare_session(cx);
         }
@@ -507,6 +512,7 @@ impl Workspace {
         self.restore_on_connect = false;
         self.remember_thread();
         self.creating = false;
+        self.authentication_required = None;
         self.markdown.borrow_mut().clear();
         self.commands_dismissed = false;
         if let Some(session) = self.sessions.iter().find(|session| session.id == id) {
@@ -556,6 +562,7 @@ impl Workspace {
         self.remember_thread();
         self.conversation = None;
         self.creating = false;
+        self.authentication_required = None;
         self.markdown.borrow_mut().clear();
         self.commands_dismissed = false;
         self.expanded.clear();
@@ -625,6 +632,7 @@ impl Workspace {
             || self.archived_list
             || self.active.is_some()
             || self.creating
+            || self.authentication_required.is_some()
             || self.selected_agent.is_empty()
         {
             return;
@@ -772,6 +780,7 @@ impl Workspace {
                             .first()
                             .map(|agent| agent.id.clone())
                             .unwrap_or_default();
+                        self.authentication_required = None;
                     }
                     if let Some(conversation) = &mut self.conversation
                         && let Some(meta) = self
@@ -829,6 +838,13 @@ impl Workspace {
                             Some(format!("初始化 Agent 失败，草稿已保留；F5 重试：{error}"));
                     }
                     Err(_) => {}
+                }
+            }
+            Update::AuthenticationRequired { epoch, agent } => {
+                if epoch == self.epoch && self.active.is_none() && self.selected_agent == agent {
+                    self.creating = false;
+                    self.error = None;
+                    self.authentication_required = Some(agent);
                 }
             }
             Update::Renamed { session, result } => {

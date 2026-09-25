@@ -82,6 +82,19 @@ pub(crate) fn current(cx: &App) -> Option<WindowHandle<Root>> {
     cx.try_global::<OpenWindow>().map(|state| state.handle)
 }
 
+/// Opens a local agent's settings and explicitly refreshes its ACP auth methods.
+///
+/// # Errors
+/// Returns an error if the settings window cannot be opened or updated.
+pub(crate) fn open_agent(agent: &str, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
+    let handle = open(cx)?;
+    let settings = cx.global::<OpenWindow>().settings.clone();
+    handle.update(cx, |_, window, cx| {
+        settings.update(cx, |settings, cx| settings.show_agent(agent, window, cx))
+    })??;
+    Ok(handle)
+}
+
 /// Persist valid edits even when the workspace which opened settings is gone.
 pub(crate) fn flush_pending(cx: &mut App) {
     let Some(state) = cx.try_global::<OpenWindow>() else {

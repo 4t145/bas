@@ -68,6 +68,10 @@ impl Basr for Service {
             .registry
             .catalog()
             .specs()
+            .filter(|spec| {
+                spec.kind == crate::agent::Kind::Embedded
+                    || crate::agent::acp::resolve_program(spec).is_some()
+            })
             .map(|spec| pb::Agent {
                 id: spec.id.to_string(),
                 kind: spec.kind.to_string(),
@@ -76,6 +80,76 @@ impl Basr for Service {
             .collect();
 
         Ok(Response::new(pb::ListAgentsResponse { agents }))
+    }
+
+    async fn check_agent(
+        &self,
+        request: Request<pb::CheckAgentRequest>,
+    ) -> Result<Response<pb::CheckAgentResponse>, Status> {
+        use crate::agent::{Kind, acp};
+        use pb::AgentCheckStatus as Check;
+        let request = request.into_inner();
+        let expected: AgentSpec =
+            serde_json::from_slice(&request.expected_spec_json).map_err(|_| {
+                Status::invalid_argument("expected_spec_json must contain a saved AgentSpec")
+            })?;
+        let catalog = self.registry.catalog();
+        let id = request.agent.into();
+        let spec = catalog
+            .spec(&id)
+            .filter(|spec| spec.as_ref() == &expected)
+            .ok_or_else(|| {
+                Status::failed_precondition("Agent configuration changed; save and retry")
+            })?;
+        let mut response = pb::CheckAgentResponse {
+            status: Check::Connected.into(),
+            message: "Embedded agent is ready".into(),
+            resolved_program: String::new(),
+            initialization: None,
+            authentication_error: None,
+        };
+        if spec.kind == Kind::Acp {
+            if let Some(program) = acp::resolve_program(spec) {
+                response.resolved_program = program.to_string_lossy().into_owned();
+                response.status = Check::Installed.into();
+                response.message =
+                    "Executable is installed; connection and login have not been checked".into();
+                if request.connect {
+                    let result = tokio::select! {
+                        result = acp::check_connection(spec, self.registry.startup_timeout()) => result,
+                        () = self.registry.stopped() => return Err(Status::unavailable("Daemon is stopping")),
+                    };
+                    match result {
+                        Ok(acp::CheckResult::Connected(initialized)) => {
+                            response.status = Check::Connected.into();
+                            response.message = "ACP initialize and newSession succeeded".into();
+                            response.initialization = Some((&initialized).into());
+                        }
+                        Ok(acp::CheckResult::AuthenticationRequired(initialized, error)) => {
+                            response.status = Check::AuthenticationRequired.into();
+                            response.message = "Agent authentication required".into();
+                            response.initialization = Some((&initialized).into());
+                            response.authentication_error = Some((&error).into());
+                        }
+                        Err(message) => {
+                            response.status = Check::Failed.into();
+                            response.message = message.into();
+                        }
+                    }
+                }
+            } else {
+                response.status = Check::MissingExecutable.into();
+                response.message =
+                    "Executable is missing or not executable on the daemon host".into();
+            }
+        }
+        // A replaced catalog invalidates even an otherwise successful probe.
+        if !Arc::ptr_eq(&catalog, &self.registry.catalog()) {
+            return Err(Status::failed_precondition(
+                "Agent catalog changed during check; retry",
+            ));
+        }
+        Ok(Response::new(response))
     }
 
     async fn create_session(
@@ -297,6 +371,22 @@ impl Basr for Service {
     }
 }
 
+fn acp_status(error: &acp::Error) -> Status {
+    let code = match error.code {
+        acp::ErrorCode::AuthRequired => tonic::Code::Unauthenticated,
+        acp::ErrorCode::InvalidParams | acp::ErrorCode::InvalidRequest => {
+            tonic::Code::InvalidArgument
+        }
+        acp::ErrorCode::MethodNotFound => tonic::Code::Unimplemented,
+        _ => tonic::Code::Unknown,
+    };
+    Status::with_details(
+        code,
+        error.message.clone(),
+        serde_json::to_vec(error).expect("ACP error JSON").into(),
+    )
+}
+
 impl From<SessionError> for Status {
     fn from(error: SessionError) -> Self {
         match &error {
@@ -344,6 +434,7 @@ impl From<CreateError> for Status {
             CreateError::Cwd(_) => Status::invalid_argument(error.to_string()),
             CreateError::Timeout => Status::deadline_exceeded(error.to_string()),
             CreateError::Session(error) => error.into(),
+            CreateError::Agent(crate::agent::Error::Acp(acp_error)) => acp_status(&acp_error),
             CreateError::Agent(_) | CreateError::Stopping => Status::unavailable(error.to_string()),
         }
     }

@@ -8,8 +8,10 @@ pub(super) fn agent(spec: &AgentSpec) -> Result<AcpAgent, Error> {
         .command()
         .ok_or_else(|| Error::backend(spec.id.clone(), "missing command line"))?;
     Ok(AcpAgent::new(
-        AcpAgentConfig::new(command.program.clone())
-            .args(command.args.clone())
-            .envs(spec.env.clone()),
+        AcpAgentConfig::new(super::resolve_program(spec).ok_or_else(|| {
+            Error::backend(spec.id.clone(), "executable is missing or not executable")
+        })?)
+        .args(command.args.clone())
+        .envs(spec.env.clone()),
     ))
 }

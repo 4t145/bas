@@ -4,6 +4,7 @@ use gpui_kit::{AssetSource, SharedString};
 
 pub(super) const OUTLINE: &str = "branding/ferris-outline.svg";
 pub(super) const OUTLINE_LIGHT: &str = "branding/ferris-outline-light.svg";
+pub(super) const DIMENSIONAL: &str = "branding/ferris-dimensional.svg";
 
 struct BrandingAsset {
     path: &'static str,
@@ -20,7 +21,7 @@ const BRANDING: &[BrandingAsset] = &[
         bytes: include_bytes!("../../../assets/branding/ferris-outline-light.svg"),
     },
     BrandingAsset {
-        path: "branding/ferris-dimensional.svg",
+        path: DIMENSIONAL,
         bytes: include_bytes!("../../../assets/branding/ferris-dimensional.svg"),
     },
     BrandingAsset {

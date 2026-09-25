@@ -10,6 +10,16 @@ use tempfile::NamedTempFile;
 #[cfg(test)]
 mod tests;
 
+struct WriteLock(fs::File);
+
+impl Drop for WriteLock {
+    fn drop(&mut self) {
+        // A concurrent subprocess spawn can briefly inherit this file descriptor.
+        // Unlock explicitly: closing only our copy can leave its inherited copy locked.
+        let _ = self.0.unlock();
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("settings I/O at {path}: {source}")]
@@ -183,6 +193,7 @@ impl Store {
             },
             std::fs::TryLockError::Error(e) => io_error(&lock_path, e),
         })?;
+        let _lock = WriteLock(lock);
         let loaded = self.read()?;
         let mut settings = loaded.document.settings;
         let name = match section {

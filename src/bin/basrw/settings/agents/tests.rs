@@ -7,11 +7,15 @@ fn click(window: &mut Window, id: &'static str, cx: &mut App) {
         window.render_frame(cx);
         let target = window.find(id);
         let bounds = target.bounds();
-        if target.visible() && bounds.origin.y >= px(0.) && bounds.bottom() <= px(680.) {
+        let viewport = window.find("agents-sections").bounds();
+        if target.visible()
+            && ((bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom())
+                || id == "agents-reload")
+        {
             window.click(id, cx);
             return;
         }
-        let delta = if bounds.origin.y < px(0.) {
+        let delta = if bounds.top() < viewport.top() {
             180.
         } else {
             -180.
@@ -25,8 +29,14 @@ fn click(window: &mut Window, id: &'static str, cx: &mut App) {
     panic!("control {id} was not reachable by scrolling the settings viewport");
 }
 
+fn fill(window: &mut Window, id: &'static str, value: &str, cx: &mut App) {
+    click(window, id, cx);
+    window.press("ctrl-a", cx);
+    window.input(value, cx);
+}
+
 #[gpui_kit::test]
-fn presets_are_drafts_and_save_preserves_other_settings(cx: &mut TestAppContext) {
+fn custom_acp_is_the_only_add_action_and_save_preserves_other_settings(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("temporary settings directory");
     let path = directory.path().join("settings.json");
     let initial = serde_json::json!({
@@ -51,40 +61,44 @@ fn presets_are_drafts_and_save_preserves_other_settings(cx: &mut TestAppContext)
         Root::new(page, window, cx)
     });
     let view = view.expect("created Agents view");
-    for (preset, program, args) in [
-        ("agents-preset-codex", "codex-acp", vec![]),
-        ("agents-preset-opencode", "opencode", vec!["acp"]),
-        ("agents-preset-pi", "pi-acp", vec![]),
-    ] {
-        cx.update_window(window.into(), |_, window, cx| {
-            click(window, preset, cx);
-            window.render_frame(cx);
-            let candidate = view.read(cx).candidate(cx).expect("valid preset catalog");
-            let command = candidate
-                .last()
-                .expect("appended preset")
-                .command
-                .as_ref()
-                .expect("ACP preset command");
-            assert_eq!(command.program, std::path::PathBuf::from(program));
-            assert_eq!(command.args, args);
-            assert!(view.read(cx).dirty(cx));
-            assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(
-                    &std::fs::read(&path).expect("read unchanged fixture")
-                )
-                .expect("fixture remains valid JSON"),
-                initial
-            );
-            click(window, "agents-cancel", cx);
-        })
-        .expect("prepare and cancel preset through UI");
-    }
     cx.update_window(window.into(), |_, window, cx| {
-        click(window, "agents-preset-codex", cx);
-        click(window, "agents-args", cx);
-        window.press("ctrl-a", cx);
-        window.input("[\"a b\", \"\", \"--literal=$HOME\"]", cx);
+        window.render_frame(cx);
+        for id in [
+            "agents-preset-codex",
+            "agents-preset-opencode",
+            "agents-preset-pi",
+        ] {
+            assert!(window.try_find(id).is_none(), "no preset shortcut remains");
+        }
+        click(window, "agents-add-custom", cx);
+        window.render_frame(cx);
+        assert!(view.read(cx).dirty(cx));
+        assert!(
+            view.read(cx).candidate(cx).is_err(),
+            "custom path and ID are required"
+        );
+        assert!(
+            window.try_find("agents-grace").is_none(),
+            "advanced settings require a connection"
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).expect("unchanged"))
+                .expect("json"),
+            initial
+        );
+        click(window, "agents-cancel", cx);
+    })
+    .expect("custom draft without writes");
+    cx.update_window(window.into(), |_, window, cx| {
+        click(window, "agents-add-custom", cx);
+        fill(window, "agents-id", "custom", cx);
+        fill(window, "agents-program", "/test/agent", cx);
+        fill(
+            window,
+            "agents-args",
+            "[\"a b\", \"\", \"--literal=$HOME\"]",
+            cx,
+        );
         click(window, "agents-save", cx);
     })
     .expect("save arguments through UI");
@@ -132,7 +146,7 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
     let path = directory.path().join("settings.json");
     let store = Store::at(path.clone());
     let mut document = store.load().expect("default settings for missing fixture");
-    let mut spec = Preset::Codex.spec();
+    let mut spec = AgentSpec::acp("codex", Command::new("/test/codex-acp", []));
     spec.env.insert("KEEP".into(), "original".into());
     store
         .save_agents(&mut document, vec![AgentSpec::embedded(), spec])
@@ -147,7 +161,7 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
     let view = view.expect("created Agents view");
     let before = std::fs::read(&path).expect("read initial catalog bytes");
     cx.update_window(window.into(), |_, window, cx| {
-        click(window, "agents-preset-custom", cx);
+        click(window, "agents-add-custom", cx);
         click(window, "agents-save", cx);
         assert_eq!(
             std::fs::read(&path).expect("read rejected-save bytes"),
@@ -173,7 +187,9 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
         "original"
     );
     cx.update_window(window.into(), |_, window, cx| {
-        click(window, "agents-preset-pi", cx);
+        click(window, "agents-add-custom", cx);
+        fill(window, "agents-id", "other", cx);
+        fill(window, "agents-program", "/test/other", cx);
         let mut external = store.load().expect("load independent external document");
         store
             .save_agents(&mut external, vec![AgentSpec::embedded()])
@@ -198,4 +214,130 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
         );
     })
     .expect("preserve conflict draft and reject empty catalog through UI");
+}
+
+#[gpui_kit::test]
+fn only_matching_connected_specs_unlock_advanced_fields(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("agent configuration");
+    let store = Store::at(directory.path().join("settings.json"));
+    let spec = AgentSpec::acp("test", Command::new("/test/adapter", ["acp".into()]));
+    let mut document = store.load().expect("document");
+    store
+        .save_agents(&mut document, vec![spec.clone()])
+        .expect("catalog");
+    cx.update(gpui_kit::init);
+    let mut page = None;
+    let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        let view = cx.new(|cx| Agents::new(store, window, cx));
+        page = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let page = page.expect("view");
+    cx.update_window(window.into(), |_, window, cx| {
+        page.update(cx, |page, cx| page.edit(spec.clone(), Some(0), window, cx));
+        window.render_frame(cx);
+        assert!(
+            window.try_find("agents-program").is_some(),
+            "path stays editable while disconnected"
+        );
+        assert!(window.try_find("agents-grace").is_none());
+        page.update(cx, |page, cx| {
+            page.apply_check(&spec, check::Status::Installed("/test/adapter".into()));
+            assert!(
+                !page.draft_connected(cx),
+                "finding a file is not a handshake"
+            );
+            page.apply_check(&spec, check::Status::Connected("/test/adapter".into()));
+            assert!(page.draft_connected(cx));
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("agents-grace").is_some());
+        page.update(cx, |page, cx| {
+            page.form
+                .program
+                .update(cx, |input, cx| input.set_value("/test/changed", window, cx));
+            page.form
+                .grace
+                .update(cx, |input, cx| input.set_value("777", window, cx));
+            assert!(
+                !page.draft_connected(cx),
+                "changing the path invalidates readiness"
+            );
+            let candidate = page.candidate(cx).expect("valid connection draft");
+            assert_eq!(
+                candidate[0].cancellation_grace, spec.cancellation_grace,
+                "hidden advanced edits cannot bypass connection gating"
+            );
+            let check = page.checks.get_mut(&spec.id).expect("check");
+            check.spec = candidate[0].clone();
+            check.status = check::Status::Checking;
+            page.apply_check(&spec, check::Status::Connected("/test/adapter".into()));
+            assert!(
+                page.status(&spec).is_none(),
+                "late response cannot verify a different config"
+            );
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("agents-grace").is_none());
+    })
+    .expect("connection gated configuration");
+}
+
+#[gpui_kit::test]
+fn installation_guidance_only_opens_documentation_and_preserves_configuration(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().expect("settings fixture");
+    let path = directory.path().join("settings.json");
+    // Legacy adapter paths remain exactly as the user configured them.
+    let initial = r#"{"daemon":{"agents":[{"id":"codex","kind":"acp","command":{"program":"/nix/store/old-basr-codex-acp/bin/codex-acp","args":[]},"env":{"KEEP":"unchanged"}}]}}"#;
+    std::fs::write(&path, initial).expect("legacy configuration");
+    cx.update(gpui_kit::init);
+    let mut view = None;
+    let window = cx.open_window(size(px(760.), px(680.)), |window, cx| {
+        let page = cx.new(|cx| Agents::new(Store::at(path.clone()), window, cx));
+        view = Some(page.clone());
+        Root::new(page, window, cx)
+    });
+    let view = view.expect("page");
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("agents-installation-guide").is_none());
+        window.click("agents-installation-help", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("agents-installation-guide").is_some());
+        assert!(
+            view.read(cx).draft.is_none(),
+            "help must not start a preset draft"
+        );
+    })
+    .expect("open read-only guide");
+    for (id, url) in [
+        (
+            "agents-guide-codex",
+            "https://github.com/agentclientprotocol/codex-acp#installation",
+        ),
+        ("agents-guide-opencode", "https://opencode.ai/docs/acp/"),
+        (
+            "agents-guide-pi",
+            "https://github.com/svkozak/pi-acp#install",
+        ),
+    ] {
+        cx.update_window(window.into(), |_, window, cx| click(window, id, cx))
+            .expect("open official guide");
+        assert_eq!(cx.opened_url().as_deref(), Some(url));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("config retained"),
+            initial
+        );
+    }
+    cx.update_window(window.into(), |_, window, cx| {
+        click(window, "agents-installation-toggle", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("agents-installation-guide").is_none());
+        assert!(!view.read(cx).dirty(cx));
+    })
+    .expect("collapse guide without configuration edits");
 }

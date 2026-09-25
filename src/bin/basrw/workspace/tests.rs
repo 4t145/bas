@@ -6,12 +6,14 @@ use super::*;
 
 mod application;
 mod archive;
+mod authentication;
 mod chrome;
 mod navigation;
 mod rename;
 mod rows;
 mod settings;
 mod thread_actions;
+mod tooltips;
 
 fn receipt(cursor: u64) -> basr::model::TurnReceipt {
     basr::model::TurnReceipt {

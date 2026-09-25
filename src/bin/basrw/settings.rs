@@ -16,9 +16,34 @@ mod appearance;
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
 
+pub(crate) use agents::init_checks;
+pub(crate) use agents::run_helper_if_requested;
+
 // Keep actions distinct from the ghost navigation items, using upstream state styling.
 fn action_button(id: impl Into<gpui_kit::ElementId>) -> Button {
     Button::new(id).with_variant(ButtonVariant::Default).small()
+}
+
+fn navigation_button(
+    id: impl Into<gpui_kit::SharedString>,
+    title: impl Into<gpui_kit::SharedString>,
+) -> Button {
+    let id = id.into();
+    let title = title.into();
+    // Button's label container centers its contents independently of the root.
+    Button::new(id.clone())
+        .ghost()
+        .accessibility_label(title.clone())
+        .child(
+            div()
+                .id(format!("{id}-text"))
+                .test_support()
+                .flex_1()
+                .min_w_0()
+                .text_left()
+                .truncate()
+                .child(title),
+        )
 }
 
 pub(crate) struct Close;
@@ -83,20 +108,23 @@ impl Settings {
         let editor = crate::theme::Editor::current(cx);
         let agents = cx.new(|cx| agents::Agents::new(editor.store(), window, cx));
         let appearance = cx.new(|cx| appearance::AppearancePage::new(editor, window, cx));
-        let subscriptions = vec![cx.subscribe_in(&search, window, |this, _, event, _, cx| {
-            if matches!(event, InputEvent::Change) {
-                let query = this.search.read(cx).value().to_string();
-                if !query.trim().is_empty() {
-                    this.category = Category::for_query(&query);
-                    this.expanded.insert(this.category);
-                }
-                this.appearance.update(cx, |page, cx| {
-                    page.query = query;
+        let subscriptions = vec![
+            cx.subscribe_in(&search, window, |this, _, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let query = this.search.read(cx).value().to_string();
+                    if !query.trim().is_empty() {
+                        this.category = Category::for_query(&query);
+                        this.expanded.insert(this.category);
+                    }
+                    this.appearance.update(cx, |page, cx| {
+                        page.query = query;
+                        cx.notify();
+                    });
                     cx.notify();
-                });
-                cx.notify();
-            }
-        })];
+                }
+            }),
+            cx.observe(&agents, |_, _, cx| cx.notify()),
+        ];
         Self {
             focus: cx.focus_handle(),
             search,
@@ -113,6 +141,12 @@ impl Settings {
     pub(crate) fn flush_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.appearance
             .update(cx, |page, cx| page.flush_pending(window, cx));
+    }
+
+    pub(crate) fn show_agent(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_agents(None, window, cx);
+        self.agent_section = self.agents.update(cx, |page, cx| page.reveal(id, cx));
+        cx.notify();
     }
 
     /// Point the appearance page at one of its sections without hiding the others.
@@ -136,7 +170,7 @@ impl Settings {
         cx.notify();
     }
 
-    /// Point the agents page at one agent section; `None` selects the templates.
+    /// Point the agents page at one agent section; `None` selects the page top.
     fn select_agents(
         &mut self,
         section: Option<usize>,
@@ -167,10 +201,7 @@ impl Settings {
             Category::Appearance => appearance::Group::ALL
                 .into_iter()
                 .map(|item| {
-                    Button::new(item.id())
-                        .ghost()
-                        .justify_start()
-                        .label(item.title())
+                    navigation_button(item.id(), item.title())
                         .selected(selected && !searching && self.appearance_group == Some(item))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.select_appearance(Some(item), window, cx)
@@ -185,10 +216,7 @@ impl Settings {
                 .into_iter()
                 .enumerate()
                 .map(|(index, section)| {
-                    Button::new(gpui_kit::SharedString::from(section.id))
-                        .ghost()
-                        .justify_start()
-                        .label(section.title)
+                    navigation_button(section.id, section.title)
                         .selected(selected && !searching && self.agent_section == Some(index))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.select_agents(Some(index), window, cx)
@@ -242,11 +270,8 @@ impl Settings {
                             })),
                     )
                     .child(
-                        Button::new(category.id())
-                            .ghost()
+                        navigation_button(category.id(), category.title())
                             .flex_1()
-                            .justify_start()
-                            .label(category.title())
                             .selected(selected && (!expanded || !pointing_at_section || searching))
                             .on_click(cx.listener(move |this, _, window, cx| match category {
                                 Category::Appearance => this.select_appearance(None, window, cx),

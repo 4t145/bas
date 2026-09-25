@@ -18,6 +18,9 @@ fn about_reuses_a_window_and_opens_homepage(cx: &mut TestAppContext) {
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("about-window").visible());
+        let logo = window.find("about-dimensional-logo");
+        assert!(logo.visible());
+        assert_eq!(logo.bounds().size, gpui_kit::size(px(96.), px(96.)));
         window.click("about-home", cx);
     })
     .expect("about content");

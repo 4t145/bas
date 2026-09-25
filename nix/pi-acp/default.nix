@@ -1,3 +1,4 @@
+# Pinned fixture for local development and VM tests, not a BASR product package.
 {
   lib,
   buildNpmPackage,

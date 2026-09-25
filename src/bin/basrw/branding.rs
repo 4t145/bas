@@ -1,25 +1,16 @@
-use gpui_kit::{App, ImageSource, Img, Resource, Styled, component::Theme, img, px};
+use gpui_kit::{ImageSource, Img, Resource, Styled, img, px};
 
-use crate::assets::{OUTLINE, OUTLINE_LIGHT};
+use crate::assets::DIMENSIONAL;
 
 const LOGO_SIZE: f32 = 32.;
 
-/// The original v4 outline; callers set its display size without changing the artwork.
-pub(crate) fn logo(cx: &App) -> Img {
-    // `svg()` produces a tinted alpha mask, losing the supplied SVG's colors.
+/// Full-color artwork for large displays, independent of the theme's outline ink.
+pub(crate) fn dimensional_logo() -> Img {
     img(ImageSource::Resource(Resource::Embedded(
-        logo_path(cx).into(),
+        DIMENSIONAL.into(),
     )))
     .size(px(LOGO_SIZE))
     .flex_shrink_0()
-}
-
-fn logo_path(cx: &App) -> &'static str {
-    if Theme::global(cx).is_dark() {
-        OUTLINE_LIGHT
-    } else {
-        OUTLINE
-    }
 }
 
 #[cfg(all(test, feature = "gui-tests"))]

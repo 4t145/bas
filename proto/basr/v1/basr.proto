@@ -11,6 +11,8 @@ package basr.v1;
 service Basr {
   // Lists the agent backends this daemon can launch.
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  // Checks a saved configuration, optionally performing an isolated ACP handshake.
+  rpc CheckAgent(CheckAgentRequest) returns (CheckAgentResponse);
   // Starts a session on a backend.
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   // Lists non-archived sessions by default.
@@ -51,6 +53,32 @@ message Agent {
 }
 
 message ListAgentsRequest {}
+
+message CheckAgentRequest {
+  string agent = 1;
+  // Required serialized AgentSpec; must match the daemon's current configuration.
+  bytes expected_spec_json = 2;
+  bool connect = 3;
+}
+
+enum AgentCheckStatus {
+  AGENT_CHECK_STATUS_UNSPECIFIED = 0;
+  AGENT_CHECK_STATUS_MISSING_EXECUTABLE = 1;
+  AGENT_CHECK_STATUS_INSTALLED = 2;
+  AGENT_CHECK_STATUS_CONNECTED = 3;
+  AGENT_CHECK_STATUS_FAILED = 4;
+  AGENT_CHECK_STATUS_AUTHENTICATION_REQUIRED = 5;
+}
+
+message CheckAgentResponse {
+  AgentCheckStatus status = 1;
+  string message = 2;
+  string resolved_program = 3;
+  // Canonical ACP InitializeResponse, when initialize completed.
+  AcpPayload initialization = 4;
+  // Native AuthRequired error; may contain updated authMethods.
+  AcpPayload authentication_error = 5;
+}
 
 message ListAgentsResponse {
   repeated Agent agents = 1;

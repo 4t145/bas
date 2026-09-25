@@ -11,6 +11,244 @@ use crate::{
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+#[cfg(unix)]
+#[tokio::test]
+async fn connection_checks_are_short_lived_and_not_registry_sessions() {
+    use basr::service::{pb, pb::basr_server::Basr};
+    for (mode, status) in [
+        ("normal", pb::AgentCheckStatus::Connected),
+        ("hang_start", pb::AgentCheckStatus::Failed),
+        ("reject_session", pb::AgentCheckStatus::Failed),
+        ("auth_session", pb::AgentCheckStatus::AuthenticationRequired),
+        ("auth_data", pb::AgentCheckStatus::AuthenticationRequired),
+        ("probe_access", pb::AgentCheckStatus::Connected),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = Arc::new(fixture(mode, &directory, Duration::from_millis(500)));
+        let spec = registry
+            .catalog()
+            .spec(&"fixture".into())
+            .unwrap()
+            .as_ref()
+            .clone();
+        let service = crate::service::Service::new(registry.clone());
+        let check = |connect| {
+            tonic::Request::new(pb::CheckAgentRequest {
+                agent: "fixture".into(),
+                expected_spec_json: serde_json::to_vec(&spec).unwrap(),
+                connect,
+            })
+        };
+        assert_eq!(
+            service
+                .check_agent(check(false))
+                .await
+                .unwrap()
+                .into_inner()
+                .status(),
+            pb::AgentCheckStatus::Installed
+        );
+        assert!(!directory.path().join("pid").exists());
+        let response = service.check_agent(check(true)).await.unwrap().into_inner();
+        assert_eq!(response.status(), status, "{mode}: {}", response.message);
+        if mode.starts_with("auth_") {
+            let initialized: v1::InitializeResponse =
+                response.initialization.as_ref().unwrap().decode().unwrap();
+            assert_eq!(initialized.auth_methods.len(), 1);
+            assert!(matches!(
+                initialized.auth_methods[0],
+                v1::AuthMethod::Terminal(_)
+            ));
+            assert_eq!(initialized.auth_methods[0].id().to_string(), "login");
+            let error: v1::Error = response
+                .authentication_error
+                .as_ref()
+                .expect("native authentication error")
+                .decode()
+                .expect("ACP error");
+            if mode == "auth_data" {
+                assert_eq!(
+                    error.data.expect("auth methods")["authMethods"][0]["id"],
+                    "specific"
+                );
+            }
+        } else if mode == "normal" {
+            assert!(response.initialization.is_some());
+        }
+        assert!(!response.message.contains("SECRET"));
+        assert!(registry.list().await.is_empty());
+        assert!(!directory.path().join("pid.prompt").exists());
+        assert!(!directory.path().join("pid.write").exists());
+        wait_for_exit(&directory).await;
+        let mut stale = check(true).into_inner();
+        let mut changed = spec.clone();
+        changed.env.insert("SECRET".into(), "not allowed".into());
+        stale.expected_spec_json = serde_json::to_vec(&changed).unwrap();
+        assert_eq!(
+            service
+                .check_agent(tonic::Request::new(stale))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::FailedPrecondition
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn auth_required_startup_preserves_acp_details_without_creating_session() {
+    use basr::service::{pb, pb::basr_server::Basr};
+    for (mode, method) in [("auth_session", "login"), ("auth_data", "specific")] {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = Arc::new(fixture(mode, &directory, TIMEOUT));
+        let service = crate::service::Service::new(registry.clone());
+        let error = service
+            .create_session(tonic::Request::new(pb::CreateSessionRequest {
+                agent: "fixture".into(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unauthenticated);
+        let acp: v1::Error = serde_json::from_slice(error.details()).unwrap();
+        assert_eq!(acp.code, agent_client_protocol::ErrorCode::AuthRequired);
+        assert_eq!(acp.data.as_ref().unwrap()["authMethods"][0]["id"], method);
+        assert!(!error.message().contains("SECRET"));
+        assert!(registry.list().await.is_empty());
+        assert!(!directory.path().join("pid.prompt").exists());
+        wait_for_exit(&directory).await;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let registry = Arc::new(fixture("reject_session", &directory, TIMEOUT));
+    let Err(error) = registry.create(request()).await else {
+        panic!("rejected session unexpectedly started")
+    };
+    assert!(matches!(
+        error,
+        CreateError::Agent(crate::agent::Error::Acp(_))
+    ));
+    assert!(registry.list().await.is_empty());
+    wait_for_exit(&directory).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn executable_detection_is_fresh_and_honors_spec_path() {
+    use basr::service::{pb, pb::basr_server::Basr};
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("probe-tool");
+    let mut spec = AgentSpec::acp("tool", Command::new("probe-tool", []));
+    spec.env
+        .insert("PATH".into(), directory.path().to_str().unwrap().into());
+    let catalog = Catalog::from_specs([AgentSpec::embedded(), spec.clone()]).unwrap();
+    let service = crate::service::Service::new(Arc::new(Registry::new(
+        Arc::new(catalog),
+        Arc::new(LocalHost::default()),
+        Limits::default(),
+    )));
+    let count = || async {
+        service
+            .list_agents(tonic::Request::new(pb::ListAgentsRequest {}))
+            .await
+            .unwrap()
+            .into_inner()
+            .agents
+            .len()
+    };
+    assert_eq!(count().await, 1);
+    let embedded = service
+        .check_agent(tonic::Request::new(pb::CheckAgentRequest {
+            agent: "embedded".into(),
+            expected_spec_json: serde_json::to_vec(&AgentSpec::embedded()).unwrap(),
+            connect: false,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(embedded.status(), pb::AgentCheckStatus::Connected);
+    let missing = service
+        .check_agent(tonic::Request::new(pb::CheckAgentRequest {
+            agent: "tool".into(),
+            expected_spec_json: serde_json::to_vec(&spec).unwrap(),
+            connect: true,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(missing.status(), pb::AgentCheckStatus::MissingExecutable);
+    assert_eq!(
+        service
+            .check_agent(tonic::Request::new(pb::CheckAgentRequest {
+                agent: "tool".into(),
+                expected_spec_json: vec![],
+                connect: true,
+            }))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::InvalidArgument
+    );
+    std::fs::create_dir(&program).unwrap();
+    assert!(resolve_program(&spec).is_none());
+    std::fs::remove_dir(&program).unwrap();
+    std::fs::write(&program, "not an executable format").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(count().await, 1);
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(resolve_program(&spec), Some(program.clone()));
+    assert_eq!(count().await, 2);
+    assert!(check_connection(&spec, TIMEOUT).await.is_err());
+    spec.command.as_mut().unwrap().program = program.clone();
+    assert_eq!(resolve_program(&spec), Some(program.clone()));
+    std::fs::remove_file(&program).unwrap();
+    assert_eq!(count().await, 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn connection_check_catalog_change_and_cancellation_release_process() {
+    use basr::service::{pb, pb::basr_server::Basr};
+    for cancel in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = Arc::new(fixture(
+            "hang_start",
+            &directory,
+            Duration::from_millis(300),
+        ));
+        let catalog = registry.catalog();
+        let spec = catalog.spec(&"fixture".into()).unwrap();
+        let service = crate::service::Service::new(registry.clone());
+        let mut checking = Box::pin(service.check_agent(tonic::Request::new(
+            pb::CheckAgentRequest {
+                agent: "fixture".into(),
+                expected_spec_json: serde_json::to_vec(spec.as_ref()).unwrap(),
+                connect: true,
+            },
+        )));
+        tokio::select! {
+            result = &mut checking => panic!("check completed early: {result:?}"),
+            () = async {
+                while !directory.path().join("pid").exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            } => {}
+        }
+        if cancel {
+            drop(checking);
+        } else {
+            registry.replace_catalog(Arc::new(Catalog::with_defaults()));
+            assert_eq!(
+                checking.await.unwrap_err().code(),
+                tonic::Code::FailedPrecondition
+            );
+        }
+        wait_for_exit(&directory).await;
+        assert!(registry.list().await.is_empty());
+    }
+}
+
 fn update(value: serde_json::Value) -> v1::SessionUpdate {
     serde_json::from_value(value).expect("valid ACP fixture")
 }

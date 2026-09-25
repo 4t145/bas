@@ -19,6 +19,8 @@ use super::{
 };
 
 mod convert;
+mod probe;
+pub use probe::{CheckResult, check_connection, resolve_program};
 
 #[cfg(test)]
 mod tests;
@@ -78,7 +80,7 @@ impl DriverTrait for Driver {
                 request.spec.id.clone(),
                 "ACP initialization failed; see daemon logs",
             )
-        })?;
+        })??;
         Ok(Box::new(Session {
             agent: request.spec.id.clone(),
             connection: opened.connection,
@@ -104,7 +106,7 @@ struct Connection {
     updates: mpsc::Sender<Update>,
     host: Arc<dyn Host>,
     agent: AgentId,
-    ready: oneshot::Sender<Opened>,
+    ready: oneshot::Sender<Result<Opened, Error>>,
 }
 
 impl Connection {
@@ -124,6 +126,8 @@ impl Connection {
         let notification_state = Arc::clone(&state);
         let permission_host = Arc::clone(&host);
         let read_host = Arc::clone(&host);
+        let startup_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let failed = Arc::clone(&startup_failed);
         Client.builder().name(CLIENT_NAME)
         .on_receive_notification(async move |notification: v1::SessionNotification, _cx| {
             notification_state.lock().await.on_notification(notification, &updates).await
@@ -151,19 +155,49 @@ impl Connection {
             Ok(())
         }, on_receive_request!())
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            let initialized = cx.send_request(v1::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(Self::capabilities())).block_task().await?;
-            let created = cx.send_request(v1::NewSessionRequest::new(cwd)).block_task().await?;
+            let initialized = match cx.send_request(v1::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(Self::capabilities())).block_task().await {
+                Ok(value) => value,
+                Err(error) => {
+                    failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let _ = ready.send(Err(error.into()));
+                    return Ok(());
+                }
+            };
+            let created = match cx.send_request(v1::NewSessionRequest::new(cwd)).block_task().await {
+                Ok(value) => value,
+                Err(mut error) => {
+                    if error.code == agent_client_protocol::ErrorCode::AuthRequired
+                        && error.data.as_ref().and_then(|data| data.get("authMethods")).is_none()
+                        && !initialized.auth_methods.is_empty()
+                    {
+                        let methods = serde_json::to_value(&initialized.auth_methods)
+                            .expect("ACP auth methods serialize as JSON");
+                        match &mut error.data {
+                            Some(serde_json::Value::Object(data)) => { data.insert("authMethods".into(), methods); }
+                            _ => error.data = Some(serde_json::json!({"authMethods": methods})),
+                        }
+                    }
+                    failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let _ = ready.send(Err(error.into()));
+                    return Ok(());
+                }
+            };
             state.lock().await.session = Some(created.session_id.clone());
             tracing::debug!(agent = ?initialized.agent_info, acp_session = %created.session_id, "ACP session ready");
-            if ready.send(Opened { connection: cx.clone(), initialized, created }).is_err() { return Ok(()); }
+            if ready.send(Ok(Opened { connection: cx.clone(), initialized, created })).is_err() { return Ok(()); }
             cx.incoming_closed().await;
             Ok(())
         }).await.map_err(|error| Error::with_source(agent.clone(), "ACP connection failed", error))?;
-        Err(Error::backend(agent, "ACP connection closed"))
+        if startup_failed.load(std::sync::atomic::Ordering::Relaxed) {
+            Ok(())
+        } else {
+            Err(Error::backend(agent, "ACP connection closed"))
+        }
     }
 
     fn capabilities() -> v1::ClientCapabilities {
         v1::ClientCapabilities::new()
+            .auth(v1::AuthCapabilities::new().terminal(true))
             .fs(v1::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))

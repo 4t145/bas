@@ -23,6 +23,7 @@ const HISTORY_PAGE_SIZE: u32 = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+const REQUEST_TIMEOUT_MESSAGE: &str = "请求超时；操作可能已被服务端接收，请检查会话状态后再试。";
 
 pub(super) struct CreateSession {
     pub epoch: u64,
@@ -74,6 +75,10 @@ pub(super) enum Update {
     Created {
         epoch: u64,
         result: Result<SessionMeta, String>,
+    },
+    AuthenticationRequired {
+        epoch: u64,
+        agent: String,
     },
     Renamed {
         session: SessionId,
@@ -260,40 +265,56 @@ async fn catalog_loop(mut client: Client, updates: mpsc::Sender<Update>, refresh
 async fn request<T>(future: impl Future<Output = Result<T>>) -> Result<T, String> {
     match tokio::time::timeout(REQUEST_TIMEOUT, future).await {
         Ok(result) => result.map_err(|error| format!("{error:#}")),
-        Err(_) => Err("请求超时；操作可能已被服务端接收，请检查会话状态后再试。".into()),
+        Err(_) => Err(REQUEST_TIMEOUT_MESSAGE.into()),
     }
+}
+
+async fn create_session(client: &mut Client, form: CreateSession) -> Update {
+    let owner = Owner::current();
+    let request = pb::CreateSessionRequest {
+        agent: form.agent.clone(),
+        title: (!form.title.trim().is_empty()).then(|| form.title.trim().to_owned()),
+        cwd: (!form.cwd.trim().is_empty()).then(|| form.cwd.trim().to_owned()),
+        owner_user: Some(owner.user),
+        owner_host: Some(owner.host),
+    };
+    let response = tokio::time::timeout(REQUEST_TIMEOUT, client.create_session(request))
+        .await
+        .unwrap_or_else(|_| Err(tonic::Status::deadline_exceeded(REQUEST_TIMEOUT_MESSAGE)))
+        .map(tonic::Response::into_inner);
+    creation_result(form.epoch, form.agent, response)
+}
+
+fn creation_result(
+    epoch: u64,
+    agent: String,
+    response: Result<pb::CreateSessionResponse, tonic::Status>,
+) -> Update {
+    if let Err(status) = &response
+        && status.code() == Code::Unauthenticated
+        && basr::service::acp_error(status)
+            .is_ok_and(|error| error.code == acp::ErrorCode::AuthRequired)
+    {
+        return Update::AuthenticationRequired { epoch, agent };
+    }
+    let result = response
+        .map_err(|error| error.to_string())
+        .and_then(|response| {
+            response
+                .session
+                .ok_or_else(|| "basrd 未返回创建的会话".to_owned())
+        })
+        .and_then(|session| {
+            session
+                .try_into()
+                .map_err(|error: basr::service::Error| error.to_string())
+        });
+    Update::Created { epoch, result }
 }
 
 async fn execute(mut client: Client, command: Command) -> Update {
     match command {
-        Command::Create(form) => Update::Created {
-            epoch: form.epoch,
-            result: request(async {
-                let owner = Owner::current();
-                let cwd = if form.cwd.trim().is_empty() {
-                    None
-                } else {
-                    Some(form.cwd.trim().to_owned())
-                };
-                let response = client
-                    .create_session(pb::CreateSessionRequest {
-                        agent: form.agent,
-                        title: (!form.title.trim().is_empty())
-                            .then(|| form.title.trim().to_owned()),
-                        cwd,
-                        owner_user: Some(owner.user),
-                        owner_host: Some(owner.host),
-                    })
-                    .await?
-                    .into_inner();
-                response
-                    .session
-                    .context("basrd 未返回创建的会话")?
-                    .try_into()
-                    .map_err(Into::into)
-            })
-            .await,
-        },
+        Command::Create(form) => create_session(&mut client, form).await,
         Command::Rename { session, title } => {
             let result = request(async {
                 client

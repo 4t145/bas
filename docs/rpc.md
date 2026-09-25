@@ -66,6 +66,22 @@ let options = client.set_config_option_acp(
 `basr::service::acp_error` 解码原始 code、message、data。
 设置响应和通知由后端有序提交；调用者取消等待不会撤销已经执行的设置或丢失其状态更新。
 
+### 连接检测与待认证状态
+
+`CheckAgent` 只接受与 daemon 当前配置完全一致的 `expected_spec_json`；
+`connect=false` 仅检查程序，`connect=true` 执行有启动超时限制的 initialize/newSession。
+返回 `AuthenticationRequired` 表示 ACP 初始化成功、但 Agent 需要认证才能创建会话。
+此时 `initialization` 保留完整 `InitializeResponse`，包括 `authMethods`；
+`authentication_error` 保留原始 ACP 错误，错误中显式给出的 `data.authMethods` 优先，
+缺省时才使用初始化广告的方法。
+客户端不能将“已找到程序”“ACP 已连接”和“会话可用”混为同一状态。
+
+正常 `CreateSession` 的 ACP `AuthRequired` 映射为 gRPC `UNAUTHENTICATED`，
+原始 ACP 错误保存在 status details；缺少 `data.authMethods` 时补入初始化广告的认证方式。
+失败的启动不注册空会话、不发 prompt，所拥有的后端进程照常回收。
+终端认证能力 `auth.terminal` 与代理工具用的 `terminal` 执行能力不同；
+声明前者不会授权 Agent 在连接检测时执行主机终端命令。
+
 ### 快照与回合确认
 
 `Session.revision` 表示快照已包含的最后一条事件。客户端重放聊天内容时维护自己的

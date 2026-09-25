@@ -158,6 +158,8 @@ impl Workspace {
         if self.active.is_none() {
             return if self.creating {
                 "正在创建 thread…".into()
+            } else if self.authentication_required.is_some() {
+                "Agent 已连接，需要认证".into()
             } else if self.agents.is_empty() {
                 "basrd 暂未配置可用的 Agent".into()
             } else {
@@ -183,22 +185,24 @@ impl Workspace {
     pub(super) fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
         let sending = self.active.is_some_and(|id| self.sending(id));
         let cancelling = self.active.is_some_and(|id| self.cancelling.contains(&id));
+        let submit_hint = if self.working() || cancelling {
+            let hint = if cancelling {
+                "正在停止…"
+            } else {
+                "停止当前任务"
+            };
+            self.composer_error(cx)
+                .map(|error| format!("{error}\n\n{hint}"))
+                .unwrap_or_else(|| hint.into())
+        } else {
+            self.send_hint(cx)
+        };
         let submit = if self.working() || cancelling {
             Button::new("stop-turn")
                 .ghost()
                 .small()
                 .icon(IconName::Square)
                 .text_color(cx.theme().danger)
-                .tooltip({
-                    let hint = if cancelling {
-                        "正在停止…"
-                    } else {
-                        "停止当前任务"
-                    };
-                    self.composer_error(cx)
-                        .map(|error| format!("{error}\n\n{hint}"))
-                        .unwrap_or_else(|| hint.into())
-                })
                 .when(self.composer_error(cx).is_some(), |button| {
                     button.text_color(cx.theme().danger)
                 })
@@ -219,7 +223,6 @@ impl Workspace {
                 .when(!self.can_send(cx), |button| button.ghost())
                 .small()
                 .icon(IconName::Send)
-                .tooltip(self.send_hint(cx))
                 .when(self.composer_error(cx).is_some(), |button| {
                     button.text_color(cx.theme().danger)
                 })
@@ -336,22 +339,31 @@ impl Workspace {
                             )
                             .children(self.render_queue(cx))
                             .when(
+                                !self.compact && self.authentication_required.is_some(),
+                                |toolbar| toolbar.child(self.authentication_button(cx)),
+                            )
+                            .when(
                                 self.working() && !self.composer.read(cx).value().trim().is_empty(),
                                 |toolbar| {
-                                    toolbar.child(
+                                    toolbar.child(crate::tooltip::bounded(
+                                        "queue-message-hint",
                                         Button::new("queue-message")
                                             .ghost()
                                             .xsmall()
                                             .icon(IconName::Send)
-                                            .tooltip(self.send_hint(cx))
                                             .disabled(!self.can_send(cx))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.send_prompt(window, cx)
                                             })),
-                                    )
+                                        self.send_hint(cx),
+                                    ))
                                 },
                             )
-                            .child(submit.xsmall().flex_shrink_0()),
+                            .child(crate::tooltip::bounded(
+                                "submit-hint",
+                                submit.xsmall().flex_shrink_0(),
+                                submit_hint,
+                            )),
                     ),
             )
             .into_any_element()
@@ -502,45 +514,32 @@ impl Workspace {
                     .px_2()
                     .py_1()
                     .child(
-                        div()
-                            .id(SharedString::from(format!("tool-command-{id}")))
-                            .test_support()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .child(
-                                self.disclosure(
-                                    id,
-                                    &tool.title.split_whitespace().collect::<Vec<_>>().join(" "),
-                                    expanded,
-                                    index,
-                                    cx,
-                                )
-                                .w_full(),
-                            )
-                            .tooltip({
-                                let command = tool.title.clone();
-                                move |window, cx| {
-                                    let command = command.clone();
-                                    gpui_kit::component::tooltip::Tooltip::element(move |_, cx| {
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .max_w(px(560.))
-                                            .text_size(theme::content_font_size(cx))
-                                            .line_height(gpui_kit::relative(
-                                                theme::content_line_height(cx),
-                                            ))
-                                            .children(command.lines().map(|line| {
-                                                div().flex_shrink_0().child(
-                                                    if line.is_empty() { " " } else { line }
-                                                        .to_owned(),
-                                                )
-                                            }))
-                                    })
-                                    .build(window, cx)
-                                }
-                            }),
+                        crate::tooltip::bounded(
+                            SharedString::from(format!("tool-hint-{id}")),
+                            div()
+                                .id(SharedString::from(format!("tool-command-{id}")))
+                                .test_support()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(
+                                    self.disclosure(
+                                        id,
+                                        &tool
+                                            .title
+                                            .split_whitespace()
+                                            .collect::<Vec<_>>()
+                                            .join(" "),
+                                        expanded,
+                                        index,
+                                        cx,
+                                    )
+                                    .w_full(),
+                                ),
+                            tool.title.clone(),
+                        )
+                        .flex_1()
+                        .min_w_0(),
                     )
                     .child(
                         Button::new(SharedString::from(format!("status-{id}")))

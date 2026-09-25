@@ -1,5 +1,26 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn save_lock_releases_even_while_a_spawned_process_inherits_a_descriptor() {
+    let directory = tempfile::tempdir().expect("lock fixture");
+    let path = directory.path().join("settings.lock");
+    let file = fs::File::create(&path).expect("lock file");
+    file.try_lock().expect("first owner");
+    let inherited = file.try_clone().expect("inherited descriptor");
+    let guard = WriteLock(file);
+    let next = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("next writer");
+    assert!(matches!(next.try_lock(), Err(fs::TryLockError::WouldBlock)));
+    drop(guard);
+    next.try_lock()
+        .expect("prior save finished despite inherited descriptor");
+    drop(inherited);
+}
+
 fn fixture() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().expect("temporary settings directory");
     let store = Store {

@@ -183,6 +183,7 @@ macro_rules! acp_payload {
     )*};
 }
 acp_payload!(
+    crate::acp::Error,
     crate::acp::InitializeResponse,
     crate::acp::NewSessionResponse,
     crate::acp::AvailableCommandsUpdate,

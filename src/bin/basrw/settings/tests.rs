@@ -2,6 +2,44 @@ use super::*;
 use gpui_kit::{TestAppContext, size, test::TestWindowExt};
 
 #[gpui_kit::test]
+fn navigation_labels_fill_the_left_edge_for_categories_and_sections(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("settings fixture");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::init(None, Some(directory.path().join("settings.json")), cx);
+    });
+    let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        Root::new(cx.new(|cx| Settings::new(window, cx)), window, cx)
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        for id in [
+            "settings-appearance",
+            "settings-theme",
+            "settings-fonts",
+            "settings-layout",
+            "settings-agents",
+            "settings-agent-0",
+            "settings-agents-add",
+        ] {
+            let button = window.find(id);
+            let text = window.find(format!("{id}-text")).bounds();
+            let bounds = button.bounds();
+            assert_eq!(button.role(), Some(gpui_kit::Role::Button), "{id}");
+            assert!(button.label().is_some(), "native accessible name for {id}");
+            // A full-width text child prevents Button's internal centering
+            // from moving shorter labels to a different start position.
+            assert!(text.left() - bounds.left() <= window.rem_size(), "{id}");
+            assert!(text.size.width > bounds.size.width / 2., "{id}");
+        }
+        let theme = window.find("settings-theme-text").bounds();
+        let fonts = window.find("settings-fonts-text").bounds();
+        assert_eq!(theme.left(), fonts.left());
+    })
+    .expect("left aligned navigation labels");
+}
+
+#[gpui_kit::test]
 fn categories_are_nested_and_agent_drafts_survive_navigation(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("isolated unified settings");
     let path = directory.path().join("settings.json");
@@ -53,10 +91,12 @@ fn categories_are_nested_and_agent_drafts_survive_navigation(cx: &mut TestAppCon
         );
         window.click("settings-agents-add", cx);
         window.render_frame(cx);
-        window.click("agents-preset-codex", cx);
+        window.click("agents-add-custom", cx);
         window.render_frame(cx);
         window.click("settings-agents-add", cx);
         window.render_frame(cx);
+        window.click("agents-id", cx);
+        window.input("codex", cx);
         window.click("agents-program", cx);
         window.press("ctrl-a", cx);
         window.input("/test/codex-acp", cx);

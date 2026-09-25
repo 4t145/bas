@@ -153,11 +153,8 @@ impl Workspace {
                                                     .truncate()
                                                     .child(groups::name(directory.as_deref())),
                                             )
-                                            .tooltip(move |window, cx| {
-                                                gpui_kit::component::tooltip::Tooltip::new(
-                                                    path_label.clone(),
-                                                )
-                                                .build(window, cx)
+                                            .hoverable_tooltip(move |window, cx| {
+                                                crate::tooltip::view(path_label.clone(), window, cx)
                                             })
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if !this.collapsed_workspaces.remove(&directory) {

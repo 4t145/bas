@@ -90,9 +90,8 @@ impl Workspace {
                                 })
                             })
                             .when(!image, |chip| {
-                                chip.tooltip(move |window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(name.clone())
-                                        .build(window, cx)
+                                chip.hoverable_tooltip(move |window, cx| {
+                                    crate::tooltip::view(name.clone(), window, cx)
                                 })
                             })
                             .into_any_element();
