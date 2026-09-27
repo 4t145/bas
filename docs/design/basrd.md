@@ -16,7 +16,24 @@ basrd是一个各种agent服务的守护进程
 3. 在d层消除底层格式差异。
 
 ## 持久化
-真正的消息持久化应该交给被调用的agent方。当然我们自托管的嵌入式agent需要持久化，但是这个是agent侧需要考虑的事情，不是我们需要考虑的事情。可能只是集成的时候附带一下嵌入agent侧的配置即可。
+basrd负责保存会话元数据、ACP事件与生命周期事件，并提供按游标回放。Agent负责保存自身可继续执行的上下文；
+这两种持久化相互独立，只有记录而没有可恢复的Agent上下文时，不能把恢复出的会话宣称为可继续对话。
+
+`--storage memory|localdb`（环境变量`BASRD_STORAGE`）选择存储后端；默认`localdb`持久化
+新会话，`memory`用于明确不保留会话的部署。`localdb`使用Toasty的异步SQLite驱动及版本化迁移，
+`--localdb-path`（环境变量`BASRD_LOCALDB_PATH`）可覆盖数据库位置。
+两种后端遵循相同的事件顺序与提交契约：成功响应、提交确认和广播只能发生在存储提交成功之后。
+内存历史可以按容量淘汰；localdb历史由数据库持久保留，不因实时回放窗口淘汰而丢失。
+
+恢复已有会话时，basrd使用持久化的私有后端标识调用对应Agent的恢复操作，保持公开会话ID和事件游标不变。
+不支持恢复的Agent应返回明确错误，不应偷偷创建一个没有旧上下文的新会话。重启前正在执行的turn不能自动重放，
+否则可能重复执行外部工具。
+
+ACP恢复优先使用`session/load`；只支持`sessionCapabilities.resume`的Agent使用`session/resume`。按
+[ACP会话加载规范](https://agentclientprotocol.com/protocol/session-setup#loading-sessions)，`session/load`
+会在响应前回放旧消息，basrd应丢弃这些重复更新，仅在加载完成后接收新的更新；`session/resume`不回放旧消息。
+当前嵌入式后端是无状态Echo占位，不具有可持久化的多轮模型上下文。用户可见的事件历史不是未来真实嵌入式Agent
+上下文检查点的替代品。
 
 ## 对接linux生态
 ### systemd

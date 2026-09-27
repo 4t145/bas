@@ -42,6 +42,33 @@ impl DriverTrait for Driver {
     }
 
     async fn launch(&self, request: LaunchRequest) -> Result<Box<dyn AgentTrait>, Error> {
+        self.open(request, Startup::Create).await
+    }
+
+    async fn restore(
+        &self,
+        request: LaunchRequest,
+        acp_session_id: String,
+    ) -> Result<Box<dyn AgentTrait>, Error> {
+        self.open(request, Startup::Restore(acp_session_id.into()))
+            .await
+    }
+}
+
+enum Startup {
+    Create,
+    Restore(v1::SessionId),
+}
+
+impl Driver {
+    /// # Errors
+    /// Returns the ACP initialization or session setup failure without creating
+    /// a replacement session for a failed restore.
+    async fn open(
+        &self,
+        request: LaunchRequest,
+        startup: Startup,
+    ) -> Result<Box<dyn AgentTrait>, Error> {
         let (corrupt, mut corruption) = mpsc::channel(1);
         let transport =
             convert::agent(request.spec.as_ref())?.with_debug(move |line, direction| {
@@ -67,6 +94,7 @@ impl DriverTrait for Driver {
             host: request.host,
             agent: request.spec.id.clone(),
             ready,
+            startup,
         };
         let agent = request.spec.id.clone();
         let task = spawn_worker(request.updates.clone(), async move {
@@ -107,6 +135,7 @@ struct Connection {
     host: Arc<dyn Host>,
     agent: AgentId,
     ready: oneshot::Sender<Result<Opened, Error>>,
+    startup: Startup,
 }
 
 impl Connection {
@@ -122,12 +151,14 @@ impl Connection {
             host,
             agent,
             ready,
+            startup,
         } = self;
         let notification_state = Arc::clone(&state);
         let permission_host = Arc::clone(&host);
         let read_host = Arc::clone(&host);
         let startup_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let failed = Arc::clone(&startup_failed);
+        let startup_agent = agent.clone();
         Client.builder().name(CLIENT_NAME)
         .on_receive_notification(async move |notification: v1::SessionNotification, _cx| {
             notification_state.lock().await.on_notification(notification, &updates).await
@@ -163,22 +194,52 @@ impl Connection {
                     return Ok(());
                 }
             };
-            let created = match cx.send_request(v1::NewSessionRequest::new(cwd)).block_task().await {
+            let opened_session = match startup {
+                Startup::Create => cx.send_request(v1::NewSessionRequest::new(cwd))
+                    .block_task().await.map_err(Error::Acp),
+                Startup::Restore(id) => {
+                    // ACP requires session/load to finish history replay before its
+                    // response; session/resume does not replay history.
+                    // https://agentclientprotocol.com/protocol/session-setup#loading-sessions
+                    state.lock().await.session = Some(id.clone());
+                    if initialized.agent_capabilities.load_session {
+                        cx.send_request(v1::LoadSessionRequest::new(id.clone(), cwd))
+                            .block_task().await.map(|loaded| {
+                                v1::NewSessionResponse::new(id)
+                                    .modes(loaded.modes)
+                                    .config_options(loaded.config_options)
+                                    .meta(loaded.meta)
+                            }).map_err(Error::Acp)
+                    } else if initialized.agent_capabilities.session_capabilities.resume.is_some() {
+                        cx.send_request(v1::ResumeSessionRequest::new(id.clone(), cwd))
+                            .block_task().await.map(|resumed| {
+                                v1::NewSessionResponse::new(id)
+                                    .modes(resumed.modes)
+                                    .config_options(resumed.config_options)
+                                    .meta(resumed.meta)
+                            }).map_err(Error::Acp)
+                    } else {
+                        Err(Error::Unsupported { agent: startup_agent.clone(), operation: "session/load or session/resume" })
+                    }
+                }
+            };
+            let created = match opened_session {
                 Ok(value) => value,
                 Err(mut error) => {
-                    if error.code == agent_client_protocol::ErrorCode::AuthRequired
-                        && error.data.as_ref().and_then(|data| data.get("authMethods")).is_none()
+                    if let Error::Acp(ref mut acp_error) = error
+                        && acp_error.code == agent_client_protocol::ErrorCode::AuthRequired
+                        && acp_error.data.as_ref().and_then(|data| data.get("authMethods")).is_none()
                         && !initialized.auth_methods.is_empty()
                     {
                         let methods = serde_json::to_value(&initialized.auth_methods)
                             .expect("ACP auth methods serialize as JSON");
-                        match &mut error.data {
+                        match &mut acp_error.data {
                             Some(serde_json::Value::Object(data)) => { data.insert("authMethods".into(), methods); }
-                            _ => error.data = Some(serde_json::json!({"authMethods": methods})),
+                            _ => acp_error.data = Some(serde_json::json!({"authMethods": methods})),
                         }
                     }
                     failed.store(true, std::sync::atomic::Ordering::Relaxed);
-                    let _ = ready.send(Err(error.into()));
+                    let _ = ready.send(Err(error));
                     return Ok(());
                 }
             };
@@ -243,6 +304,10 @@ impl AgentTrait for Session {
     }
     fn session_info(&self) -> Option<v1::NewSessionResponse> {
         Some(self.created.clone())
+    }
+
+    fn acp_session_id(&self) -> Option<String> {
+        Some(self.acp_session.to_string())
     }
 
     fn set_config_option(

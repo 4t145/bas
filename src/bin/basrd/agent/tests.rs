@@ -5,7 +5,7 @@ use super::{
     AgentSpec, Catalog, CatalogError, Command, Host, Kind, LocalHost, PermissionKind,
     PermissionOutcome, PermissionPolicy, PermissionRequest,
 };
-use basr::model::{AgentId, SessionId};
+use basr::model::{AgentId, SessionId, TurnId};
 
 #[test]
 fn parses_agent_kinds() {
@@ -73,6 +73,67 @@ async fn catalog_reports_unknown_backends() {
         .expect("the backend is not configured");
 
     assert!(error.to_string().contains("not configured"));
+}
+
+#[tokio::test]
+async fn embedded_restore_reuses_public_identity_and_can_prompt() {
+    use super::{TurnUpdate, Update, driver::Driver as _};
+
+    let id = SessionId::new();
+    let cwd = std::env::current_dir().expect("working directory exists");
+    let (updates, mut inbox) = tokio::sync::mpsc::channel(16);
+    let mut agent = super::embedded::Driver::new()
+        .restore(
+            super::LaunchRequest {
+                session: id,
+                spec: Arc::new(AgentSpec::embedded()),
+                cwd: cwd.clone(),
+                host: Arc::new(LocalHost::default()),
+                updates,
+            },
+            String::new(),
+        )
+        .await
+        .expect("stateless echo can reopen");
+    assert!(agent.acp_session_id().is_none());
+    let turn = TurnId::new();
+    agent
+        .prompt(
+            turn,
+            acp::PromptRequest::new("ignored", vec!["after restart".into()]),
+        )
+        .expect("echo accepts prompt");
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut reply = String::new();
+        loop {
+            match inbox.recv().await.expect("update") {
+                Update::Turn {
+                    turn: actual,
+                    update: TurnUpdate::Acp(acp::SessionUpdate::AgentMessageChunk(chunk)),
+                } => {
+                    assert_eq!(actual, turn);
+                    let acp::ContentBlock::Text(text) = chunk.content else {
+                        panic!("expected text echo");
+                    };
+                    reply.push_str(&text.text);
+                }
+                Update::Turn {
+                    turn: actual,
+                    update: TurnUpdate::Finished(Ok(_)),
+                } => {
+                    assert_eq!(actual, turn);
+                    break reply;
+                }
+                other => panic!("unexpected echo update: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("echo replies");
+    assert!(reply.contains(&id.to_string()));
+    assert!(reply.contains(&cwd.display().to_string()));
+    assert!(reply.contains("after restart"));
+    agent.shutdown().await;
 }
 
 #[tokio::test]

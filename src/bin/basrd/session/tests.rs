@@ -1,5 +1,6 @@
 use basr::acp;
 mod archive;
+mod recovery;
 
 use std::{
     num::NonZeroUsize,
@@ -85,7 +86,7 @@ impl Agent for PendingAgent {
     async fn shutdown(&mut self) {}
 }
 
-fn pending_session(limits: Limits) -> Arc<Session> {
+async fn pending_session(limits: Limits) -> Arc<Session> {
     let session = Session::new(
         SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current()),
         limits,
@@ -95,6 +96,7 @@ fn pending_session(limits: Limits) -> Arc<Session> {
     session.listen(inbox);
     session
         .ready(Box::new(PendingAgent { _updates: updates }))
+        .await
         .expect("session starts");
     session
 }
@@ -132,23 +134,32 @@ async fn startup_overlay_survives_content_eviction_before_ready() {
         },
         None,
     );
-    session.apply(Update::Acp(
-        serde_json::from_value(serde_json::json!({
-            "sessionUpdate": "config_option_update",
-            "configOptions": [{
-                "id": "enabled", "name": "Enabled", "type": "boolean", "currentValue": true
-            }]
-        }))
-        .expect("startup config"),
-    ));
-    session.apply(Update::Acp(acp::SessionUpdate::CurrentModeUpdate(
-        acp::CurrentModeUpdate::new("code"),
-    )));
-    session.apply(Update::Acp(acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("startup content evicts configuration".into()),
-    )));
+    session
+        .apply(Update::Acp(
+            serde_json::from_value(serde_json::json!({
+                "sessionUpdate": "config_option_update",
+                "configOptions": [{
+                    "id": "enabled", "name": "Enabled", "type": "boolean", "currentValue": true
+                }]
+            }))
+            .expect("startup config"),
+        ))
+        .await;
+    session
+        .apply(Update::Acp(acp::SessionUpdate::CurrentModeUpdate(
+            acp::CurrentModeUpdate::new("code"),
+        )))
+        .await;
+    session
+        .apply(Update::Acp(acp::SessionUpdate::AgentMessageChunk(
+            acp::ContentChunk::new("startup content evicts configuration".into()),
+        )))
+        .await;
     assert_eq!(session.page(None, 10).expect("history").events.len(), 1);
-    session.ready(Box::new(InitialSnapshot)).expect("ready");
+    session
+        .ready(Box::new(InitialSnapshot))
+        .await
+        .expect("ready");
     let meta = session.meta();
     let snapshot = serde_json::to_value(meta.acp.expect("ACP state")).expect("JSON");
     assert_eq!(snapshot["configOptions"][0]["currentValue"], true);
@@ -158,9 +169,11 @@ async fn startup_overlay_survives_content_eviction_before_ready() {
         session.page(None, 1).expect("history").events[0].cursor
     );
     assert_eq!(
-        session.visit_history(Some(meta.revision.next()), 1, |_, _| panic!(
-            "future cursor"
-        )),
+        session
+            .visit_history(Some(meta.revision.next()), 1, |_, _| panic!(
+                "future cursor"
+            ))
+            .await,
         Err(HistoryError::Future {
             requested: meta.revision.next(),
             latest: meta.revision
@@ -224,10 +237,11 @@ fn ring_pages_and_reports_eviction_with_sparse_cursors() {
 
 #[tokio::test]
 async fn resume_replays_all_retained_events_then_follows_live() {
-    let session = pending_session(Limits::default());
+    let session = pending_session(Limits::default()).await;
     for i in 0..5 {
         session
             .set_title(&format!("title {i}"))
+            .await
             .expect("rename succeeds");
     }
     let mut attachment = session
@@ -235,6 +249,7 @@ async fn resume_replays_all_retained_events_then_follows_live() {
             cursor: Some(Cursor::START),
             replay: 2,
         })
+        .await
         .expect("cursor retained");
     assert_eq!(attachment.cursor(), Cursor::START);
     for expected in 1..=6 {
@@ -242,7 +257,7 @@ async fn resume_replays_all_retained_events_then_follows_live() {
         assert_eq!(event.cursor.raw(), expected);
         assert_eq!(attachment.cursor(), event.cursor);
     }
-    session.set_title("live").expect("rename succeeds");
+    session.set_title("live").await.expect("rename succeeds");
     assert_eq!(attachment.recv().await.expect("live event").cursor.raw(), 7);
 }
 
@@ -251,15 +266,21 @@ async fn expired_and_future_cursors_are_explicit_errors() {
     let session = pending_session(Limits {
         history_capacity: NonZeroUsize::new(2).expect("nonzero"),
         ..Limits::default()
-    });
+    })
+    .await;
     for i in 0..5 {
-        session.set_title(&format!("title {i}")).expect("rename");
+        session
+            .set_title(&format!("title {i}"))
+            .await
+            .expect("rename");
     }
     assert!(matches!(
-        session.attach(AttachOptions {
-            cursor: Some(Cursor::START),
-            replay: 0
-        }),
+        session
+            .attach(AttachOptions {
+                cursor: Some(Cursor::START),
+                replay: 0
+            })
+            .await,
         Err(HistoryError::Expired { .. })
     ));
     assert!(matches!(
@@ -270,25 +291,30 @@ async fn expired_and_future_cursors_are_explicit_errors() {
         session.page(None, 10).expect("current window").events.len(),
         2
     );
-    let mut live = session.attach(options(0)).expect("live subscription");
-    session.set_title("next").expect("rename");
+    let mut live = session.attach(options(0)).await.expect("live subscription");
+    session.set_title("next").await.expect("rename");
     assert_eq!(live.recv().await.expect("live event").cursor.raw(), 7);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_publication_matches_history_and_metadata_order() {
-    let session = pending_session(Limits::default());
-    let mut live = session.attach(options(0)).expect("attach");
-    std::thread::scope(|scope| {
-        for worker in 0..4 {
-            let session = &session;
-            scope.spawn(move || {
-                for i in 0..100 {
-                    session.set_title(&format!("{worker}/{i}")).expect("rename");
-                }
-            });
-        }
-    });
+    let session = pending_session(Limits::default()).await;
+    let mut live = session.attach(options(0)).await.expect("attach");
+    let mut workers = Vec::new();
+    for worker in 0..4 {
+        let session = Arc::clone(&session);
+        workers.push(tokio::spawn(async move {
+            for i in 0..100 {
+                session
+                    .set_title(&format!("{worker}/{i}"))
+                    .await
+                    .expect("rename");
+            }
+        }));
+    }
+    for worker in workers {
+        worker.await.expect("writer completed");
+    }
     let history = session
         .page(Some(Cursor::from_raw(1)), 500)
         .expect("history")
@@ -310,11 +336,11 @@ async fn concurrent_publication_matches_history_and_metadata_order() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_and_live_handoff_neither_duplicate_nor_skip_events() {
-    let session = pending_session(Limits::default());
+    let session = pending_session(Limits::default()).await;
     let writer = Arc::clone(&session);
     let task = tokio::spawn(async move {
         for i in 0..300 {
-            writer.set_title(&format!("{i}")).expect("rename");
+            writer.set_title(&format!("{i}")).await.expect("rename");
             tokio::task::yield_now().await;
         }
     });
@@ -323,6 +349,7 @@ async fn snapshot_and_live_handoff_neither_duplicate_nor_skip_events() {
             cursor: Some(Cursor::START),
             replay: 1,
         })
+        .await
         .expect("attach");
     for expected in 1..=301 {
         let event = tokio::time::timeout(TIMEOUT, attachment.recv())
@@ -336,35 +363,43 @@ async fn snapshot_and_live_handoff_neither_duplicate_nor_skip_events() {
 
 #[tokio::test]
 async fn overlapping_turns_do_not_commit_rejected_prompts() {
-    let session = pending_session(Limits::default());
+    let session = pending_session(Limits::default()).await;
     assert!(matches!(
-        session.prompt(Vec::new()),
+        session.prompt(Vec::new()).await,
         Err(SessionError::EmptyPrompt)
     ));
     let first = session
         .prompt(vec![ContentBlock::from("first")])
+        .await
         .expect("first accepted");
     assert_eq!(session.meta().status, SessionStatus::Working);
     assert!(matches!(
-        session.prompt(vec![ContentBlock::from("rejected")]),
+        session.prompt(vec![ContentBlock::from("rejected")]).await,
         Err(SessionError::Busy)
     ));
-    session.apply(Update::Turn {
-        turn: first,
-        update: TurnUpdate::Finished(Ok(acp::PromptResponse::new(StopReason::EndTurn))),
-    });
+    session
+        .apply(Update::Turn {
+            turn: first,
+            update: TurnUpdate::Finished(Ok(acp::PromptResponse::new(StopReason::EndTurn))),
+        })
+        .await;
     let second = session
         .prompt(vec![ContentBlock::from("second")])
+        .await
         .expect("second accepted");
-    session.apply(Update::Turn {
-        turn: first,
-        update: TurnUpdate::Finished(Ok(acp::PromptResponse::new(StopReason::Cancelled))),
-    });
+    session
+        .apply(Update::Turn {
+            turn: first,
+            update: TurnUpdate::Finished(Ok(acp::PromptResponse::new(StopReason::Cancelled))),
+        })
+        .await;
     assert_eq!(session.meta().status, SessionStatus::Working);
-    session.apply(Update::Turn {
-        turn: second,
-        update: TurnUpdate::Finished(Ok(acp::PromptResponse::new(StopReason::EndTurn))),
-    });
+    session
+        .apply(Update::Turn {
+            turn: second,
+            update: TurnUpdate::Finished(Ok(acp::PromptResponse::new(StopReason::EndTurn))),
+        })
+        .await;
     let texts: Vec<_> = session
         .page(None, 100)
         .expect("history")
@@ -383,11 +418,12 @@ async fn overlapping_turns_do_not_commit_rejected_prompts() {
 
 #[tokio::test]
 async fn shutdown_is_terminal_and_closes_existing_and_new_attachments() {
-    let session = pending_session(Limits::default());
+    let session = pending_session(Limits::default()).await;
     let turn = session
         .prompt(vec![ContentBlock::from("first")])
+        .await
         .expect("prompt");
-    let mut attachment = session.attach(options(0)).expect("attach");
+    let mut attachment = session.attach(options(0)).await.expect("attach");
     session.shutdown().await;
     assert_eq!(finish(&mut attachment).await, Ok(StopReason::Cancelled));
     assert!(matches!(
@@ -400,17 +436,20 @@ async fn shutdown_is_terminal_and_closes_existing_and_new_attachments() {
     assert_eq!(
         session
             .attach(options(0))
+            .await
             .expect("terminal attachment")
             .recv()
             .await,
         Err(AttachError::Closed)
     );
-    session.apply(Update::Turn {
-        turn,
-        update: TurnUpdate::Finished(Ok(acp::PromptResponse::new(StopReason::EndTurn))),
-    });
+    session
+        .apply(Update::Turn {
+            turn,
+            update: TurnUpdate::Finished(Ok(acp::PromptResponse::new(StopReason::EndTurn))),
+        })
+        .await;
     assert!(matches!(
-        session.prompt(vec![ContentBlock::from("late")]),
+        session.prompt(vec![ContentBlock::from("late")]).await,
         Err(SessionError::Inactive(SessionStatus::Stopped))
     ));
     assert_eq!(session.meta().status, SessionStatus::Stopped);
@@ -419,12 +458,15 @@ async fn shutdown_is_terminal_and_closes_existing_and_new_attachments() {
 
 #[tokio::test]
 async fn backend_failure_is_replayable_and_terminal() {
-    let session = pending_session(Limits::default());
+    let session = pending_session(Limits::default()).await;
     session
         .prompt(vec![ContentBlock::from("first")])
+        .await
         .expect("prompt");
-    let mut attachment = session.attach(options(0)).expect("attach");
-    session.apply(Update::Failed("connection lost".into()));
+    let mut attachment = session.attach(options(0)).await.expect("attach");
+    session
+        .apply(Update::Failed("connection lost".into()))
+        .await;
     assert_eq!(finish(&mut attachment).await, Err("connection lost".into()));
     assert_eq!(
         attachment.recv().await.expect("failure event").kind,
@@ -451,10 +493,11 @@ async fn slow_live_subscribers_receive_lag_errors() {
     let session = pending_session(Limits {
         live_capacity: NonZeroUsize::new(2).expect("nonzero"),
         ..Limits::default()
-    });
-    let mut attachment = session.attach(options(0)).expect("attach");
+    })
+    .await;
+    let mut attachment = session.attach(options(0)).await.expect("attach");
     for i in 0..10 {
-        session.set_title(&format!("{i}")).expect("rename");
+        session.set_title(&format!("{i}")).await.expect("rename");
     }
     assert!(matches!(
         attachment.recv().await,
@@ -467,9 +510,10 @@ async fn detaching_preserves_the_turn_and_removing_releases_the_session() {
     let (completions, mut completed) = mpsc::channel(1);
     let registry = registry().with_completions(completions);
     let session = registry.create(request()).await.expect("create");
-    let attachment = session.attach(options(0)).expect("attach");
+    let attachment = session.attach(options(0)).await.expect("attach");
     session
         .prompt(vec![ContentBlock::from("hello")])
+        .await
         .expect("prompt");
     drop(attachment);
     assert_eq!(session.subscriber_count(), 0);
@@ -499,9 +543,10 @@ async fn completion_snapshots_do_not_retain_sessions() {
     let (completions, mut receiver) = mpsc::channel(1);
     let registry = registry().with_completions(completions);
     let session = registry.create(request()).await.expect("create");
-    let mut attachment = session.attach(options(0)).expect("attach");
+    let mut attachment = session.attach(options(0)).await.expect("attach");
     session
         .prompt(vec![ContentBlock::from("hello")])
+        .await
         .expect("prompt");
     finish(&mut attachment).await.expect("turn succeeds");
     let weak = Arc::downgrade(&session);
@@ -529,13 +574,17 @@ async fn foreground_viewers_suppress_only_their_session_and_release_without_reta
     let first_window = active.foreground();
     let second_window = active.foreground();
     drop(first_window);
-    let mut history = active.attach(options(0)).expect("history");
+    let mut history = active.attach(options(0)).await.expect("history");
     active
         .prompt(vec!["hello".into()])
+        .await
         .expect("foreground turn");
     finish(&mut history).await.expect("turn finishes normally");
     assert!(receiver.try_recv().is_err());
-    other.prompt(vec!["hello".into()]).expect("background turn");
+    other
+        .prompt(vec!["hello".into()])
+        .await
+        .expect("background turn");
     assert_eq!(
         tokio::time::timeout(TIMEOUT, receiver.recv())
             .await
@@ -546,7 +595,10 @@ async fn foreground_viewers_suppress_only_their_session_and_release_without_reta
         other.id()
     );
     drop(second_window);
-    active.prompt(vec!["hello".into()]).expect("unfocused turn");
+    active
+        .prompt(vec!["hello".into()])
+        .await
+        .expect("unfocused turn");
     assert_eq!(
         tokio::time::timeout(TIMEOUT, receiver.recv())
             .await
@@ -569,7 +621,7 @@ async fn foreground_viewers_suppress_only_their_session_and_release_without_reta
 async fn registry_shutdown_closes_streams_and_rejects_new_sessions() {
     let registry = registry();
     let session = registry.create(request()).await.expect("create");
-    let mut attachment = session.attach(options(0)).expect("attach");
+    let mut attachment = session.attach(options(0)).await.expect("attach");
     registry.shutdown().await;
     assert_eq!(session.meta().status, SessionStatus::Stopped);
     attachment.recv().await.expect("stop event");
@@ -652,16 +704,22 @@ async fn command_catalog_survives_history_eviction_and_can_be_cleared() {
     let session = pending_session(Limits {
         history_capacity: NonZeroUsize::new(2).expect("nonzero"),
         ..Limits::default()
-    });
+    })
+    .await;
     let commands = acp::AvailableCommandsUpdate::new(vec![acp::AvailableCommand::new(
         "review",
         "Review files",
     )]);
-    session.apply(Update::Acp(acp::SessionUpdate::AvailableCommandsUpdate(
-        commands.clone(),
-    )));
+    session
+        .apply(Update::Acp(acp::SessionUpdate::AvailableCommandsUpdate(
+            commands.clone(),
+        )))
+        .await;
     for index in 0..3 {
-        session.set_title(&format!("{index}")).expect("rename");
+        session
+            .set_title(&format!("{index}"))
+            .await
+            .expect("rename");
     }
     assert!(
         session
@@ -675,9 +733,11 @@ async fn command_catalog_survives_history_eviction_and_can_be_cleared() {
             ))
     );
     assert_eq!(session.meta().available_commands, Some(commands));
-    session.apply(Update::Acp(acp::SessionUpdate::AvailableCommandsUpdate(
-        acp::AvailableCommandsUpdate::new(vec![]),
-    )));
+    session
+        .apply(Update::Acp(acp::SessionUpdate::AvailableCommandsUpdate(
+            acp::AvailableCommandsUpdate::new(vec![]),
+        )))
+        .await;
     assert!(
         session
             .meta()

@@ -1,15 +1,445 @@
 use std::{sync::Arc, time::Duration};
 
 use basr::model::{ContentBlock, Owner, SessionStatus};
+#[cfg(unix)]
+use futures::future::BoxFuture;
 use serde_json::json;
 
 use super::*;
+#[cfg(unix)]
+use crate::storage::Storage;
 use crate::{
     agent::{AgentSpec, Catalog, Command, LocalHost},
     session::{AttachError, AttachOptions, CreateError, CreateRequest, Limits, Registry},
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+
+#[cfg(unix)]
+struct RejectPromptStore {
+    inner: crate::storage::Memory,
+}
+
+#[cfg(unix)]
+impl crate::storage::Storage for RejectPromptStore {
+    fn create(
+        &self,
+        meta: basr::model::SessionMeta,
+        resume: Option<crate::storage::ResumeData>,
+    ) -> BoxFuture<'_, Result<(), crate::storage::Error>> {
+        self.inner.create(meta, resume)
+    }
+
+    fn commit<'a>(
+        &'a self,
+        meta: basr::model::SessionMeta,
+        events: &'a [basr::model::Event],
+    ) -> BoxFuture<'a, Result<(), crate::storage::Error>> {
+        Box::pin(async move {
+            if events
+                .iter()
+                .any(|event| matches!(event.kind, basr::model::EventKind::TurnStarted { .. }))
+            {
+                return Err(crate::storage::Error::InvalidCommit(
+                    "injected prompt commit failure",
+                ));
+            }
+            self.inner.commit(meta, events).await
+        })
+    }
+
+    fn save_resume(
+        &self,
+        id: SessionId,
+        resume: Option<crate::storage::ResumeData>,
+    ) -> BoxFuture<'_, Result<(), crate::storage::Error>> {
+        self.inner.save_resume(id, resume)
+    }
+
+    fn load(
+        &self,
+        id: SessionId,
+    ) -> BoxFuture<'_, Result<Option<crate::storage::StoredSession>, crate::storage::Error>> {
+        self.inner.load(id)
+    }
+
+    fn list(&self) -> BoxFuture<'_, Result<Vec<basr::model::SessionMeta>, crate::storage::Error>> {
+        self.inner.list()
+    }
+
+    fn page(
+        &self,
+        id: SessionId,
+        after: Option<basr::model::Cursor>,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<crate::storage::Page, crate::storage::Error>> {
+        self.inner.page(id, after, limit)
+    }
+
+    fn tail(
+        &self,
+        id: SessionId,
+        count: usize,
+    ) -> BoxFuture<'_, Result<Vec<basr::model::Event>, crate::storage::Error>> {
+        self.inner.tail(id, count)
+    }
+
+    fn delete(&self, id: SessionId) -> BoxFuture<'_, Result<bool, crate::storage::Error>> {
+        self.inner.delete(id)
+    }
+
+    fn is_persistent(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_prompt_commit_never_dispatches_to_the_acp_agent() {
+    use std::num::NonZeroUsize;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let storage = Arc::new(RejectPromptStore {
+        inner: crate::storage::Memory::new(NonZeroUsize::new(64).expect("nonzero capacity")),
+    });
+    let registry = Registry::with_storage(
+        Arc::new(Catalog::from_specs([fixture_spec("load", &directory)]).expect("catalog")),
+        Arc::new(LocalHost::default()),
+        Limits::default(),
+        Arc::clone(&storage) as Arc<dyn Storage>,
+    );
+    let session = registry.create(request()).await.expect("create session");
+    let before = session.meta().revision;
+    assert!(matches!(
+        session
+            .accept_prompt(v1::PromptRequest::new(
+                session.id().to_string(),
+                vec!["must not run".into()],
+            ))
+            .await,
+        Err(crate::session::SessionError::Storage(_))
+    ));
+    assert_eq!(session.meta().revision, before);
+    assert!(!directory.path().join("pid.prompt").exists());
+    assert_eq!(
+        storage
+            .load(session.id())
+            .await
+            .expect("load")
+            .expect("saved session")
+            .meta
+            .revision,
+        before
+    );
+    registry.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn persisted_acp_session_loads_before_continuing_without_duplicating_history() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::storage::LocalDb;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("private database directory");
+    let database = directory.path().join("sessions.sqlite");
+    let open = || async {
+        Registry::with_storage(
+            Arc::new(
+                Catalog::from_specs([fixture_spec("context", &directory)])
+                    .expect("fixture catalog"),
+            ),
+            Arc::new(LocalHost::default()),
+            Limits::default(),
+            Arc::new(LocalDb::open(&database).await.expect("open storage")),
+        )
+    };
+
+    let registry = open().await;
+    let session = registry.create(request()).await.expect("create");
+    let public_id = session.id();
+    let receipt = session
+        .accept_prompt(v1::PromptRequest::new(
+            public_id.to_string(),
+            vec!["first".into()],
+        ))
+        .await
+        .expect("first prompt");
+    let mut attachment = session
+        .try_attach(AttachOptions {
+            replay: 0,
+            cursor: Some(receipt.cursor),
+        })
+        .await
+        .expect("attach first turn");
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if matches!(
+                attachment.recv().await.expect("event").kind,
+                basr::model::EventKind::TurnFinished { .. }
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("first turn finishes");
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("pid.context")).expect("agent context"),
+        "1\n"
+    );
+    let before = session.meta().revision;
+    registry.shutdown().await;
+    drop(attachment);
+    drop(session);
+    drop(registry);
+    let stored = LocalDb::open(&database).await.expect("reopen storage");
+    assert_eq!(
+        stored
+            .load(public_id)
+            .await
+            .expect("load")
+            .expect("saved session")
+            .resume
+            .expect("resume data")
+            .acp_session_id()
+            .expect("ACP ID"),
+        "fixture"
+    );
+    drop(stored);
+    std::fs::remove_file(directory.path().join("pid.new")).expect("clear first session/new marker");
+
+    let mut registry = open().await;
+    registry.recover().await.expect("rebuild registry");
+    let session = registry.get(public_id).await.expect("same public session");
+    assert_eq!(session.meta().revision, before);
+    registry
+        .ensure_restored(&session)
+        .await
+        .expect("load original ACP session");
+    assert!(
+        !directory.path().join("pid.new").exists(),
+        "restore must not create another ACP session"
+    );
+    assert!(directory.path().join("pid.load").exists());
+    assert_eq!(
+        session.meta().revision,
+        before,
+        "session/load history replay is not appended a second time"
+    );
+    let receipt = session
+        .accept_prompt(v1::PromptRequest::new(
+            public_id.to_string(),
+            vec!["second".into()],
+        ))
+        .await
+        .expect("continue original session");
+    let mut resumed = session
+        .try_attach(AttachOptions {
+            replay: 0,
+            cursor: Some(receipt.cursor),
+        })
+        .await
+        .expect("attach second turn");
+    let mut continued_context = false;
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let event = resumed.recv().await.expect("event");
+            if matches!(
+                event.kind,
+                basr::model::EventKind::Acp(v1::SessionUpdate::AgentMessageChunk(_))
+            ) && serde_json::to_string(&event.kind)
+                .expect("event JSON")
+                .contains("turn 2 after 1")
+            {
+                continued_context = true;
+            }
+            if matches!(event.kind, basr::model::EventKind::TurnFinished { .. }) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("restored turn finishes");
+    assert!(
+        continued_context,
+        "the restored agent used its prior-turn state"
+    );
+    let sent: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(directory.path().join("pid.request")).expect("forwarded prompt"),
+    )
+    .expect("prompt JSON");
+    assert_eq!(sent["params"]["sessionId"], "fixture");
+    assert!(sent.to_string().contains("second"));
+    assert!(session.meta().revision > before);
+    registry.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_during_acp_load_cannot_reinstall_a_backend() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::storage::LocalDb;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("private database directory");
+    let database = directory.path().join("sessions.sqlite");
+    let open = || async {
+        Registry::with_storage(
+            Arc::new(
+                Catalog::from_specs([fixture_spec("hang_load", &directory)])
+                    .expect("fixture catalog"),
+            ),
+            Arc::new(LocalHost::default()),
+            Limits::default(),
+            Arc::new(LocalDb::open(&database).await.expect("open storage")),
+        )
+    };
+    let registry = open().await;
+    let session = registry.create(request()).await.expect("create");
+    let id = session.id();
+    registry.shutdown().await;
+    drop(session);
+    drop(registry);
+
+    let mut registry = open().await;
+    registry.recover().await.expect("recover");
+    let registry = Arc::new(registry);
+    let session = registry.get(id).await.expect("saved session");
+    let restoring = {
+        let registry = Arc::clone(&registry);
+        let session = Arc::clone(&session);
+        tokio::spawn(async move { registry.ensure_restored(&session).await })
+    };
+    tokio::time::timeout(TIMEOUT, async {
+        while !directory.path().join("pid.load").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("ACP session/load started");
+    tokio::time::timeout(TIMEOUT, registry.shutdown())
+        .await
+        .expect("shutdown must join the restoring backend");
+    assert!(
+        tokio::time::timeout(TIMEOUT, restoring)
+            .await
+            .expect("restore request finishes")
+            .expect("restore task did not panic")
+            .is_err()
+    );
+    assert!(matches!(
+        session
+            .accept_prompt(v1::PromptRequest::new(
+                id.to_string(),
+                vec!["after shutdown".into()],
+            ))
+            .await,
+        Err(crate::session::SessionError::Inactive(_))
+    ));
+    wait_for_exit(&directory).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn restore_loads_raw_id_without_creating_a_new_session() {
+    for (mode, expected) in [
+        ("load", "loaded"),
+        ("resume", "resumed"),
+        ("normal", "unsupported"),
+        ("reject_load", "rejected"),
+    ] {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let (updates, mut inbox) = mpsc::channel(16);
+        let public_id = SessionId::new();
+        let request = LaunchRequest {
+            session: public_id,
+            spec: Arc::new(fixture_spec(mode, &directory)),
+            cwd: std::env::current_dir().expect("working directory"),
+            host: Arc::new(LocalHost::default()),
+            updates,
+        };
+        let result =
+            tokio::time::timeout(TIMEOUT, Driver::new().restore(request, "fixture".into()))
+                .await
+                .expect("startup completes");
+        match expected {
+            "loaded" | "resumed" => {
+                let mut session = result.expect("restored ACP session");
+                assert_eq!(session.acp_session_id().as_deref(), Some("fixture"));
+                let info = session.session_info().expect("loaded session info");
+                assert_eq!(info.session_id.to_string(), "fixture");
+                assert_eq!(
+                    info.modes.expect("load modes").current_mode_id.to_string(),
+                    "ask"
+                );
+                assert_eq!(info.meta.expect("restore metadata")["fixture"], expected);
+                if expected == "loaded" {
+                    assert!(matches!(
+                        tokio::time::timeout(TIMEOUT, inbox.recv())
+                            .await
+                            .expect("replay arrives"),
+                        Some(Update::Acp(v1::SessionUpdate::AgentMessageChunk(_)))
+                    ));
+                }
+                let turn = TurnId::new();
+                session
+                    .prompt(
+                        turn,
+                        v1::PromptRequest::new(public_id.to_string(), vec!["continue".into()]),
+                    )
+                    .expect("restored session accepts prompt");
+                tokio::time::timeout(TIMEOUT, async {
+                    loop {
+                        match inbox
+                            .recv()
+                            .await
+                            .expect("backend update stream stays open")
+                        {
+                            Update::Turn {
+                                turn: completed,
+                                update: TurnUpdate::Finished(Ok(_)),
+                            } if completed == turn => break,
+                            _ => {}
+                        }
+                    }
+                })
+                .await
+                .expect("restored turn finishes");
+                let sent: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(directory.path().join("pid.request")).expect("prompt sent"),
+                )
+                .expect("prompt JSON");
+                assert_eq!(sent["params"]["sessionId"], "fixture");
+                session.shutdown().await;
+            }
+            "unsupported" => assert!(matches!(
+                result,
+                Err(Error::Unsupported {
+                    operation: "session/load or session/resume",
+                    ..
+                })
+            )),
+            "rejected" => assert!(matches!(result, Err(Error::Acp(_)))),
+            _ => unreachable!(),
+        }
+        let pid = directory.path().join("pid");
+        assert!(
+            !pid.with_extension("new").exists(),
+            "restore must never issue session/new"
+        );
+        assert_eq!(
+            pid.with_extension("load").exists(),
+            expected == "loaded" || expected == "rejected"
+        );
+        assert_eq!(pid.with_extension("resume").exists(), expected == "resumed");
+        wait_for_exit(&directory).await;
+    }
+}
 
 #[cfg(unix)]
 #[tokio::test]
@@ -267,6 +697,16 @@ fn fixture(mode: &str, directory: &tempfile::TempDir, timeout: Duration) -> Regi
 
 #[cfg(unix)]
 fn fixture_with_limits(mode: &str, directory: &tempfile::TempDir, limits: Limits) -> Registry {
+    let spec = fixture_spec(mode, directory);
+    let mut catalog = Catalog::new();
+    catalog
+        .insert(spec, Arc::new(Driver::new()))
+        .expect("fixture driver");
+    Registry::new(Arc::new(catalog), Arc::new(LocalHost::default()), limits)
+}
+
+#[cfg(unix)]
+fn fixture_spec(mode: &str, directory: &tempfile::TempDir) -> AgentSpec {
     let mut spec = AgentSpec::acp(
         "fixture",
         Command::new(
@@ -283,11 +723,7 @@ fn fixture_with_limits(mode: &str, directory: &tempfile::TempDir, limits: Limits
         "BASR_FIXTURE_PID".into(),
         directory.path().join("pid").to_string_lossy().into_owned(),
     );
-    let mut catalog = Catalog::new();
-    catalog
-        .insert(spec, Arc::new(Driver::new()))
-        .expect("fixture driver");
-    Registry::new(Arc::new(catalog), Arc::new(LocalHost::default()), limits)
+    spec
 }
 
 #[cfg(unix)]
@@ -416,15 +852,18 @@ async fn acp_process_streams_native_content_and_is_reaped_on_shutdown() {
         .expect("ACP session starts");
     session
         .set_title("local title")
+        .await
         .expect("ACP sessions can be renamed locally");
     let mut attachment = session
         .attach(AttachOptions {
             replay: 0,
             cursor: None,
         })
+        .await
         .expect("attach");
     session
         .prompt(vec![ContentBlock::from("hello")])
+        .await
         .expect("prompt accepted");
     let events = tokio::time::timeout(TIMEOUT, async {
         let mut events = Vec::new();
@@ -465,10 +904,12 @@ async fn acp_disconnects_and_corrupt_responses_fail_the_session() {
                 replay: 0,
                 cursor: None,
             })
+            .await
             .expect("attach");
         if mode != "idle_exit" {
             session
                 .prompt(vec![ContentBlock::from("fail")])
+                .await
                 .expect("prompt queued");
         }
         tokio::time::timeout(TIMEOUT, async {
@@ -540,16 +981,18 @@ async fn cancellation_before_and_after_prompt_dispatch_completes_the_turn() {
                 replay: 0,
                 cursor: None,
             })
+            .await
             .expect("attach");
         session
             .prompt(vec![ContentBlock::from("wait")])
+            .await
             .expect("prompt");
         if !immediate {
             wait_for_prompt(&directory).await;
         }
         let cancel = v1::CancelNotification::new(session.id().to_string())
             .meta(serde_json::from_value::<v1::Meta>(json!({"cancel":"metadata"})).expect("meta"));
-        session.cancel_acp(cancel).expect("cancel requested");
+        session.cancel_acp(cancel).await.expect("cancel requested");
         tokio::time::timeout(TIMEOUT, async {
             loop {
                 if let basr::model::EventKind::TurnFinished { result, .. } =
@@ -601,12 +1044,14 @@ async fn a_peer_that_ignores_cancellation_is_failed_and_stopped() {
             replay: 0,
             cursor: None,
         })
+        .await
         .expect("attach");
     session
         .prompt(vec![ContentBlock::from("wait")])
+        .await
         .expect("prompt");
     wait_for_prompt(&directory).await;
-    session.cancel().expect("cancel requested");
+    session.cancel().await.expect("cancel requested");
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             if let basr::model::EventKind::Failed { message } =
@@ -841,6 +1286,7 @@ async fn prompt_rejection_finishes_only_the_turn_and_the_next_prompt_succeeds() 
             replay: 0,
             cursor: None,
         })
+        .await
         .expect("attach");
     for rejected in [true, false] {
         let receipt = session
@@ -848,6 +1294,7 @@ async fn prompt_rejection_finishes_only_the_turn_and_the_next_prompt_succeeds() 
                 session.id().to_string(),
                 vec!["hello".into()],
             ))
+            .await
             .expect("accepted");
         let started = events.recv().await.expect("turn started");
         assert_eq!(started.cursor, receipt.cursor);
@@ -915,6 +1362,7 @@ async fn dropping_mode_waiter_does_not_drop_the_ordered_state_commit() {
             replay: 0,
             cursor: None,
         })
+        .await
         .expect("attach");
     let mut response = Box::pin(session.set_mode(v1::SetSessionModeRequest::new(
         session.id().to_string(),
@@ -950,6 +1398,7 @@ async fn later_mode_notification_is_not_rolled_back_by_a_paused_response_waiter(
             replay: 0,
             cursor: None,
         })
+        .await
         .expect("attach");
     let response = session.set_mode(v1::SetSessionModeRequest::new(
         session.id().to_string(),
@@ -1024,6 +1473,7 @@ async fn configuration_commit_survives_cancelled_waiter_and_later_notification()
                 replay: 0,
                 cursor: None,
             })
+            .await
             .expect("attach");
         let mut response = Box::pin(session.set_config_option(
             v1::SetSessionConfigOptionRequest::new(session.id().to_string(), "model", "deep"),

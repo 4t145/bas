@@ -129,4 +129,21 @@ impl Catalog {
 
         entry.driver.launch(request).await
     }
+
+    /// Restores a backend using its private session identifier, never falling
+    /// back to a new conversation when the backend cannot load it.
+    ///
+    /// # Errors
+    /// Returns an error if the backend is unavailable or rejects recovery.
+    pub async fn restore(
+        &self,
+        request: LaunchRequest,
+        backend_session_id: String,
+    ) -> Result<Box<dyn Agent>, Error> {
+        let entry = self.entries.get(&request.spec.id).ok_or_else(|| {
+            Error::backend(request.spec.id.clone(), "the backend is not configured")
+        })?;
+
+        entry.driver.restore(request, backend_session_id).await
+    }
 }

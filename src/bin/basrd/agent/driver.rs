@@ -88,6 +88,8 @@ pub enum Update {
         update: acp::SessionUpdate,
         committed: tokio::sync::oneshot::Sender<()>,
     },
+    /// Marks that all earlier updates from this backend have been consumed.
+    Barrier(tokio::sync::oneshot::Sender<()>),
     Failed(String),
 }
 
@@ -115,6 +117,12 @@ pub trait Agent: Send {
         None
     }
     fn session_info(&self) -> Option<acp::NewSessionResponse> {
+        None
+    }
+
+    /// Raw backend session ID to persist for a later [`Driver::restore`].
+    /// This is distinct from the public [`SessionId`] assigned by the daemon.
+    fn acp_session_id(&self) -> Option<String> {
         None
     }
 
@@ -173,6 +181,23 @@ pub trait Driver: Send + Sync + 'static {
     /// # Errors
     /// Returns an error when the backend cannot be initialized.
     async fn launch(&self, request: LaunchRequest) -> Result<Box<dyn Agent>, Error>;
+
+    /// Loads an existing backend session by its raw ACP ID (not the public session ID).
+    /// The default rejects restoration; it must never create a replacement session.
+    ///
+    /// # Errors
+    /// Returns Unsupported if the backend has no restore implementation, or a
+    /// backend/protocol error if initialization or loading fails.
+    async fn restore(
+        &self,
+        request: LaunchRequest,
+        _acp_session_id: String,
+    ) -> Result<Box<dyn Agent>, Error> {
+        Err(Error::Unsupported {
+            agent: request.spec.id.clone(),
+            operation: "session/load",
+        })
+    }
 }
 
 /// Report errors and panics while keeping cleanup within one owned task.

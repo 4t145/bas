@@ -11,6 +11,7 @@ mod config;
 mod notify;
 mod service;
 mod session;
+mod storage;
 mod system;
 mod tracing;
 
@@ -50,11 +51,24 @@ async fn main() -> Result<()> {
 async fn run(config: Config) -> Result<()> {
     let shutdown = system::shutdown_signal().context("cannot install shutdown handlers")?;
     let watcher = Watcher::connect(config.notify).await?;
-    let mut registry = Registry::new(
+    let storage: Arc<dyn storage::Storage> = match config.localdb_path()? {
+        Some(path) => Arc::new(
+            storage::LocalDb::open(&path)
+                .await
+                .with_context(|| format!("cannot open session database {}", path.display()))?,
+        ),
+        None => Arc::new(storage::Memory::new(config.limits.history_capacity)),
+    };
+    let mut registry = Registry::with_storage(
         Arc::new(Catalog::from_specs(config.agents.clone())?),
         Arc::new(LocalHost::new(config.permissions)),
         config.limits,
+        storage,
     );
+    registry
+        .recover()
+        .await
+        .context("cannot recover stored sessions")?;
     if let Some(watcher) = &watcher {
         registry = registry.with_completions(watcher.sender.clone());
     }

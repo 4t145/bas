@@ -43,6 +43,16 @@ impl DriverTrait for Driver {
             task: None,
         }))
     }
+
+    // Echo retains no conversation history: restoring only reattaches the
+    // daemon-owned identity and workspace, not prior-turn model context.
+    async fn restore(
+        &self,
+        request: LaunchRequest,
+        _acp_session_id: String,
+    ) -> Result<Box<dyn Agent>, Error> {
+        self.launch(request).await
+    }
 }
 
 struct Echo {

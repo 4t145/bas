@@ -219,10 +219,7 @@ impl Basr for Service {
         let id = SessionId::from_str(&id)
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
 
-        self.registry
-            .remove(id)
-            .await
-            .map_err(|error| Status::not_found(error.to_string()))?;
+        self.registry.remove(id).await?;
 
         Ok(Response::new(pb::DeleteSessionResponse {}))
     }
@@ -235,10 +232,12 @@ impl Basr for Service {
     ) -> Result<Response<Self::AttachStream>, Status> {
         let request = request.into_inner();
         let session = self.session(&request.session).await?;
-        let attachment = session.attach(AttachOptions {
-            replay: request.replay as usize,
-            cursor: request.cursor.map(Cursor::from_raw),
-        })?;
+        let attachment = session
+            .try_attach(AttachOptions {
+                replay: request.replay as usize,
+                cursor: request.cursor.map(Cursor::from_raw),
+            })
+            .await?;
         let stream = attachment.into_stream().map(|event| match event {
             Ok(event) => Ok(pb::Event::from(&event)),
             Err(error) => Err(error.into()),
@@ -286,7 +285,8 @@ impl Basr for Service {
     ) -> Result<Response<pb::TurnAccepted>, Status> {
         let request: acp::PromptRequest = decode(request)?;
         let session = self.session(&request.session_id.to_string()).await?;
-        let receipt = session.accept_prompt(request)?;
+        self.registry.ensure_restored(&session).await?;
+        let receipt = session.accept_prompt(request).await?;
 
         Ok(Response::new(receipt.into()))
     }
@@ -297,7 +297,8 @@ impl Basr for Service {
     ) -> Result<Response<pb::CancelResponse>, Status> {
         let request: acp::CancelNotification = decode(request)?;
         let session = self.session(&request.session_id.to_string()).await?;
-        session.cancel_acp(request)?;
+        self.registry.ensure_restored(&session).await?;
+        session.cancel_acp(request).await?;
 
         Ok(Response::new(pb::CancelResponse {}))
     }
@@ -308,6 +309,7 @@ impl Basr for Service {
     ) -> Result<Response<pb::AcpPayload>, Status> {
         let request: acp::SetSessionConfigOptionRequest = decode(request)?;
         let session = self.session(&request.session_id.to_string()).await?;
+        self.registry.ensure_restored(&session).await?;
         let response = session.set_config_option(request).await?;
         Ok(Response::new((&response).into()))
     }
@@ -318,6 +320,7 @@ impl Basr for Service {
     ) -> Result<Response<pb::AcpPayload>, Status> {
         let request: acp::SetSessionModeRequest = decode(request)?;
         let session = self.session(&request.session_id.to_string()).await?;
+        self.registry.ensure_restored(&session).await?;
         let response = session.set_mode(request).await?;
         Ok(Response::new((&response).into()))
     }
@@ -328,7 +331,7 @@ impl Basr for Service {
     ) -> Result<Response<pb::SetArchivedResponse>, Status> {
         let request = request.into_inner();
         let session = self.session(&request.session).await?;
-        let meta = session.set_archived(request.archived);
+        let meta = session.try_set_archived(request.archived).await?;
         Ok(Response::new(pb::SetArchivedResponse {
             session: Some(pb::Session::try_from(&meta).map_err(metadata_error)?),
         }))
@@ -340,7 +343,7 @@ impl Basr for Service {
     ) -> Result<Response<pb::SetTitleResponse>, Status> {
         let request = request.into_inner();
         let session = self.session(&request.session).await?;
-        session.set_title(&request.title)?;
+        session.set_title(&request.title).await?;
 
         Ok(Response::new(pb::SetTitleResponse {}))
     }
@@ -358,14 +361,16 @@ impl Basr for Service {
         };
         let mut encoder = PageEncoder::new(basr::service::MAX_MESSAGE_SIZE);
         let mut result = Ok(true);
-        session.visit_history(
-            request.after.map(Cursor::from_raw),
-            limit,
-            |event, has_more| {
-                result = encoder.push(pb::Event::from(event), has_more);
-                matches!(result, Ok(true))
-            },
-        )?;
+        session
+            .try_visit_history(
+                request.after.map(Cursor::from_raw),
+                limit,
+                |event, has_more| {
+                    result = encoder.push(pb::Event::from(event), has_more);
+                    matches!(result, Ok(true))
+                },
+            )
+            .await?;
         result?;
         Ok(Response::new(encoder.finish()))
     }
@@ -394,6 +399,15 @@ impl From<SessionError> for Status {
                 Status::failed_precondition(error.to_string())
             }
             SessionError::EmptyPrompt => Status::invalid_argument(error.to_string()),
+            SessionError::History(error) => (*error).into(),
+            SessionError::Storage(crate::storage::Error::Expired { .. }) => {
+                Status::data_loss(error.to_string())
+            }
+            SessionError::Storage(
+                crate::storage::Error::Future { .. } | crate::storage::Error::EmptyPage,
+            ) => Status::invalid_argument(error.to_string()),
+            SessionError::Storage(_) => Status::unavailable(error.to_string()),
+            SessionError::CommitTask(_) => Status::unavailable(error.to_string()),
             SessionError::Agent(crate::agent::Error::Acp(error)) => {
                 let code = match error.code {
                     acp::ErrorCode::InvalidParams | acp::ErrorCode::InvalidRequest => {
@@ -431,10 +445,18 @@ impl From<CreateError> for Status {
     fn from(error: CreateError) -> Self {
         match error {
             CreateError::UnknownAgent(_) => Status::not_found(error.to_string()),
+            CreateError::NotResumable(_) => Status::failed_precondition(error.to_string()),
             CreateError::Cwd(_) => Status::invalid_argument(error.to_string()),
             CreateError::Timeout => Status::deadline_exceeded(error.to_string()),
             CreateError::Session(error) => error.into(),
+            CreateError::Storage(crate::storage::Error::NotFound(_)) => {
+                Status::not_found(error.to_string())
+            }
+            CreateError::Storage(_) => Status::unavailable(error.to_string()),
             CreateError::Agent(crate::agent::Error::Acp(acp_error)) => acp_status(&acp_error),
+            CreateError::Agent(crate::agent::Error::Unsupported { .. }) => {
+                Status::failed_precondition(error.to_string())
+            }
             CreateError::Agent(_) | CreateError::Stopping => Status::unavailable(error.to_string()),
         }
     }
@@ -445,6 +467,7 @@ impl From<AttachError> for Status {
         match error {
             AttachError::Lagged(_) => Self::data_loss(error.to_string()),
             AttachError::Closed => Self::unavailable(error.to_string()),
+            AttachError::Storage(_) => Self::unavailable(error.to_string()),
         }
     }
 }

@@ -12,10 +12,34 @@ while IFS= read -r request; do
                 case "$request" in *'"auth":{"terminal":true}'*) ;; *) exit 1;; esac
                 printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"authMethods":[{"type":"terminal","id":"login","name":"Sign in","args":["auth","login"],"env":{"AUTH_MODE":"fixture"}}],"agentCapabilities":{}}}\n' "$id"
             else
-                printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"promptCapabilities":{"image":true,"audio":true,"embeddedContext":true}}}}\n' "$id"
+                if [ "$BASR_FIXTURE_MODE" = load ] || [ "$BASR_FIXTURE_MODE" = hang_load ] || [ "$BASR_FIXTURE_MODE" = reject_load ] || [ "$BASR_FIXTURE_MODE" = context ]; then
+                    printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true}}}\n' "$id"
+                elif [ "$BASR_FIXTURE_MODE" = resume ]; then
+                    printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{}}}}}\n' "$id"
+                else
+                    printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"promptCapabilities":{"image":true,"audio":true,"embeddedContext":true}}}}\n' "$id"
+                fi
             fi
             ;;
+        *'"method":"session/load"'*)
+            printf '%s\n' "$request" > "$BASR_FIXTURE_PID.load"
+            if [ "$BASR_FIXTURE_MODE" = hang_load ]; then
+                while [ ! -f "$BASR_FIXTURE_PID.release" ]; do sleep 0.01; done
+            fi
+            if [ "$BASR_FIXTURE_MODE" = reject_load ] || { [ "$BASR_FIXTURE_MODE" = context ] && [ ! -f "$BASR_FIXTURE_PID.context" ]; }; then
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"unknown session"}}\n' "$id"
+            else
+                printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed"}}}}'
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"modes":{"currentModeId":"ask","availableModes":[{"id":"ask","name":"Ask"}]},"_meta":{"fixture":"loaded"}}}\n' "$id"
+            fi
+            ;;
+        *'"method":"session/resume"'*)
+            printf '%s\n' "$request" > "$BASR_FIXTURE_PID.resume"
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"modes":{"currentModeId":"ask","availableModes":[{"id":"ask","name":"Ask"}]},"_meta":{"fixture":"resumed"}}}\n' "$id"
+            ;;
         *'"method":"session/new"'*)
+            printf '%s\n' "$request" > "$BASR_FIXTURE_PID.new"
+            if [ "$BASR_FIXTURE_MODE" = context ]; then printf '0\n' > "$BASR_FIXTURE_PID.context"; fi
             if [ "$BASR_FIXTURE_MODE" = reject_session ]; then
                 printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"session rejected SECRET"}}\n' "$id"
                 continue
@@ -68,6 +92,12 @@ while IFS= read -r request; do
                 printf '%s\n' '{"jsonrpc":"2.0","method":"fixture/unknown","params":{}}'
                 printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"fixture prompt rejected"}}\n' "$id"
                 BASR_FIXTURE_MODE=normal
+            elif [ "$BASR_FIXTURE_MODE" = context ]; then
+                previous=$(cat "$BASR_FIXTURE_PID.context")
+                count=$((previous + 1))
+                printf '%s\n' "$count" > "$BASR_FIXTURE_PID.context"
+                printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"turn %s after %s"}}}}\n' "$count" "$previous"
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$id"
             elif [ "$BASR_FIXTURE_MODE" != wait_cancel ] && [ "$BASR_FIXTURE_MODE" != ignore_cancel ]; then
                 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking"}}}}'
                 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"answer"}}}}'

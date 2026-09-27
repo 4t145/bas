@@ -142,7 +142,7 @@ async fn grpc_resume_delivers_every_retained_page_before_live_events() {
     let registry = registry(100);
     let session = create(&registry).await;
     for i in 0..10 {
-        session.set_title(&format!("{i}")).expect("rename");
+        session.set_title(&format!("{i}")).await.expect("rename");
     }
     let service = Service::new(Arc::clone(&registry));
     let mut stream = service
@@ -176,7 +176,7 @@ async fn grpc_reports_history_gaps_invalid_cursors_busy_and_missing_sessions() {
     let session = create(&registry).await;
     let service = Service::new(Arc::clone(&registry));
     for i in 0..10 {
-        session.set_title(&format!("{i}")).expect("rename");
+        session.set_title(&format!("{i}")).await.expect("rename");
     }
     let error = service
         .attach(Request::new(pb::AttachRequest {
@@ -209,6 +209,7 @@ async fn grpc_reports_history_gaps_invalid_cursors_busy_and_missing_sessions() {
     assert_eq!(page.events.len(), 3);
     session
         .prompt(vec![ContentBlock::from("long prompt".repeat(100))])
+        .await
         .expect("first prompt");
     let error = service
         .prompt(Request::new(pb::AcpPayload::from(

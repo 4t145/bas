@@ -1,11 +1,12 @@
 use std::{collections::BTreeMap, num::NonZeroUsize, path::PathBuf, sync::Arc, time::Duration};
 
-use basr::model::{AgentId, Owner, SessionId, SessionMeta};
+use basr::model::{AgentId, Event, EventKind, Owner, SessionId, SessionMeta, SessionStatus};
 use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::{Completion, Session, SessionError};
-use crate::agent::{self, Catalog, Host, LaunchRequest};
+use crate::agent::{self, Catalog, Host, Kind, LaunchRequest};
+use crate::storage::{self, ResumeData, Storage};
 
 pub const DEFAULT_HISTORY: usize = 4096;
 pub const DEFAULT_BUFFER: usize = 1024;
@@ -45,12 +46,16 @@ pub enum CreateError {
     Stopping,
     #[error("backend startup timed out")]
     Timeout,
+    #[error("session cannot be restored: {0}")]
+    NotResumable(&'static str),
     #[error("cannot resolve the session working directory: {0}")]
     Cwd(#[source] std::io::Error),
     #[error(transparent)]
     Agent(#[from] agent::Error),
     #[error(transparent)]
     Session(#[from] SessionError),
+    #[error(transparent)]
+    Storage(#[from] storage::Error),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -61,9 +66,32 @@ pub struct Registry {
     catalog: std::sync::RwLock<Arc<Catalog>>,
     host: Arc<dyn Host>,
     limits: Limits,
-    sessions: RwLock<BTreeMap<SessionId, Arc<Session>>>,
+    sessions: Arc<RwLock<BTreeMap<SessionId, Arc<Session>>>>,
     stopping: CancellationToken,
     completions: Option<mpsc::Sender<Completion>>,
+    storage: Option<Arc<dyn Storage>>,
+}
+
+/// A failed or cancelled launch has never returned its id to a client.
+struct PendingSession {
+    id: SessionId,
+    storage: Option<Arc<dyn Storage>>,
+    registered: bool,
+}
+
+impl Drop for PendingSession {
+    fn drop(&mut self) {
+        if !self.registered
+            && let Some(storage) = self.storage.take()
+        {
+            let id = self.id;
+            tokio::spawn(async move {
+                if let Err(error) = storage.delete(id).await {
+                    tracing::warn!(session = %id, %error, "could not discard an unregistered session");
+                }
+            });
+        }
+    }
 }
 
 impl Registry {
@@ -72,10 +100,73 @@ impl Registry {
             catalog: std::sync::RwLock::new(catalog),
             host,
             limits,
-            sessions: RwLock::new(BTreeMap::new()),
+            sessions: Arc::new(RwLock::new(BTreeMap::new())),
             stopping: CancellationToken::new(),
             completions: None,
+            storage: None,
         }
+    }
+
+    pub fn with_storage(
+        catalog: Arc<Catalog>,
+        host: Arc<dyn Host>,
+        limits: Limits,
+        storage: Arc<dyn Storage>,
+    ) -> Self {
+        let mut registry = Self::new(catalog, host, limits);
+        registry.storage = Some(storage);
+        registry
+    }
+
+    /// Rebuild metadata without launching backends.
+    pub async fn recover(&mut self) -> Result<(), storage::Error> {
+        let Some(storage) = &self.storage else {
+            return Ok(());
+        };
+        let sessions = Arc::get_mut(&mut self.sessions)
+            .expect("registry is uniquely owned during recovery")
+            .get_mut();
+        for mut meta in storage.list().await? {
+            let running = matches!(meta.status, SessionStatus::Idle | SessionStatus::Working);
+            if meta.status == SessionStatus::Starting {
+                let event = Event::new(
+                    meta.id,
+                    meta.revision.next(),
+                    EventKind::Failed {
+                        message: "daemon stopped during session startup".to_owned(),
+                    },
+                );
+                meta.apply_event(&event);
+                storage.commit(meta.clone(), &[event]).await?;
+            } else if meta.status == SessionStatus::Working {
+                if let Some(turn) = meta.active_turn {
+                    let event = Event::new(
+                        meta.id,
+                        meta.revision.next(),
+                        EventKind::TurnFinished {
+                            turn,
+                            result: Err("daemon stopped before this turn finished".to_owned()),
+                        },
+                    );
+                    meta.apply_event(&event);
+                    storage.commit(meta.clone(), &[event]).await?;
+                } else {
+                    meta.set_status(SessionStatus::Idle);
+                    storage.commit(meta.clone(), &[]).await?;
+                }
+            }
+            sessions.insert(
+                meta.id,
+                Session::with_storage(
+                    meta,
+                    self.limits,
+                    self.completions.clone(),
+                    Some(Arc::clone(storage)),
+                    !running,
+                ),
+            );
+        }
+        Ok(())
     }
 
     pub fn with_completions(mut self, completions: mpsc::Sender<Completion>) -> Self {
@@ -146,11 +237,25 @@ impl Registry {
         let mut meta = SessionMeta::new(id, request.agent, request.owner);
         meta.cwd = Some(cwd.clone());
         meta.title = request.title;
-        let session = Session::new(meta, self.limits, self.completions.clone());
+        if let Some(storage) = &self.storage {
+            storage.create(meta.clone(), None).await?;
+        }
+        let mut pending = PendingSession {
+            id,
+            storage: self.storage.clone(),
+            registered: false,
+        };
+        let session = Session::with_storage(
+            meta,
+            self.limits,
+            self.completions.clone(),
+            self.storage.clone(),
+            true,
+        );
         let (updates, inbox) = mpsc::channel(self.limits.live_capacity.get());
         // Drain initialization updates too, so protocol startup cannot deadlock on a full queue.
         session.listen(inbox);
-        let agent = catalog
+        let mut agent = catalog
             .launch(LaunchRequest {
                 session: id,
                 spec,
@@ -159,12 +264,21 @@ impl Registry {
                 updates,
             })
             .await?;
-        session.ready(agent)?;
+        if let Some(storage) = &self.storage
+            && let Err(error) = storage
+                .save_resume(id, agent.acp_session_id().map(ResumeData::acp))
+                .await
+        {
+            agent.shutdown().await;
+            return Err(error.into());
+        }
+        session.ready(agent).await?;
         let mut sessions = self.sessions.write().await;
         if self.stopping.is_cancelled() {
             return Err(CreateError::Stopping);
         }
         sessions.insert(session.id(), Arc::clone(&session));
+        pending.registered = true;
         Ok(session)
     }
 
@@ -177,6 +291,87 @@ impl Registry {
             .get(&id)
             .cloned()
             .ok_or(NotFound(id))
+    }
+
+    /// Restore the backend on demand without holding a registry or state lock across launch.
+    pub async fn ensure_restored(&self, session: &Arc<Session>) -> Result<(), CreateError> {
+        tokio::select! {
+            biased;
+            () = self.stopping.cancelled() => Err(CreateError::Stopping),
+            result = tokio::time::timeout(self.limits.startup_timeout, self.restore(session)) => {
+                result.map_err(|_| CreateError::Timeout)?
+            }
+        }
+    }
+
+    async fn restore(&self, session: &Arc<Session>) -> Result<(), CreateError> {
+        if session.is_restored() {
+            return Ok(());
+        }
+        let _gate = session.restore_gate.lock().await;
+        if session.is_restored() {
+            return Ok(());
+        }
+        let meta = session.meta();
+        let catalog = self.catalog();
+        let spec = catalog
+            .spec(&meta.agent)
+            .cloned()
+            .ok_or_else(|| CreateError::UnknownAgent(meta.agent.clone()))?;
+        let cwd = meta.cwd.clone().ok_or_else(|| {
+            CreateError::Cwd(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "session workspace is missing",
+            ))
+        })?;
+        let stored = self
+            .storage
+            .as_ref()
+            .expect("recovered session has storage")
+            .load(meta.id)
+            .await?
+            .ok_or(storage::Error::NotFound(meta.id))?;
+        if spec.kind == Kind::Acp && stored.resume.is_none() {
+            return Err(CreateError::NotResumable(
+                "ACP session has no saved backend ID",
+            ));
+        }
+        if spec.kind != Kind::Acp && stored.resume.is_some() {
+            return Err(CreateError::NotResumable(
+                "configured backend type differs from saved session",
+            ));
+        }
+        let (updates, inbox) = mpsc::channel(self.limits.live_capacity.get());
+        session.listen(inbox);
+        let launch = LaunchRequest {
+            session: meta.id,
+            spec,
+            cwd,
+            host: Arc::clone(&self.host),
+            updates: updates.clone(),
+        };
+        let backend_session_id = stored
+            .resume
+            .map(|resume| resume.acp_session_id().map(str::to_owned))
+            .transpose()?
+            .unwrap_or_default();
+        let agent = catalog.restore(launch, backend_session_id).await?;
+        // ACP requires all session/load replay notifications before its response.
+        // The SDK dispatches notification callbacks serially in wire order; this
+        // barrier drains their queued updates before normal publication resumes.
+        // https://agentclientprotocol.com/protocol/session-setup#loading-sessions
+        let (ack, drained) = tokio::sync::oneshot::channel();
+        updates
+            .send(agent::Update::Barrier(ack))
+            .await
+            .map_err(|_| {
+                CreateError::NotResumable("backend update listener closed during restore")
+            })?;
+        drained.await.map_err(|_| {
+            CreateError::NotResumable("backend update listener closed during restore")
+        })?;
+        session.restore_agent(agent);
+        Ok(())
     }
 
     pub async fn list(&self) -> Vec<SessionMeta> {
@@ -193,21 +388,60 @@ impl Registry {
 
     /// # Errors
     /// Returns NotFound for unknown or already removed sessions.
-    pub async fn remove(&self, id: SessionId) -> Result<(), NotFound> {
+    pub async fn remove(&self, id: SessionId) -> Result<(), CreateError> {
         let session = self
             .sessions
-            .write()
+            .read()
             .await
-            .remove(&id)
-            .ok_or(NotFound(id))?;
-        session.shutdown().await;
-        Ok(())
+            .get(&id)
+            .cloned()
+            .ok_or(storage::Error::NotFound(id))?;
+        let sessions = Arc::clone(&self.sessions);
+        let storage = self.storage.clone();
+        // Deletion and registry eviction form one owned operation: an RPC
+        // disconnect cannot leave an in-memory session pointing at a deleted row.
+        tokio::spawn(async move {
+            let _gate = session.restore_gate.lock().await;
+            if storage
+                .as_ref()
+                .is_some_and(|storage| storage.is_persistent())
+            {
+                session.delete_storage().await?;
+                sessions.write().await.remove(&id);
+                session.suspend().await;
+            } else {
+                sessions.write().await.remove(&id);
+                session.shutdown().await;
+                if let Some(storage) = storage {
+                    storage.delete(id).await?;
+                }
+            }
+            Ok(())
+        })
+        .await
+        .expect("session removal panicked")
     }
 
     /// Prevents new sessions, cancels pending launches and joins every registered backend.
     pub async fn shutdown(&self) {
         self.stopping.cancel();
         let sessions = std::mem::take(&mut *self.sessions.write().await);
-        futures::future::join_all(sessions.values().map(|session| session.shutdown())).await;
+        if self
+            .storage
+            .as_ref()
+            .is_some_and(|storage| storage.is_persistent())
+        {
+            futures::future::join_all(sessions.values().map(|session| async {
+                let _gate = session.restore_gate.lock().await;
+                session.suspend().await;
+            }))
+            .await;
+        } else {
+            futures::future::join_all(sessions.values().map(|session| async {
+                let _gate = session.restore_gate.lock().await;
+                session.shutdown().await;
+            }))
+            .await;
+        }
     }
 }

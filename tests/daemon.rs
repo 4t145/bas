@@ -17,6 +17,10 @@ mod archive;
 #[path = "daemon/config.rs"]
 mod config;
 
+#[cfg(unix)]
+#[path = "daemon/storage.rs"]
+mod storage;
+
 fn command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_basrd"));
     for key in [
@@ -26,6 +30,8 @@ fn command() -> Command {
         "BASR_SETTINGS_FILE",
         "BASRD_NOTIFY",
         "BASRD_HISTORY",
+        "BASRD_STORAGE",
+        "BASRD_LOCALDB_PATH",
         "BASRD_BUFFER",
         "BASRD_STARTUP_TIMEOUT",
         "BASRD_PERMISSIONS",
@@ -39,6 +45,7 @@ fn command() -> Command {
     }
     command
         .env("BASRD_AGENTS", "embedded")
+        .env("BASRD_STORAGE", "memory")
         .kill_on_drop(true)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -198,6 +205,7 @@ async fn cli_overrides_invalid_environment_and_shutdown_closes_live_streams() {
         "BASRD_AGENTS",
         "BASRD_NOTIFY",
         "BASRD_HISTORY",
+        "BASRD_STORAGE",
         "BASRD_BUFFER",
         "BASRD_STARTUP_TIMEOUT",
         "BASRD_PERMISSIONS",
@@ -215,6 +223,8 @@ async fn cli_overrides_invalid_environment_and_shutdown_closes_live_streams() {
         "never",
         "--history",
         "100",
+        "--storage",
+        "memory",
         "--buffer",
         "100",
         "--startup-timeout",

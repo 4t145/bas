@@ -11,7 +11,7 @@ use clap::Parser;
 
 use crate::{
     agent::PermissionPolicy,
-    config::{self, Config, Notify},
+    config::{self, Config, Notify, Storage},
     session::{DEFAULT_BUFFER, DEFAULT_HISTORY, DEFAULT_STARTUP_TIMEOUT, Limits},
 };
 
@@ -37,6 +37,12 @@ pub struct Args {
     /// Replayable events kept per session; must be greater than zero.
     #[arg(long, env = config::HISTORY_ENV, default_value_t = NonZeroUsize::new(DEFAULT_HISTORY).expect("nonzero default"))]
     history: NonZeroUsize,
+    /// Session storage backend. Defaults to local SQLite persistence.
+    #[arg(long, env = config::STORAGE_ENV, value_enum, default_value = "localdb")]
+    storage: Storage,
+    /// SQLite file location for `--storage localdb`.
+    #[arg(long, env = config::LOCALDB_PATH_ENV, value_name = "PATH")]
+    localdb_path: Option<PathBuf>,
     /// Backend queue and live broadcast capacities; must be greater than zero.
     #[arg(long, env = config::BUFFER_ENV, default_value_t = NonZeroUsize::new(DEFAULT_BUFFER).expect("nonzero default"))]
     buffer: NonZeroUsize,
@@ -74,12 +80,18 @@ impl Args {
             (agents, Some(source))
         };
         anyhow::ensure!(!agents.is_empty(), "at least one agent must be configured");
+        anyhow::ensure!(
+            self.storage == Storage::Localdb || self.localdb_path.is_none(),
+            "--localdb-path requires --storage localdb"
+        );
         Ok(Config {
             listen: self.listen,
             notify: self.notify,
             agents,
             catalog_source,
             permissions: self.permissions,
+            storage: self.storage,
+            localdb_path: self.localdb_path.clone(),
             limits: Limits {
                 history_capacity: self.history,
                 live_capacity: self.buffer,

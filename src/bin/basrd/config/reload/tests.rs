@@ -159,8 +159,9 @@ async fn reloading_specs_preserves_existing_acp_sessions_and_shutdown_is_bounded
                 replay: 0,
                 cursor: None,
             })
+            .await
             .unwrap();
-        session.prompt(vec!["still alive".into()]).unwrap();
+        session.prompt(vec!["still alive".into()]).await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if let EventKind::TurnFinished { result, .. } =

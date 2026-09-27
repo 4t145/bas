@@ -92,8 +92,9 @@ GUI 的“Agent 服务”仅编辑本机配置；保存成功不等于已经确�
 设置页的显式连接检测会验证 ACP 握手；“已找到程序”与“已连通”是两个状态。
 使用此检测功能需要同时升级 `basrw` 与 `basrd`，旧版 daemon 会提示不支持。
 
-修改 Agent 目录不需要重启。升级 daemon 可执行文件仍需重启；会话和回放窗口保存在内存中，
-重启会停止当前会话。不要以重启作为设置保存动作。
+修改 Agent 目录不需要重启。升级 daemon 可执行文件仍需重启；新版默认使用 `localdb`，
+重启后可读取新建会话的历史并按 Agent 能力恢复对话。**旧版只存于内存的会话不能迁移**，
+升级时重启仍会停止这些会话；不要以重启作为设置保存动作。
 `./scripts/dev-local` 仍显式使用开发用的 pi 目录；日常使用配置文件时启动上述用户服务。
 
 ## Codex
@@ -177,7 +178,8 @@ BASRD_HISTORY=8192
 ./scripts/install-basrw
 ```
 
-重启会停止当前会话，会话与回放窗口只保存在内存中；只换 GUI 时不需要重启服务。
+新安装的 daemon 默认将会话元数据和历史持久化于用户状态目录；不需要持久化时可在环境文件中设置
+`BASRD_STORAGE=memory`。旧版内存会话在第一次重启时仍会丢失；只换 GUI 时不需要重启服务。
 卸载 BASR 执行 `nix profile remove basrd basrw`（未安装的条目可省略，实际名称用
 `nix profile list` 查看），再 `systemctl --user disable basrd`。GUI 的安装、更新与卸载见
 [GUI 说明](gui.md)。外部工具由用户单独管理，不随 BASR 卸载。

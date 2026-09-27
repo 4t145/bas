@@ -68,6 +68,7 @@ journald、D-Bus 通知、CLI 和 ACP 进程。首次运行需要下载构建依
   |   |   +--🦀attachment.rs         attach/detach 与游标续传
   |   |   +--🦀history.rs            有界历史环形缓冲
   |   |   +--🦀registry.rs           会话注册表与后端目录
+  |   +--🦀storage.rs                memory/localdb 会话存储
   |   +--🦀service.rs                基于会话注册表的 gRPC 服务端实现
   |   +--🦀notify.rs                 D-Bus 桌面通知与完成监听
   |   +--🦀config.rs                 启动参数、环境变量与后端目录配置
@@ -122,12 +123,28 @@ basrctl agents
 | `BASR_SETTINGS_FILE` | `$XDG_CONFIG_HOME/basr/settings.json` | GUI 与 daemon 共用配置；XDG 未设置时使用 `~/.config/basr/settings.json` |
 | `BASRD_AGENTS_FILE` | 未设置 | 显式兼容旧版独立 agent 数组；设置后覆盖统一文件的 agent 目录 |
 | `BASRD_NOTIFY` | `auto` | `auto` 允许无桌面运行，`always` 要求通知服务可用，`never` 禁用 |
-| `BASRD_HISTORY` | `4096` | 每个会话保留的可回放事件数，必须大于 0 |
+| `BASRD_HISTORY` | `4096` | 每个会话的内存历史窗口容量；localdb 的磁盘历史不受此容量限制 |
+| `BASRD_STORAGE` | `localdb` | 会话存储：`localdb`（默认 SQLite） / `memory`（显式关闭持久化） |
+| `BASRD_LOCALDB_PATH` | 用户状态目录下的 `basr/sessions.sqlite3` | `localdb` 的数据库文件路径，`memory` 模式不能设置 |
 | `BASRD_BUFFER` | `1024` | 后端更新队列与直播广播容量，必须大于 0 |
 | `BASRD_STARTUP_TIMEOUT` | `30` | 后端启动超时（秒），必须大于 0 |
 | `BASRD_PERMISSIONS` | `deny` | 工具权限申请的固定审批策略：`deny` / `allow` |
 | `BASRD_LOG_BACKEND` | `auto` | 日志后端：`auto` / `stdout` / `journald` |
 | `RUST_LOG` | `info` | 日志过滤表达式 |
+
+默认启动会将新会话存入用户状态目录；可显式覆盖数据库位置：
+
+```console
+$ basrd --storage localdb --localdb-path "$HOME/.local/state/basr/sessions.sqlite3"
+```
+
+仅需临时会话时使用 `--storage memory`。从旧的仅内存版升级不会迁移已有进程内会话；
+重启旧 daemon 前请先处理仍在运行的会话。
+
+数据库需要长期保留会话内容，应限制文件及目录访问权限并安排备份。持久化记录不等于所有外部
+Agent 都能恢复执行上下文；只有后端支持 ACP `session/load` 或 `session/resume` 且成功完成恢复，
+才允许在旧会话继续发送 prompt。重启时未完成的 turn 会记录为中断，不会自动重发工具操作。
+当前内嵌 `embedded` 后端仅是无状态 echo，不提供真正的模型对话上下文。
 
 `BASRD_AGENTS` 用 `;` 分隔条目，条目形如 `id`、`id=kind` 或 `id=kind:命令行`：
 

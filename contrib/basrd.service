@@ -11,8 +11,9 @@ RestartSec=2s
 # The daemon pings the service manager at half this interval.
 WatchdogSec=30s
 
-# Everything is configured through the environment, so the unit needs no
-# writable configuration directory.
+# localdb is the default. For a system service, configure
+# BASRD_LOCALDB_PATH=%S/basr/sessions.sqlite3 and StateDirectory=basr;
+# the deployment must provide a writable state directory for the service user.
 Environment=BASRD_LISTEN=127.0.0.1:7337
 Environment=BASRD_AGENTS=embedded
 Environment=BASRD_LOG_BACKEND=journald
