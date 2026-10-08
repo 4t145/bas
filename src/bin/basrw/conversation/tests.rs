@@ -338,3 +338,102 @@ fn terminal_output_stream_survives_status_updates_and_replay_without_ansi_artifa
     assert_eq!(terminal.exit.as_ref().expect("exit").exit_code, Some(0));
     assert_eq!(conversation.items.len(), 1);
 }
+
+#[test]
+fn timeline_groups_contiguous_activity_without_hiding_surrounding_messages() {
+    let mut conversation = conversation();
+    let events = [
+        EventKind::Acp(acp::SessionUpdate::UserMessageChunk(
+            acp::ContentChunk::new("检查文件".into()),
+        )),
+        EventKind::Acp(acp::SessionUpdate::AgentThoughtChunk(
+            acp::ContentChunk::new("先读取配置".into()),
+        )),
+        EventKind::Acp(acp::SessionUpdate::ToolCall(ToolCall::new("read", "读取"))),
+        EventKind::Acp(acp::SessionUpdate::ToolCall(ToolCall::new(
+            "search", "搜索",
+        ))),
+        chunk("检查结论"),
+        EventKind::Acp(acp::SessionUpdate::ToolCall(ToolCall::new(
+            "verify", "验证",
+        ))),
+        chunk("最终结论"),
+    ];
+    for (index, event) in events.into_iter().enumerate() {
+        apply(&mut conversation, index as u64 + 1, event);
+    }
+    assert_eq!(
+        conversation
+            .rows
+            .iter()
+            .map(|row| row.items.clone())
+            .collect::<Vec<_>>(),
+        [0..1, 1..4, 4..5, 5..6, 6..7],
+    );
+    assert!(conversation.rows[1].activity);
+    assert!(!conversation.rows[2].activity);
+    assert_eq!(conversation.row_for_item(2), Some(1));
+    assert_eq!(conversation.row_for_item(6), Some(4));
+    assert_eq!(conversation.row_for_item(7), None);
+    let reply = conversation.last_reply.expect("latest reply");
+    assert_eq!(
+        reply.index, 6,
+        "reply positions remain raw content positions"
+    );
+    assert_eq!(conversation.row_for_item(reply.index), Some(4));
+    apply(
+        &mut conversation,
+        8,
+        EventKind::Acp(acp::SessionUpdate::ToolCallUpdate(
+            acp::ToolCallUpdate::new(
+                "search",
+                acp::ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
+            ),
+        )),
+    );
+    assert_eq!(conversation.rows.len(), 5);
+    assert_eq!(conversation.row_for_item(3), Some(1));
+}
+
+#[test]
+fn timeline_activity_does_not_merge_across_turns_or_notices() {
+    let mut conversation = conversation();
+    let first = TurnId::new();
+    let second = TurnId::new();
+    let events = [
+        EventKind::TurnStarted { turn: first },
+        EventKind::Acp(acp::SessionUpdate::ToolCall(ToolCall::new(
+            "first",
+            "第一次",
+        ))),
+        EventKind::TurnFinished {
+            turn: first,
+            result: Ok(acp::PromptResponse::new(StopReason::EndTurn)),
+        },
+        EventKind::TurnStarted { turn: second },
+        EventKind::Acp(acp::SessionUpdate::ToolCall(ToolCall::new(
+            "second",
+            "第二次",
+        ))),
+        EventKind::TurnFinished {
+            turn: second,
+            result: Ok(acp::PromptResponse::new(StopReason::Cancelled)),
+        },
+        EventKind::Acp(acp::SessionUpdate::ToolCall(ToolCall::new(
+            "third",
+            "第三次",
+        ))),
+    ];
+    for (index, event) in events.into_iter().enumerate() {
+        apply(&mut conversation, index as u64 + 1, event);
+    }
+    assert_eq!(
+        conversation
+            .rows
+            .iter()
+            .map(|row| row.items.clone())
+            .collect::<Vec<_>>(),
+        [0..1, 1..2, 2..3, 3..4],
+    );
+    assert!(!conversation.rows[2].activity, "notices remain visible");
+}

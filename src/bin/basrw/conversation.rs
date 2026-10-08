@@ -1,5 +1,5 @@
 use basr::{acp, model::*};
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Range};
 mod terminal;
 
 pub(super) enum Item {
@@ -16,11 +16,22 @@ impl Item {
             Self::Notice { id, .. } => format!("notice-{id}"),
         }
     }
+
+    fn is_activity(&self) -> bool {
+        matches!(self, Self::Tool(_))
+            || matches!(self, Self::Message { message, .. } if message.role == Role::Thought)
+    }
+}
+
+pub(super) struct TimelineRow {
+    pub items: Range<usize>,
+    pub activity: bool,
 }
 
 pub(super) struct Conversation {
     pub session: SessionMeta,
     pub items: Vec<Item>,
+    pub rows: Vec<TimelineRow>,
     pub terminals: HashMap<String, terminal::Terminal>,
     pub cursor: u64,
     pub commands: Vec<acp::AvailableCommand>,
@@ -58,6 +69,7 @@ impl Conversation {
                 .unwrap_or_default(),
             session,
             items: Vec::new(),
+            rows: Vec::new(),
             terminals: HashMap::new(),
             cursor: 0,
             plan: None,
@@ -70,6 +82,39 @@ impl Conversation {
 
     /// Returns the first item whose layout changed, if any.
     pub fn apply(&mut self, event: Event) -> Option<usize> {
+        let changed = self.apply_event(event);
+        self.append_rows();
+        changed
+    }
+
+    pub fn row_for_item(&self, index: usize) -> Option<usize> {
+        let row = self.rows.partition_point(|row| row.items.end <= index);
+        self.rows
+            .get(row)
+            .filter(|row| row.items.contains(&index))
+            .map(|_| row)
+    }
+
+    fn append_rows(&mut self) {
+        let start = self.rows.last().map_or(0, |row| row.items.end);
+        for index in start..self.items.len() {
+            let activity = self.items[index].is_activity();
+            if activity
+                && let Some(row) = self.rows.last_mut()
+                && row.activity
+                && row.items.start >= self.turn_start
+            {
+                row.items.end = index + 1;
+            } else {
+                self.rows.push(TimelineRow {
+                    items: index..index + 1,
+                    activity,
+                });
+            }
+        }
+    }
+
+    fn apply_event(&mut self, event: Event) -> Option<usize> {
         if event.session != self.session.id || event.cursor.raw() <= self.cursor {
             return None;
         }

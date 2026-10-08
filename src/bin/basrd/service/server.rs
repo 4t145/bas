@@ -299,8 +299,81 @@ impl Basr for Service {
         let session = self.session(&request.session_id.to_string()).await?;
         self.registry.ensure_restored(&session).await?;
         session.cancel_acp(request).await?;
+        self.registry.permissions().cancel(session.id());
 
         Ok(Response::new(pb::CancelResponse {}))
+    }
+
+    type WatchPermissionsStream =
+        Pin<Box<dyn Stream<Item = Result<pb::PermissionSnapshot, Status>> + Send + 'static>>;
+
+    async fn watch_permissions(
+        &self,
+        request: Request<pb::WatchPermissionsRequest>,
+    ) -> Result<Response<Self::WatchPermissionsStream>, Status> {
+        let session = self.session(&request.into_inner().session).await?;
+        let id = session.id();
+        let subscription = self.registry.permissions().subscribe(id);
+        // Deletion can race subscription setup after the first registry lookup.
+        if let Err(error) = self.registry.get(id).await {
+            self.registry.permissions().close(id);
+            return Err(Status::not_found(error.to_string()));
+        }
+        let registry = Arc::clone(&self.registry);
+        let stream =
+            futures::stream::try_unfold((subscription, true), move |(mut subscription, first)| {
+                let registry = Arc::clone(&registry);
+                async move {
+                    if !first {
+                        tokio::select! {
+                            biased;
+                            () = registry.stopped() => return Ok(None),
+                            result = subscription.snapshots.changed() => {
+                                if result.is_err() { return Ok(None); }
+                            }
+                        }
+                    }
+                    let pending = subscription
+                        .snapshots
+                        .borrow_and_update()
+                        .iter()
+                        .map(pb::PendingPermission::from)
+                        .collect();
+                    Ok(Some((
+                        pb::PermissionSnapshot {
+                            session: id.to_string(),
+                            pending,
+                        },
+                        (subscription, false),
+                    )))
+                }
+            });
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn respond_permission(
+        &self,
+        request: Request<pb::RespondPermissionRequest>,
+    ) -> Result<Response<pb::RespondPermissionResponse>, Status> {
+        let request = request.into_inner();
+        let session = self.session(&request.session).await?;
+        let response: acp::RequestPermissionResponse = request
+            .response
+            .ok_or_else(|| Status::invalid_argument("missing ACP permission response"))?
+            .decode()
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        self.registry
+            .permissions()
+            .respond(session.id(), &request.request_id, response.outcome)
+            .map_err(|error| match error {
+                crate::agent::permissions::PermissionError::InvalidOption => {
+                    Status::invalid_argument(error.to_string())
+                }
+                crate::agent::permissions::PermissionError::Expired => {
+                    Status::failed_precondition(error.to_string())
+                }
+            })?;
+        Ok(Response::new(pb::RespondPermissionResponse {}))
     }
 
     async fn set_config_option(

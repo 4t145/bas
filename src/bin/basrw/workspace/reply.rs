@@ -92,8 +92,10 @@ impl Workspace {
             && (!self.compact || self.output_open)
             && (self.list.is_following_tail()
                 || visible_reply.is_some_and(|reply| {
-                    self.list
-                        .bounds_for_item(reply.index)
+                    self.conversation
+                        .as_ref()
+                        .and_then(|conversation| conversation.row_for_item(reply.index))
+                        .and_then(|index| self.list.bounds_for_item(index))
                         .is_some_and(|bounds| {
                             let viewport = self.list.viewport_bounds();
                             viewport.size.height > px(0.)

@@ -15,6 +15,51 @@ fn close_settings(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn enter_preference_saved_in_settings_updates_workspace_without_taking_focus(
+    cx: &mut TestAppContext,
+) {
+    let fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.composer.update(cx, |input, cx| {
+                input.set_value("尚未发送的草稿", window, cx)
+            });
+            view.begin_rename(window, cx);
+            view.open_settings(window, cx);
+        });
+    })
+    .expect("open independent settings window");
+    let settings = settings_window(cx);
+    cx.update_window(settings.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let editor = theme::Editor::current(cx);
+        let mut document = editor.load().expect("current settings");
+        let mut preferences = document.preferences.clone();
+        preferences.composer_enter_behavior = composer::Mode::Newline;
+        editor
+            .save(&mut document, preferences, window, cx)
+            .expect("persist Enter behavior");
+    })
+    .expect("save from settings");
+    cx.executor().run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let view = fixture.view.read(cx);
+        assert_eq!(view.composer_mode, composer::Mode::Newline);
+        assert_eq!(view.composer.read(cx).value(), "尚未发送的草稿");
+        assert!(view.rename.read(cx).focus_handle(cx).is_focused(window));
+        assert!(!window.is_window_active());
+    })
+    .expect("workspace updates without becoming active");
+    cx.update_window(settings.into(), |_, window, _| {
+        assert!(window.is_window_active());
+    })
+    .expect("settings keep window focus");
+    close_settings(cx);
+}
+
+#[gpui_kit::test]
 fn native_close_flushes_valid_text_before_the_debounce_deadline(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
     let path = fixture._appearance.path().join("settings.json");

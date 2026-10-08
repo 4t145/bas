@@ -103,6 +103,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let current = self.current();
+        let controls = window.window_controls();
+        let client_controls = !cfg!(target_os = "macos");
         div()
             .id("thread-header")
             .test_support()
@@ -120,6 +122,10 @@ impl Workspace {
                     .items_center()
                     .gap_1()
                     .px_3()
+                    .when(
+                        cfg!(target_os = "macos") && !self.sidebar_visible,
+                        |header| header.pl(px(layout::MACOS_WINDOW_CONTROLS_WIDTH)),
+                    )
                     .when(!self.sidebar_visible, |row| {
                         row.child(self.application_button(cx))
                     })
@@ -159,34 +165,49 @@ impl Workspace {
                             .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     )
                     .child(self.mode_button(cx))
-                    .child(
-                        layout::icon_button(
-                            "window-maximize",
-                            if window.is_maximized() {
-                                IconName::WindowRestore
-                            } else {
-                                IconName::WindowMaximize
-                            },
+                    .when(client_controls && controls.minimize, |row| {
+                        row.child(
+                            layout::icon_button("window-minimize", IconName::WindowMinimize)
+                                .tooltip("最小化窗口")
+                                .on_click(|_, window, _| window.minimize_window()),
                         )
-                        .tooltip(if window.is_maximized() {
-                            "还原窗口"
-                        } else {
-                            "最大化窗口"
-                        })
-                        .on_click(cx.listener(|this, _, window, _| {
-                            if !window.is_maximized() {
-                                this.window_size = window.bounds().size;
-                            }
-                            window.zoom_window();
-                        })),
-                    )
-                    .child(
-                        layout::icon_button("window-close", IconName::WindowClose)
-                            .tooltip("关闭窗口")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.close_window(window, cx)),
-                            ),
-                    ),
+                    })
+                    .when(client_controls && controls.maximize, |row| {
+                        row.child(
+                            layout::icon_button(
+                                "window-maximize",
+                                if window.is_maximized() {
+                                    IconName::WindowRestore
+                                } else {
+                                    IconName::WindowMaximize
+                                },
+                            )
+                            .tooltip(if window.is_maximized() {
+                                "还原窗口"
+                            } else {
+                                "最大化窗口"
+                            })
+                            .on_click(cx.listener(
+                                |this, _, window, _| {
+                                    if !window.is_maximized() {
+                                        this.window_size = window.bounds().size;
+                                    }
+                                    window.zoom_window();
+                                },
+                            )),
+                        )
+                    })
+                    .when(client_controls, |row| {
+                        row.child(
+                            layout::icon_button("window-close", IconName::WindowClose)
+                                .tooltip("关闭窗口")
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.close_window(window, cx)
+                                    }),
+                                ),
+                        )
+                    }),
             )
             .when_some(
                 current.filter(|session| session.archived),

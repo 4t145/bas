@@ -9,6 +9,7 @@ const COMMAND_HINT_HEIGHT: f32 = 28.;
 const OUTPUT_HEIGHT: f32 = 440.;
 pub(super) const HEADER_HEIGHT: f32 = 44.;
 pub(super) const ICON_BUTTON_SIZE: f32 = 24.;
+pub(super) const MACOS_WINDOW_CONTROLS_WIDTH: f32 = 80.;
 
 pub(super) fn icon_button(id: impl Into<gpui_kit::ElementId>, icon: IconName) -> Button {
     Button::new(id)
@@ -68,7 +69,15 @@ impl Workspace {
             size(
                 px(POPUP_WIDTH),
                 px(if self.output_open {
-                    OUTPUT_HEIGHT + command_height + menu_height
+                    OUTPUT_HEIGHT.max(
+                        COMPACT_HEADER_HEIGHT
+                            + self.composer_height(cx)
+                            + chat::COMPOSER_TOOLBAR_HEIGHT
+                            + chat::COMPOSER_BOTTOM_PADDING
+                            + PANEL_BORDER_WIDTH * 2.
+                            + 100.,
+                    ) + command_height
+                        + menu_height
                 } else {
                     COMPACT_HEADER_HEIGHT
                         + self.composer_height(cx)
@@ -120,7 +129,7 @@ impl Workspace {
             0..self
                 .conversation
                 .as_ref()
-                .map_or(0, |state| state.items.len()),
+                .map_or(0, |state| state.rows.len()),
         );
         self.focus_input(window, cx);
         cx.notify();
@@ -184,6 +193,8 @@ impl Workspace {
     }
 
     pub(super) fn render_layout(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.composer_available_height
+            .set((f32::from(window.viewport_size().height) - 180.).max(80.));
         div()
             .id("basr-workspace")
             .key_context("BasrWorkspace")
@@ -294,6 +305,9 @@ impl Workspace {
                     .gap_1()
                     .mx_3()
                     .px(gpui_kit::component::Size::Medium.input_px())
+                    .when(cfg!(target_os = "macos"), |header| {
+                        header.pl(px(MACOS_WINDOW_CONTROLS_WIDTH))
+                    })
                     .h(px(COMPACT_HEADER_HEIGHT))
                     .flex_shrink_0()
                     .child(

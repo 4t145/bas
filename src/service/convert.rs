@@ -21,12 +21,37 @@ pub enum Error {
     MissingOutcome,
     #[error("session metadata carries no owner")]
     MissingOwner,
+    #[error("permission carries no ACP request")]
+    MissingPermissionRequest,
     #[error("working directory is not valid UTF-8; the protocol requires UTF-8 paths")]
     NonUtf8Cwd,
     #[error("invalid ACP JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("invalid identifier: {0}")]
     Id(#[from] model::ParseIdError),
+}
+
+impl From<&model::PendingPermission> for pb::PendingPermission {
+    fn from(permission: &model::PendingPermission) -> Self {
+        Self {
+            request_id: permission.request_id.clone(),
+            request: Some((&permission.request).into()),
+        }
+    }
+}
+
+impl TryFrom<pb::PendingPermission> for model::PendingPermission {
+    type Error = Error;
+
+    fn try_from(permission: pb::PendingPermission) -> Result<Self, Self::Error> {
+        Ok(Self {
+            request_id: permission.request_id,
+            request: permission
+                .request
+                .ok_or(Error::MissingPermissionRequest)?
+                .decode()?,
+        })
+    }
 }
 
 impl From<model::SessionStatus> for pb::SessionStatus {
@@ -190,6 +215,8 @@ acp_payload!(
     crate::acp::PromptRequest,
     crate::acp::PromptResponse,
     crate::acp::CancelNotification,
+    crate::acp::RequestPermissionRequest,
+    crate::acp::RequestPermissionResponse,
     crate::acp::SetSessionConfigOptionRequest,
     crate::acp::SetSessionConfigOptionResponse,
     crate::acp::SetSessionModeRequest,

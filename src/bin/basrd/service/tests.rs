@@ -1,6 +1,7 @@
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 mod archive;
+mod permissions;
 
 use basr::{
     model::{ContentBlock, Cursor, Owner},

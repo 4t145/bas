@@ -30,17 +30,23 @@ fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext
         assert!(menu.top() >= sidebar.top() && menu.bottom() <= sidebar.bottom());
         assert_eq!(menu.size, settings.size);
         assert!(window.try_find("project-logo-slot").is_none());
-        let controls =
-            ["toggle-mode", "window-maximize", "window-close"].map(|id| window.find(id).bounds());
+        let controls = [
+            "toggle-mode",
+            "window-minimize",
+            "window-maximize",
+            "window-close",
+        ]
+        .map(|id| window.find(id).bounds());
         for control in controls {
             assert_eq!(control.size, settings.size);
             assert_eq!(control.top(), settings.top());
             assert!(control.right() <= conversation.right());
         }
-        assert_eq!(
-            controls[1].left() - controls[0].right(),
-            controls[2].left() - controls[1].right()
-        );
+        let control_gaps: Vec<_> = controls
+            .windows(2)
+            .map(|pair| pair[1].left() - pair[0].right())
+            .collect();
+        assert!(control_gaps.iter().all(|gap| *gap == control_gaps[0]));
         window.click("sidebar-toggle", cx);
         window.render_frame(cx);
         assert!(
@@ -58,6 +64,7 @@ fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext
             .update(cx, |view, cx| view.toggle_mode(window, cx));
         window.render_frame(cx);
         assert!(window.try_find("window-maximize").is_none());
+        assert!(window.try_find("window-minimize").is_none());
         assert!(window.try_find("window-close").is_none());
         let compact = [
             "app-menu",

@@ -75,6 +75,8 @@ pub(crate) struct Confirmation {
     pub confirm_label: String,
 }
 
+// [!todo] open confirmations and open messages doesn't actiually work on niri/wayland
+
 /// Shows an error independently of any pending confirmation.
 ///
 /// # Errors
@@ -145,6 +147,8 @@ pub(crate) fn open_quit(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
 impl InfoWindow {
     fn title(self) -> &'static str {
         match self {
+            // [!todo] here we have product name `BASR`, witch should be a static value and easy to replace with
+            // other name
             Self::About => "关于 BASR",
             Self::Quit => "退出 BASR？",
             Self::Message => "BASR",

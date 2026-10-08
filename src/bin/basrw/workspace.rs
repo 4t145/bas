@@ -3,8 +3,10 @@ mod archive;
 mod attachments;
 mod chat;
 mod commands;
+mod composer;
 mod forms;
 mod groups;
+mod input_layout;
 mod layout;
 mod markdown;
 mod menus;
@@ -23,7 +25,7 @@ mod thread_actions;
 mod thread_row;
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     net::SocketAddr,
     path::PathBuf,
@@ -77,6 +79,7 @@ actions!(
 );
 
 pub(super) fn bind_keys(cx: &mut App) {
+    composer::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("ctrl-n", NewSession, Some("BasrWorkspace")),
         KeyBinding::new("ctrl-f", FocusSearch, Some("BasrWorkspace")),
@@ -125,6 +128,13 @@ pub(super) struct Workspace {
     authentication_required: Option<String>,
     search: Entity<InputState>,
     composer: Entity<EditorState>,
+    composer_expanded: bool,
+    composer_available_height: Cell<f32>,
+    composer_mode: composer::Mode,
+    approvals: crate::approval::Panel,
+    approval_error: Option<String>,
+    composer_layout: input_layout::InputLayout,
+    composer_rows: usize,
     mention_decorations: TextDecorationCollection,
     decorated_mentions: Vec<TextDecoration>,
     mention_selection: std::ops::Range<usize>,
@@ -205,6 +215,7 @@ impl Workspace {
         let selected_directory = Some(groups::normalize(&cwd));
         let directories = vec![groups::normalize(&cwd)];
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 threads…"));
+        let composer_mode = cx.global::<theme::Appearance>().composer_enter_behavior;
         let composer = cx.new(|cx| {
             EditorState::new(window, cx)
                 .placeholder("描述你想完成的任务…")
@@ -215,7 +226,7 @@ impl Workspace {
                 .smart_indent(false)
                 .soft_wrap(true)
                 .scroll_beyond_last_line(Some(0))
-                .submit_on_enter(true)
+                .submit_on_enter(composer_mode == composer::Mode::Send)
         });
         composer.update(cx, |input, cx| input.focus(window, cx));
         let mention_decorations = composer.update(cx, |input, cx| {
@@ -255,10 +266,11 @@ impl Workspace {
                     0..this
                         .conversation
                         .as_ref()
-                        .map_or(0, |state| state.items.len()),
+                        .map_or(0, |state| state.rows.len()),
                 );
                 cx.notify();
             }),
+            cx.observe_global::<theme::Appearance>(|this, cx| this.sync_composer_mode(cx)),
             cx.observe(&composer, |this, _, cx| {
                 this.sync_mentions(cx);
                 cx.notify();
@@ -270,7 +282,8 @@ impl Workspace {
                 }
             }),
             cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
-                if matches!(event, InputEvent::PressEnter { shift: false, .. })
+                if this.composer_mode == composer::Mode::Send
+                    && matches!(event, InputEvent::PressEnter { shift: false, .. })
                     && !this.complete_command(window, cx)
                 {
                     this.send_prompt(window, cx);
@@ -334,6 +347,16 @@ impl Workspace {
             authentication_required: None,
             search,
             composer,
+            composer_expanded: false,
+            composer_available_height: Cell::new(620.),
+            composer_mode,
+            approvals: crate::approval::Panel::default(),
+            approval_error: None,
+            composer_layout: input_layout::InputLayout::new(
+                gpui_kit::font(cx.theme().font_family.clone()),
+                theme::content_font_size(cx),
+            ),
+            composer_rows: 1,
             mention_decorations,
             decorated_mentions: Vec::new(),
             mention_selection: 0..0,
@@ -386,7 +409,21 @@ impl Workspace {
             Command::Prompt { session, .. } => Some(*session),
             _ => None,
         };
+        let permission = match &command {
+            Command::RespondPermission {
+                session,
+                request_id,
+                ..
+            } => Some((*session, request_id.clone())),
+            _ => None,
+        };
         if !self.connection.send(command) {
+            if let Some((session, request_id)) = permission
+                && self.active == Some(session)
+            {
+                self.approvals
+                    .responded(&request_id, Err("连接任务已停止，请重新打开 BASR。".into()));
+            }
             if let Some(session) = prompt
                 && let Some(outbox) = self.outboxes.get_mut(&session)
                 && let Some(outbox::Action::Rejected {
@@ -412,6 +449,7 @@ impl Workspace {
     fn composer_error(&self, cx: &App) -> Option<String> {
         self.error
             .clone()
+            .or_else(|| self.approval_error.clone())
             .or_else(|| self.authentication_hint())
             .or_else(|| self.connection_error.clone())
             .or_else(|| match &self.stream {
@@ -433,13 +471,26 @@ impl Workspace {
         } else if self.active.is_some_and(|id| self.sending(id)) {
             "正在发送…"
         } else if self.working() {
-            "加入待发送队列 · Enter\n当前回复结束后发送 · Shift Enter 换行"
+            "加入待发送队列"
         } else {
-            "发送 · Enter\n换行 · Shift Enter"
+            "发送"
+        };
+        let hint = if self.working() {
+            format!(
+                "{hint} · {}\n当前回复结束后发送 · {} 换行",
+                self.composer_send_shortcut(),
+                self.composer_newline_shortcut()
+            )
+        } else {
+            format!(
+                "{hint} · {}\n换行 · {}",
+                self.composer_send_shortcut(),
+                self.composer_newline_shortcut()
+            )
         };
         self.composer_error(cx)
             .map(|error| format!("{error}\n\n{hint}"))
-            .unwrap_or_else(|| hint.into())
+            .unwrap_or(hint)
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -521,6 +572,8 @@ impl Workspace {
             self.collapsed_workspaces.remove(&self.selected_directory);
         }
         self.conversation = None;
+        self.approvals.clear();
+        self.approval_error = None;
         self.epoch += 1;
         self.stream = StreamState::Loading;
         self.error = None;
@@ -561,6 +614,8 @@ impl Workspace {
         self.restore_on_connect = false;
         self.remember_thread();
         self.conversation = None;
+        self.approvals.clear();
+        self.approval_error = None;
         self.creating = false;
         self.authentication_required = None;
         self.markdown.borrow_mut().clear();
@@ -610,6 +665,9 @@ impl Workspace {
     }
 
     fn can_send(&self, cx: &App) -> bool {
+        if self.approval_error.is_some() {
+            return false;
+        }
         let ready = self.active.is_some()
             && self.stream == StreamState::Live
             && self.current().is_some_and(|session| {
@@ -974,6 +1032,7 @@ impl Workspace {
             }
             Update::Cancelled { session, result } => {
                 self.cancelling.remove(&session);
+                self.complete_queue_interrupt(session, result.is_ok());
                 if let Err(error) = result {
                     self.error = Some(format!("停止失败：{error}"));
                 }
@@ -1005,7 +1064,7 @@ impl Workspace {
                 if let Some(meta) = self.sessions.iter_mut().find(|meta| meta.id == session.id) {
                     crate::conversation::merge_meta(meta, &conversation.session);
                 }
-                self.list.reset(conversation.items.len());
+                self.list.reset(conversation.rows.len());
                 self.list.set_follow_mode(FollowMode::Tail);
                 self.conversation = Some(conversation);
             }
@@ -1021,13 +1080,28 @@ impl Workspace {
                     outbox.observe(&event);
                 }
                 if let Some(conversation) = &mut self.conversation {
-                    let old_count = conversation.items.len();
+                    let old_count = conversation.rows.len();
+                    let expanded_activity = conversation
+                        .rows
+                        .last()
+                        .filter(|row| row.activity && row.items.len() == 1)
+                        .map(|row| conversation.items[row.items.start].id())
+                        .filter(|id| self.expanded.contains(id));
                     let changed = conversation.apply(event);
-                    let count = conversation.items.len();
+                    let count = conversation.rows.len();
+                    if let Some(id) = expanded_activity
+                        && conversation
+                            .rows
+                            .get(old_count.saturating_sub(1))
+                            .is_some_and(|row| row.items.len() > 1)
+                    {
+                        self.expanded.insert(format!("activity-{id}"));
+                    }
                     if count > old_count {
                         self.list.splice(old_count..old_count, count - old_count);
                     }
-                    if let Some(index) = changed {
+                    if let Some(index) = changed.and_then(|index| conversation.row_for_item(index))
+                    {
                         self.list.remeasure_items(index..count);
                     }
                     if let Some(meta) = self
@@ -1040,7 +1114,37 @@ impl Workspace {
                 }
             }
             Update::Stream { epoch, state } if epoch == self.epoch => self.stream = state,
-            Update::Snapshot { .. } | Update::Event { .. } | Update::Stream { .. } => {}
+            Update::Permissions { epoch, pending } if epoch == self.epoch => {
+                self.approval_error = None;
+                self.approvals.replace(pending);
+                if self.compact && !self.approvals.is_empty() {
+                    self.output_open = true;
+                    self.resize_window(window, cx);
+                }
+            }
+            Update::PermissionResponded {
+                session,
+                request_id,
+                result,
+            } => {
+                if self.active == Some(session) {
+                    self.approvals.responded(&request_id, result);
+                }
+            }
+            Update::PermissionUnavailable { epoch, message } if epoch == self.epoch => {
+                self.approvals.clear();
+                self.approval_error = Some(message);
+                if let Some(session) = self.active
+                    && let Some(outbox) = self.outboxes.get_mut(&session)
+                {
+                    outbox.pause();
+                }
+            }
+            Update::Snapshot { .. }
+            | Update::Event { .. }
+            | Update::Stream { .. }
+            | Update::Permissions { .. }
+            | Update::PermissionUnavailable { .. } => {}
         }
         self.pause_archived();
         self.flush_queue(cx);
@@ -1049,6 +1153,7 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.measure_composer(cx);
         self.sync_foreground(window);
         self.sync_reply_visibility(window, cx);
         if self.compact {

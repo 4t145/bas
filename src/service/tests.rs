@@ -1,6 +1,8 @@
 use super::{Error, pb};
 use crate::{acp, model::*};
 
+mod permissions;
+
 fn event(kind: EventKind) -> Event {
     Event::new(SessionId::new(), Cursor::from_raw(17), kind)
 }

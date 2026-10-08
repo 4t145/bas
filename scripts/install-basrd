@@ -35,9 +35,9 @@ package_path=$(nix eval --raw "$source_path#basrd.outPath")
 "$root/scripts/nix-profile-install" "$source_path" basrd -- "$@"
 
 if $service; then
-    systemctl --user link "$package_path/share/systemd/user/basrd.service"
+    systemctl --user link --force "$package_path/share/systemd/user/basrd.service"
     systemctl --user daemon-reload
-    systemctl --user enable basrd.service
+    systemctl --user enable --force basrd.service
     # Restart so a running daemon picks up the freshly installed binary.
     systemctl --user restart basrd.service
 fi

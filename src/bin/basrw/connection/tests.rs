@@ -7,6 +7,7 @@ use tonic::{Request, Response, Status, transport::Server};
 use super::*;
 use pb::basr_server::{Basr, BasrServer};
 mod archive;
+mod permissions;
 
 #[test]
 fn native_auth_required_is_typed_but_transport_failures_stay_errors() {
@@ -44,6 +45,7 @@ struct Fixture {
     session: SessionId,
     attachments: Arc<Mutex<Vec<Option<u64>>>>,
     prompts: Arc<Mutex<Vec<acp::PromptRequest>>>,
+    permission_answers: Arc<Mutex<Vec<pb::RespondPermissionRequest>>>,
     task: JoinHandle<()>,
 }
 
@@ -59,6 +61,9 @@ enum Scenario {
     Expired,
     Missing,
     Archived,
+    Approval,
+    ApprovalDisconnected,
+    LegacyApprovals,
 }
 
 struct Service {
@@ -66,6 +71,8 @@ struct Service {
     history: Vec<Event>,
     attachments: Arc<Mutex<Vec<Option<u64>>>>,
     prompts: Arc<Mutex<Vec<acp::PromptRequest>>>,
+    permission_answers: Arc<Mutex<Vec<pb::RespondPermissionRequest>>>,
+    permission_snapshots: tokio::sync::watch::Sender<Vec<PendingPermission>>,
     scenario: Scenario,
 }
 
@@ -74,6 +81,83 @@ impl Basr for Service {
     type AttachStream = Pin<Box<dyn Stream<Item = Result<pb::Event, Status>> + Send>>;
     type SetForegroundStream =
         Pin<Box<dyn Stream<Item = Result<pb::ForegroundResponse, Status>> + Send>>;
+    type WatchPermissionsStream =
+        Pin<Box<dyn Stream<Item = Result<pb::PermissionSnapshot, Status>> + Send>>;
+
+    async fn watch_permissions(
+        &self,
+        request: Request<pb::WatchPermissionsRequest>,
+    ) -> Result<Response<Self::WatchPermissionsStream>, Status> {
+        if matches!(self.scenario, Scenario::LegacyApprovals) {
+            return Err(Status::unimplemented("legacy daemon"));
+        }
+        assert_eq!(request.into_inner().session, self.session.id.to_string());
+        let session = self.session.id;
+        if matches!(self.scenario, Scenario::ApprovalDisconnected) {
+            let pending = self
+                .permission_snapshots
+                .borrow()
+                .iter()
+                .map(pb::PendingPermission::from)
+                .collect();
+            return Ok(Response::new(Box::pin(tokio_stream::iter([
+                Ok(pb::PermissionSnapshot {
+                    session: session.to_string(),
+                    pending,
+                }),
+                Err(Status::unavailable("approval stream interrupted")),
+            ]))));
+        }
+        let stream = futures::stream::unfold(
+            (self.permission_snapshots.subscribe(), true),
+            move |(mut snapshots, first)| async move {
+                if !first && snapshots.changed().await.is_err() {
+                    return None;
+                }
+                let pending = snapshots
+                    .borrow_and_update()
+                    .iter()
+                    .map(pb::PendingPermission::from)
+                    .collect();
+                Some((
+                    Ok(pb::PermissionSnapshot {
+                        session: session.to_string(),
+                        pending,
+                    }),
+                    (snapshots, false),
+                ))
+            },
+        );
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn respond_permission(
+        &self,
+        request: Request<pb::RespondPermissionRequest>,
+    ) -> Result<Response<pb::RespondPermissionResponse>, Status> {
+        let request = request.into_inner();
+        assert_eq!(request.session, self.session.id.to_string());
+        let response: acp::RequestPermissionResponse = request
+            .response
+            .as_ref()
+            .expect("response payload")
+            .decode()
+            .expect("canonical ACP outcome");
+        let mut answers = self.permission_answers.lock().expect("permission answers");
+        if answers
+            .iter()
+            .any(|answer| answer.request_id == request.request_id)
+        {
+            return Err(Status::failed_precondition("already answered"));
+        }
+        if matches!(response.outcome, acp::RequestPermissionOutcome::Selected(selected) if selected.option_id.to_string() != "allow-once")
+        {
+            return Err(Status::invalid_argument("option not offered"));
+        }
+        answers.push(request);
+        self.permission_snapshots.send_replace(Vec::new());
+        Ok(Response::new(pb::RespondPermissionResponse {}))
+    }
 
     async fn set_foreground(
         &self,
@@ -251,11 +335,39 @@ async fn fixture(scenario: Scenario) -> Fixture {
         .collect();
     let attachments = Arc::new(Mutex::new(Vec::new()));
     let prompts = Arc::new(Mutex::new(Vec::new()));
+    let permission_answers = Arc::new(Mutex::new(Vec::new()));
+    let initial_permissions = if matches!(
+        scenario,
+        Scenario::Approval | Scenario::ApprovalDisconnected
+    ) {
+        vec![PendingPermission {
+            request_id: "pending-1".into(),
+            request: acp::RequestPermissionRequest::new(
+                id.to_string(),
+                acp::ToolCallUpdate::new(
+                    "call-1",
+                    acp::ToolCallUpdateFields::new()
+                        .title("run command")
+                        .raw_input(serde_json::json!({"command": "pwd"})),
+                ),
+                vec![acp::PermissionOption::new(
+                    "allow-once",
+                    "Allow once",
+                    acp::PermissionOptionKind::AllowOnce,
+                )],
+            ),
+        }]
+    } else {
+        Vec::new()
+    };
+    let permission_snapshots = tokio::sync::watch::channel(initial_permissions).0;
     let service = Service {
         session,
         history,
         attachments: attachments.clone(),
         prompts: prompts.clone(),
+        permission_answers: permission_answers.clone(),
+        permission_snapshots,
         scenario,
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -274,6 +386,7 @@ async fn fixture(scenario: Scenario) -> Fixture {
         session: id,
         attachments,
         prompts,
+        permission_answers,
         task,
     }
 }

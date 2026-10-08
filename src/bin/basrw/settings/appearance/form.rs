@@ -1,7 +1,7 @@
 use super::AppearancePage;
 use crate::theme::{
     self,
-    preferences::{Background, Preferences, ThemeMode, ThemeSource},
+    preferences::{Background, ComposerEnterBehavior, Preferences, ThemeMode, ThemeSource},
 };
 use gpui_kit::{
     App, AppContext, Context, Entity, Window,
@@ -20,6 +20,7 @@ pub(super) struct Form {
     pub source: Entity<SelectState<Vec<Choice<ThemeSource>>>>,
     pub mode: Entity<SelectState<Vec<Choice<ThemeMode>>>>,
     pub background: Entity<SelectState<Vec<Choice<Background>>>>,
+    pub composer_enter: Entity<SelectState<Vec<Choice<ComposerEnterBehavior>>>>,
 }
 
 #[derive(Clone)]
@@ -67,6 +68,20 @@ impl SelectItem for Choice<Background> {
         .into()
     }
     fn value(&self) -> &Background {
+        &self.0
+    }
+}
+
+impl SelectItem for Choice<ComposerEnterBehavior> {
+    type Value = ComposerEnterBehavior;
+    fn title(&self) -> gpui_kit::SharedString {
+        match self.0 {
+            ComposerEnterBehavior::Send => "Enter 发送",
+            ComposerEnterBehavior::Newline => "Enter 换行",
+        }
+        .into()
+    }
+    fn value(&self) -> &ComposerEnterBehavior {
         &self.0
     }
 }
@@ -149,6 +164,12 @@ impl Form {
                 window,
                 cx,
             ),
+            composer_enter: choice(
+                vec![ComposerEnterBehavior::Send, ComposerEnterBehavior::Newline],
+                p.composer_enter_behavior,
+                window,
+                cx,
+            ),
         }
     }
 
@@ -201,6 +222,12 @@ impl Form {
                 .unwrap_or_default(),
             background: self
                 .background
+                .read(cx)
+                .selected_value()
+                .copied()
+                .unwrap_or_default(),
+            composer_enter_behavior: self
+                .composer_enter
                 .read(cx)
                 .selected_value()
                 .copied()

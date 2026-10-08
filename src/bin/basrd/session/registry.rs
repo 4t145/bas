@@ -65,6 +65,7 @@ pub struct NotFound(pub SessionId);
 pub struct Registry {
     catalog: std::sync::RwLock<Arc<Catalog>>,
     host: Arc<dyn Host>,
+    permissions: Arc<agent::permissions::Permissions>,
     limits: Limits,
     sessions: Arc<RwLock<BTreeMap<SessionId, Arc<Session>>>>,
     stopping: CancellationToken,
@@ -96,9 +97,12 @@ impl Drop for PendingSession {
 
 impl Registry {
     pub fn new(catalog: Arc<Catalog>, host: Arc<dyn Host>, limits: Limits) -> Self {
+        let permissions = Arc::new(agent::permissions::Permissions::default());
+        let host = permissions.host(host);
         Self {
             catalog: std::sync::RwLock::new(catalog),
             host,
+            permissions,
             limits,
             sessions: Arc::new(RwLock::new(BTreeMap::new())),
             stopping: CancellationToken::new(),
@@ -180,6 +184,10 @@ impl Registry {
 
     pub fn startup_timeout(&self) -> Duration {
         self.limits.startup_timeout
+    }
+
+    pub fn permissions(&self) -> &Arc<agent::permissions::Permissions> {
+        &self.permissions
     }
 
     /// Publishing a catalog never mutates or stops existing sessions.
@@ -398,6 +406,7 @@ impl Registry {
             .ok_or(storage::Error::NotFound(id))?;
         let sessions = Arc::clone(&self.sessions);
         let storage = self.storage.clone();
+        let permissions = Arc::clone(&self.permissions);
         // Deletion and registry eviction form one owned operation: an RPC
         // disconnect cannot leave an in-memory session pointing at a deleted row.
         tokio::spawn(async move {
@@ -408,9 +417,11 @@ impl Registry {
             {
                 session.delete_storage().await?;
                 sessions.write().await.remove(&id);
+                permissions.close(id);
                 session.suspend().await;
             } else {
                 sessions.write().await.remove(&id);
+                permissions.close(id);
                 session.shutdown().await;
                 if let Some(storage) = storage {
                     storage.delete(id).await?;
@@ -425,6 +436,7 @@ impl Registry {
     /// Prevents new sessions, cancels pending launches and joins every registered backend.
     pub async fn shutdown(&self) {
         self.stopping.cancel();
+        self.permissions.cancel_all();
         let sessions = std::mem::take(&mut *self.sessions.write().await);
         if self
             .storage

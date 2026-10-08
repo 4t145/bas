@@ -1,6 +1,7 @@
 //! Native session management and agent conversations for BASR.
 
 mod application;
+mod approval;
 mod assets;
 mod attachment;
 mod branding;
@@ -98,7 +99,9 @@ fn main() -> Result<()> {
             let bounds = Bounds::centered(None, workspace::initial_size(!args.window), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: None,
+                titlebar: cfg!(target_os = "macos")
+                    .then(gpui_kit::component::TitleBar::title_bar_options),
+                app_owns_titlebar_drag: cfg!(target_os = "macos"),
                 window_decorations: Some(WindowDecorations::Client),
                 window_background: cx.global::<theme::Appearance>().background,
                 window_min_size: Some(size(px(420.), px(80.))),

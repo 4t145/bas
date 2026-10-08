@@ -27,7 +27,7 @@ impl Workspace {
                 if this
                     .conversation
                     .as_ref()
-                    .is_some_and(|c| index < c.items.len())
+                    .is_some_and(|c| index < c.rows.len())
                 {
                     this.list.remeasure_items(index..index + 1);
                 }
@@ -64,6 +64,19 @@ pub(super) fn view(state: &Entity<TextViewState>, cx: &App) -> TextView {
         .scrollable(false)
         .selection_format(SelectionFormat::Plain)
         .w_full()
+        .table_actions(|table, _, _| {
+            let source = table.markdown.clone();
+            div().flex().justify_end().child(
+                Button::new("copy-markdown-table")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Copy)
+                    .tooltip("复制 Markdown 表格")
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(source.clone()));
+                    }),
+            )
+        })
         .on_link_click(|url, _, _, cx| {
             if url.starts_with("https://")
                 || url.starts_with("http://")

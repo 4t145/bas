@@ -11,6 +11,25 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub type Client = pb::basr_client::BasrClient<Channel>;
 
 impl Client {
+    /// Answers a live tool approval with a canonical ACP outcome.
+    /// # Errors
+    /// Returns an error if the request expired, the option is invalid, or transport fails.
+    pub async fn respond_permission_acp(
+        &mut self,
+        session: crate::model::SessionId,
+        request_id: String,
+        outcome: crate::acp::RequestPermissionOutcome,
+    ) -> Result<(), tonic::Status> {
+        let response = crate::acp::RequestPermissionResponse::new(outcome);
+        self.respond_permission(pb::RespondPermissionRequest {
+            session: session.to_string(),
+            request_id,
+            response: Some((&response).into()),
+        })
+        .await?;
+        Ok(())
+    }
+
     /// Applies the shared limit for ACP image/file messages and history pages.
     pub fn with_payload_limit(self) -> Self {
         self.max_decoding_message_size(super::MAX_MESSAGE_SIZE)

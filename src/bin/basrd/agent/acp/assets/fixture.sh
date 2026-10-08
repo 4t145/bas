@@ -92,6 +92,11 @@ while IFS= read -r request; do
                 printf '%s\n' '{"jsonrpc":"2.0","method":"fixture/unknown","params":{}}'
                 printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"fixture prompt rejected"}}\n' "$id"
                 BASR_FIXTURE_MODE=normal
+            elif [ "$BASR_FIXTURE_MODE" = interactive_permission ]; then
+                printf '%s\n' '{"jsonrpc":"2.0","id":"permission","method":"session/request_permission","params":{"sessionId":"fixture","toolCall":{"toolCallId":"execute","title":"run command","kind":"execute","status":"pending","rawInput":{"command":"pwd"}},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"reject-once","name":"Reject once","kind":"reject_once"}]}}'
+                IFS= read -r response
+                printf '%s\n' "$response" > "$BASR_FIXTURE_PID.permission"
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$prompt_id"
             elif [ "$BASR_FIXTURE_MODE" = context ]; then
                 previous=$(cat "$BASR_FIXTURE_PID.context")
                 count=$((previous + 1))

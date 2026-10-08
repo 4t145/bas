@@ -17,6 +17,7 @@ use tokio::{
 use tonic::{Code, transport::Endpoint};
 
 mod foreground;
+mod permissions;
 
 const EVENT_CAPACITY: usize = 256;
 const HISTORY_PAGE_SIZE: u32 = 256;
@@ -53,6 +54,11 @@ pub(super) enum Command {
     },
     Cancel(SessionId),
     SetConfig(acp::SetSessionConfigOptionRequest),
+    RespondPermission {
+        session: SessionId,
+        request_id: String,
+        outcome: acp::RequestPermissionOutcome,
+    },
     Watch {
         session: SessionId,
         epoch: u64,
@@ -67,6 +73,19 @@ pub(super) struct Catalog {
 }
 
 pub(super) enum Update {
+    Permissions {
+        epoch: u64,
+        pending: Vec<PendingPermission>,
+    },
+    PermissionUnavailable {
+        epoch: u64,
+        message: String,
+    },
+    PermissionResponded {
+        session: SessionId,
+        request_id: String,
+        result: Result<(), String>,
+    },
     Configured {
         session: SessionId,
         result: Result<acp::SetSessionConfigOptionResponse, String>,
@@ -200,7 +219,7 @@ async fn run(
                     Command::Foreground(session) => { foreground.send_replace(session); }
                     Command::Watch { session, epoch } => {
                         if let Some(task) = attachment.take() { task.abort(); }
-                        attachment = Some(tasks.spawn(watch(client.clone(), updates.clone(), session, epoch)));
+                        attachment = Some(tasks.spawn(permissions::watch_session(client.clone(), updates.clone(), session, epoch)));
                     }
                     Command::Detach => {
                         if let Some(task) = attachment.take() { task.abort(); }
@@ -314,6 +333,24 @@ fn creation_result(
 
 async fn execute(mut client: Client, command: Command) -> Update {
     match command {
+        Command::RespondPermission {
+            session,
+            request_id,
+            outcome,
+        } => {
+            let result = request(async {
+                client
+                    .respond_permission_acp(session, request_id.clone(), outcome)
+                    .await?;
+                Ok(())
+            })
+            .await;
+            Update::PermissionResponded {
+                session,
+                request_id,
+                result,
+            }
+        }
         Command::Create(form) => create_session(&mut client, form).await,
         Command::Rename { session, title } => {
             let result = request(async {

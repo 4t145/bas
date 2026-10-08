@@ -1,6 +1,6 @@
 use super::form::FontChoice;
 use super::*;
-use crate::theme::preferences::{Background, ThemeMode, ThemeSource};
+use crate::theme::preferences::{Background, ComposerEnterBehavior, ThemeMode, ThemeSource};
 use gpui_kit::{Entity, TestAppContext, WindowHandle, size, test::TestWindowExt};
 
 struct Fixture {
@@ -231,6 +231,7 @@ fn all_fields_round_trip_and_default_is_applied_immediately(cx: &mut TestAppCont
         content_font_size: Some(19.),
         content_line_height: Some(1.8),
         content_opacity: Some(0.8),
+        composer_enter_behavior: ComposerEnterBehavior::Newline,
         theme_file: Some("theme.json".into()),
         theme_source: ThemeSource::Builtin,
         theme_mode: ThemeMode::Dark,
@@ -254,4 +255,45 @@ fn all_fields_round_trip_and_default_is_applied_immediately(cx: &mut TestAppCont
     })
     .expect("reset control");
     assert_eq!(read(&fixture), Preferences::default());
+}
+
+#[gpui_kit::test]
+fn message_enter_setting_persists_and_reopens_with_the_saved_choice(cx: &mut TestAppContext) {
+    let fixture = fixture(cx, builtin());
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |page, cx| {
+            page.query = "消息输入框".into();
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.find("appearance-composer-enter-row").visible());
+        let select = fixture.view.read(cx).form.composer_enter.clone();
+        select.update(cx, |select, cx| {
+            select.set_selected_value(&ComposerEnterBehavior::Newline, window, cx);
+            cx.emit(SelectEvent::Confirm(Some(ComposerEnterBehavior::Newline)));
+        });
+    })
+    .expect("change Enter setting");
+    assert_eq!(
+        read(&fixture).composer_enter_behavior,
+        ComposerEnterBehavior::Newline
+    );
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        let reopened =
+            cx.new(|cx| AppearancePage::new(theme::Editor::at(fixture.path.clone()), window, cx));
+        assert_eq!(
+            reopened
+                .read(cx)
+                .form
+                .composer_enter
+                .read(cx)
+                .selected_value(),
+            Some(&ComposerEnterBehavior::Newline)
+        );
+        assert_eq!(
+            cx.global::<theme::Appearance>().composer_enter_behavior,
+            ComposerEnterBehavior::Newline
+        );
+    })
+    .expect("reopen saved Enter setting");
 }

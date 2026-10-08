@@ -37,6 +37,11 @@ service Basr {
   rpc SetConfigOption(AcpPayload) returns (AcpPayload);
   // ACP session/set_mode request and response.
   rpc SetMode(AcpPayload) returns (AcpPayload);
+  // Subscribes an interactive approver; each update replaces the pending set.
+  // Unsubscribing the last approver cancels outstanding approval requests.
+  rpc WatchPermissions(WatchPermissionsRequest) returns (stream PermissionSnapshot);
+  // Answers exactly one live ACP request using an agent-provided option id.
+  rpc RespondPermission(RespondPermissionRequest) returns (RespondPermissionResponse);
   // Renames a session.
   rpc SetTitle(SetTitleRequest) returns (SetTitleResponse);
   // Loads a page of history by cursor.
@@ -251,6 +256,30 @@ message TurnAccepted {
 }
 
 message CancelResponse {}
+
+message WatchPermissionsRequest {
+  string session = 1;
+}
+
+message PendingPermission {
+  string request_id = 1;
+  // Canonical ACP RequestPermissionRequest using the daemon session id.
+  AcpPayload request = 2;
+}
+
+message PermissionSnapshot {
+  string session = 1;
+  repeated PendingPermission pending = 2;
+}
+
+message RespondPermissionRequest {
+  string session = 1;
+  string request_id = 2;
+  // Canonical ACP RequestPermissionResponse.
+  AcpPayload response = 3;
+}
+
+message RespondPermissionResponse {}
 
 message SetTitleRequest {
   string session = 1;

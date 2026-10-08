@@ -35,7 +35,7 @@ impl Group {
         match self {
             Self::Theme => "主题来源、明暗模式与窗口背景。",
             Self::Fonts => "界面与正文使用的字体和字号。",
-            Self::Layout => "正文行高与内容不透明度。",
+            Self::Layout => "正文行高、内容不透明度与消息输入行为。",
         }
     }
     /// Navigation entry in the settings sidebar.
@@ -76,9 +76,10 @@ enum Field {
     ContentSize,
     LineHeight,
     Opacity,
+    ComposerEnter,
 }
 impl Field {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::Source,
         Self::Mode,
         Self::Background,
@@ -90,6 +91,7 @@ impl Field {
         Self::ContentSize,
         Self::LineHeight,
         Self::Opacity,
+        Self::ComposerEnter,
     ];
     fn id(self) -> &'static str {
         match self {
@@ -104,6 +106,7 @@ impl Field {
             Self::ContentSize => "appearance-content-size",
             Self::LineHeight => "appearance-line-height",
             Self::Opacity => "appearance-opacity",
+            Self::ComposerEnter => "appearance-composer-enter",
         }
     }
     fn label(self) -> &'static str {
@@ -119,6 +122,7 @@ impl Field {
             Self::ContentSize => "正文字号",
             Self::LineHeight => "正文行高",
             Self::Opacity => "内容不透明度",
+            Self::ComposerEnter => "消息输入框 Enter",
         }
     }
     fn help(self) -> &'static str {
@@ -133,6 +137,9 @@ impl Field {
             Self::UiSize | Self::ContentSize => "像素；留空继承",
             Self::LineHeight => "字号倍数；留空继承",
             Self::Opacity => "0–1；留空继承",
+            Self::ComposerEnter => {
+                "默认 Enter 发送；换行时用 Ctrl+Enter 发送，macOS 也支持 Cmd+Enter"
+            }
         }
     }
     fn group(self) -> Group {
@@ -141,7 +148,7 @@ impl Field {
             Self::UiFont | Self::MonoFont | Self::Fallbacks | Self::UiSize | Self::ContentSize => {
                 Group::Fonts
             }
-            Self::LineHeight | Self::Opacity => Group::Layout,
+            Self::LineHeight | Self::Opacity | Self::ComposerEnter => Group::Layout,
         }
     }
     fn matches(self, query: &str) -> bool {
@@ -253,6 +260,7 @@ impl AppearancePage {
         select!(background);
         select!(ui_font);
         select!(mono_font);
+        select!(composer_enter);
     }
 
     /// # Errors
@@ -337,6 +345,11 @@ impl AppearancePage {
             Field::Source => Select::new(&self.form.source).into_any_element(),
             Field::Mode => Select::new(&self.form.mode).into_any_element(),
             Field::Background => Select::new(&self.form.background).into_any_element(),
+            Field::ComposerEnter => div()
+                .id(field.id())
+                .test_support()
+                .child(Select::new(&self.form.composer_enter))
+                .into_any_element(),
             Field::UiFont => Select::new(&self.form.ui_font)
                 .search_placeholder("搜索字体")
                 .into_any_element(),

@@ -3,7 +3,8 @@ use super::source;
 use anyhow::Result;
 pub(super) use basr::config::appearance::positive;
 pub(crate) use basr::config::appearance::{
-    Appearance as Preferences, Background, ThemeMode, ThemeSource, ValidationError,
+    Appearance as Preferences, Background, ComposerEnterBehavior, ThemeMode, ThemeSource,
+    ValidationError,
 };
 use gpui_kit::WindowBackgroundAppearance;
 
@@ -20,6 +21,7 @@ pub(super) struct Effective {
     pub content_font_size: f32,
     pub content_line_height: f32,
     pub content_opacity: f32,
+    pub composer_enter_behavior: ComposerEnterBehavior,
 }
 
 /// # Errors
@@ -65,5 +67,6 @@ pub(super) fn resolve(
         content_opacity: preferences
             .content_opacity
             .unwrap_or(DEFAULT_CONTENT_OPACITY),
+        composer_enter_behavior: preferences.composer_enter_behavior,
     })
 }

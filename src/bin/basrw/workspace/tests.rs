@@ -5,14 +5,19 @@ use tokio::sync::mpsc;
 use super::*;
 
 mod application;
+mod approval;
 mod archive;
 mod authentication;
 mod chrome;
+mod composer_expansion;
+mod composer_geometry;
+mod composer_queue;
 mod navigation;
 mod rename;
 mod rows;
 mod settings;
 mod thread_actions;
+mod timeline;
 mod tooltips;
 
 fn receipt(cursor: u64) -> basr::model::TurnReceipt {
@@ -1312,7 +1317,9 @@ fn soft_wrapped_composer_text_increases_the_editor_height(cx: &mut TestAppContex
         let wrapped_height = window.find("composer-editor").bounds().size.height;
         assert!(
             wrapped_height > initial_height,
-            "soft-wrapped text must grow the composer: initial={initial_height:?}, wrapped={wrapped_height:?}"
+            "soft-wrapped text must grow the composer: initial={initial_height:?}, wrapped={wrapped_height:?}, rows={}, text_bounds={:?}",
+            fixture.view.read(cx).composer_rows,
+            fixture.view.read(cx).composer.read(cx).text_bounds(),
         );
     })
     .expect("composer window");

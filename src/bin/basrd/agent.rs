@@ -16,6 +16,7 @@ mod spec;
 
 pub mod acp;
 pub mod embedded;
+pub mod permissions;
 
 pub use catalog::*;
 pub use driver::*;

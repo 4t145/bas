@@ -100,6 +100,22 @@ let options = client.set_config_option_acp(
 后端返回有效的 ACP 请求错误时，只结束当前回合，允许修正输入后继续原会话。
 连接断开、协议故障和超过取消宽限期等不可继续的情况仍会使整个会话失败并回收后端。
 
+### 交互工具审批
+
+`WatchPermissions { session }` 订阅当前仍待处理的 ACP 权限请求快照。每条请求有
+daemon 生成的唯一 `request_id` 和完整 `RequestPermissionRequest`；新订阅者收到当前
+快照，已回答的请求不会通过历史重放。GUI 在加载会话历史前建立审批订阅。
+
+`RespondPermission { session, request_id, response }` 返回原生 ACP
+`RequestPermissionResponse`。服务端校验会话、待审批 ID 和 Agent 实际提供的 option ID；
+未知选项返回 `InvalidArgument`，已失效、已回答或其他会话的请求返回 `FailedPrecondition`。
+有效响应只消费请求一次，随后发布移除该请求的快照；客户端不自动重试修改请求。
+
+回合取消、后端回调结束或会话删除会清理挂起请求。最后一个审批订阅断开时取消尚未
+回答的请求；进入过交互审批的会话在无订阅期间取消后续请求，不能回退为自动允许。
+从未建立交互审批的会话沿用原有无界面权限策略。审批状态不持久化到历史，客户端
+断线重连必须使用新的待审批快照，不能重放旧的回答。
+
 ### 可恢复归档
 
 `SetArchived { session, archived }` 在会话锁内更新 `archived`，发布带 revision 的
@@ -116,8 +132,9 @@ GUI 在归档时保留草稿和未发队列并暂停派发，恢复本身不自�
 `DeleteSession` / `basrctl session remove` 仍是停止 Agent 并遗忘会话的永久删除操作，
 不作为旧服务器不支持归档时的兼容替代。
 
-归档沿用当前内存会话存储与有界历史策略，不是磁盘备份：
-GUI 关闭不会销毁它，但 daemon 重启后会话和归档状态仍会丢失，已淘汰的历史不会恢复。
+归档元数据与会话快照一起提交。默认 `localdb` 保留会话与历史事件，daemon 重启后可读取；
+`memory` 模式只保留有界内存历史，重启后丢失。Agent 继续对话还取决于其会话恢复能力，
+已淘汰的内存事件不会恢复。
 归档功能需更新 daemon、CLI 与 GUI；旧 daemon 返回 `UNIMPLEMENTED` 时应提示升级，
 不能把新增字段的默认 `false` 当作旧服务支持归档的证据。
 
@@ -125,8 +142,9 @@ GUI 关闭不会销毁它，但 daemon 重启后会话和归档状态仍会丢�
 
 所有 ACP 更新都进入历史，包括流式内容块。客户端按 cursor 去重后，以相同逻辑
 处理直播和回放；文本、思考分别累积，工具更新使用 ACP 的 `ToolCall::update`。
-游标过期仍返回 `DATA_LOSS`；历史容量现在按所有更新计数，淘汰可能发生在一条消息中间。
-`LoadHistory` 不承诺返回已淘汰内容。大附件也会占用历史内存。
+内存历史游标过期仍返回 `DATA_LOSS`；该容量按所有更新计数，淘汰可能发生在一条消息中间。
+`localdb` 通过持久事件分页恢复历史；`LoadHistory` 不承诺返回已淘汰的内存内容。
+大附件也会占用历史存储。
 客户端与服务端的单条 gRPC 消息上限为 32 MiB，包含 base64 开销。历史分页同时遵守
 请求的事件条数和编码字节预算，达到预算时提前结束页面，并返回最后实际输出事件的
 `next`。单个事件已超过上限时返回 `RESOURCE_EXHAUSTED`，不会静默跳过或截断它。
@@ -139,7 +157,7 @@ CLI 的人类可读输出会转义终端控制字符；JSON 输出保留 JSON �
 旧的 ContentBlock / Delta / Message protobuf 字段已移除，事件字段号保留以避免复用。
 GUI 的 `Message` 仅用于界面聚合，不属于 RPC schema。GUI 附件选择直接构造 ACP 图片和嵌入资源，
 与文本一起放入 `PromptRequest.prompt`；Agent 未声明 `embeddedContext` 时，GUI 将文本文件转换为带文件名和 URI 的 ACP 文本块。
-没有新增自定义上传协议。交互审批尚未实现。
+没有新增自定义上传协议。交互审批使用上文的原生权限请求与回答接口。
 
 ACP 原始定义参见 [内容类型](https://agentclientprotocol.com/protocol/v1/content) 与
 [会话配置选项](https://agentclientprotocol.com/protocol/v1/session-config-options)。

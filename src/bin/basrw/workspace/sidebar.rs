@@ -28,6 +28,9 @@ impl Workspace {
                     .items_center()
                     .gap_1()
                     .px_3()
+                    .when(cfg!(target_os = "macos"), |header| {
+                        header.pl(px(layout::MACOS_WINDOW_CONTROLS_WIDTH))
+                    })
                     .child(
                         div()
                             .id("application-menu-slot")

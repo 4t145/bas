@@ -16,6 +16,9 @@ use crate::{
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(unix)]
+mod permissions;
+
+#[cfg(unix)]
 struct RejectPromptStore {
     inner: crate::storage::Memory,
 }

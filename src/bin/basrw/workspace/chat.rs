@@ -9,22 +9,44 @@ use super::*;
 pub(super) const CONTENT_WIDTH: f32 = 840.;
 pub(super) const COMPOSER_TOOLBAR_HEIGHT: f32 = 24.;
 pub(super) const COMPOSER_BOTTOM_PADDING: f32 = 2.;
+const APPROVAL_PANEL_HEIGHT: f32 = 240.;
+// The pinned editor reserves 10px each for its gutter and caret at the right edge.
+const EDITOR_WRAP_INSET: f32 = 20.;
 
 pub(super) fn content_panel() -> Div {
     div().w_full().max_w(px(CONTENT_WIDTH)).mx_auto()
 }
 
 impl Workspace {
+    pub(super) fn measure_composer(&mut self, cx: &mut Context<Self>) {
+        let input = self.composer.read(cx);
+        let width = input
+            .text_bounds()
+            .map(|bounds| (bounds.size.width - px(EDITOR_WRAP_INSET)).max(px(1.)));
+        let text = input.text().clone();
+        let mut font = gpui_kit::font(cx.theme().font_family.clone());
+        font.fallbacks = theme::font_style(cx).text.font_fallbacks;
+        self.composer_rows =
+            self.composer_layout
+                .measure(&text, font, theme::content_font_size(cx), width, cx);
+    }
+
     pub(super) fn composer_height(&self, cx: &App) -> f32 {
         let input = self.composer.read(cx);
-        // Height follows explicit line breaks; upstream does not expose wrapped row counts.
-        let rows = input
-            .text()
-            .lines_len()
-            .clamp(1, if self.compact { 4 } else { 10 });
-        rows as f32
+        let rows = input_layout::visible_rows(
+            self.composer_rows,
+            input.text().lines_len(),
+            self.compact,
+            self.composer_expanded,
+        );
+        let height = rows as f32
             * (f32::from(theme::content_font_size(cx)) * theme::content_line_height(cx)).ceil()
-            + f32::from(gpui_kit::component::Size::Medium.input_py()) * 2.
+            + f32::from(gpui_kit::component::Size::Medium.input_py()) * 2.;
+        if self.composer_expanded && !self.compact {
+            height.min(self.composer_available_height.get())
+        } else {
+            height
+        }
     }
 
     fn work_status(&self) -> String {
@@ -103,13 +125,17 @@ impl Workspace {
             .as_ref()
             .is_none_or(|conversation| conversation.items.is_empty());
         div()
+            .flex()
+            .flex_col()
             .flex_1()
             .min_h_0()
             .size_full()
             .when(empty, |area| {
                 area.child(
                     div()
-                        .size_full()
+                        .w_full()
+                        .flex_1()
+                        .min_h_0()
                         .flex()
                         .flex_col()
                         .justify_center()
@@ -141,13 +167,48 @@ impl Workspace {
                     list(self.list.clone(), move |index, window, cx| {
                         view.update(cx, |this, cx| this.render_item(index, window, cx))
                     })
-                    .size_full(),
+                    .w_full()
+                    .flex_1()
+                    .min_h_0(),
                 )
             })
+            .when(!self.approvals.is_empty(), |area| {
+                area.child(
+                    div()
+                        .id("approval-panel")
+                        .test_support()
+                        .px_3()
+                        .py_2()
+                        .flex_shrink_0()
+                        .max_h(px(APPROVAL_PANEL_HEIGHT))
+                        .overflow_y_scroll()
+                        .child(content_panel().child(self.approvals.render(
+                            cx,
+                            |this, request_id, outcome, _, cx| {
+                                if let Some(session) = this.active {
+                                    this.approvals.submitting(&request_id);
+                                    this.command(Command::RespondPermission {
+                                        session,
+                                        request_id,
+                                        outcome,
+                                    });
+                                    cx.notify();
+                                }
+                            },
+                        ))),
+                )
+            })
+            .children(self.render_queue_panel(cx))
             .into_any_element()
     }
 
     pub(super) fn stream_label(&self) -> String {
+        if !self.approvals.is_empty() {
+            return "等待工具审批…".into();
+        }
+        if self.approval_error.is_some() {
+            return "工具审批不可用".into();
+        }
         if !self.connected {
             return if self.connection_error.is_some() {
                 "连接已断开，正在重试…".into()
@@ -185,6 +246,7 @@ impl Workspace {
     pub(super) fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
         let sending = self.active.is_some_and(|id| self.sending(id));
         let cancelling = self.active.is_some_and(|id| self.cancelling.contains(&id));
+        let can_send = self.can_send(cx);
         let submit_hint = if self.working() || cancelling {
             let hint = if cancelling {
                 "正在停止…"
@@ -220,13 +282,13 @@ impl Workspace {
         } else {
             Button::new("send-message")
                 .primary()
-                .when(!self.can_send(cx), |button| button.ghost())
+                .when(!can_send, |button| button.ghost())
                 .small()
                 .icon(IconName::Send)
                 .when(self.composer_error(cx).is_some(), |button| {
                     button.text_color(cx.theme().danger)
                 })
-                .disabled(!self.can_send(cx))
+                .disabled(!can_send)
                 .on_click(cx.listener(|this, _, window, cx| this.send_prompt(window, cx)))
         };
         div()
@@ -256,7 +318,23 @@ impl Workspace {
                     .child(
                         div()
                             .id("composer-editor")
+                            .key_context("BasrComposer")
                             .test_support()
+                            .capture_action(cx.listener(
+                                |this, _: &composer::ExpandMessageEditor, window, cx| {
+                                    this.toggle_composer_expansion(window, cx);
+                                    cx.stop_propagation();
+                                },
+                            ))
+                            .capture_action(cx.listener(
+                                |this, _: &composer::SendComposer, window, cx| {
+                                    this.submit_composer(window, cx);
+                                    cx.stop_propagation();
+                                },
+                            ))
+                            .capture_action(cx.listener(|this, action: &Enter, window, cx| {
+                                this.capture_composer_enter(action, window, cx)
+                            }))
                             .capture_action(cx.listener(|this, _: &Paste, window, cx| {
                                 this.paste_attachment(window, cx)
                             }))
@@ -332,12 +410,34 @@ impl Workspace {
                             .child(self.attachment_button(cx))
                             .child(self.agent_button(cx))
                             .child(
+                                Button::new("expand-message-editor")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(if self.composer_expanded {
+                                        IconName::Minimize2
+                                    } else {
+                                        IconName::Maximize2
+                                    })
+                                    .tooltip(if self.composer_expanded {
+                                        "收起消息编辑器 · Alt Shift Escape"
+                                    } else {
+                                        "展开消息编辑器 · Alt Shift Escape"
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_composer_expansion(window, cx)
+                                    })),
+                            )
+                            .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
                                     .child(self.render_config_options(cx)),
                             )
                             .children(self.render_queue(cx))
+                            .when(
+                                self.working() && !self.composer.read(cx).value().trim().is_empty(),
+                                |toolbar| toolbar.child(self.immediate_send_button(cx)),
+                            )
                             .when(
                                 !self.compact && self.authentication_required.is_some(),
                                 |toolbar| toolbar.child(self.authentication_button(cx)),
@@ -370,15 +470,44 @@ impl Workspace {
     }
 
     fn render_item(&self, index: usize, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let Some(item) = self
-            .conversation
-            .as_ref()
-            .and_then(|conversation| conversation.items.get(index))
-        else {
+        let Some(conversation) = self.conversation.as_ref() else {
             return div().into_any_element();
         };
+        let Some(row) = conversation.rows.get(index) else {
+            return div().into_any_element();
+        };
+        let items = &conversation.items[row.items.clone()];
+        let item = &items[0];
+        let grouped = row.activity && items.len() > 1;
+        let id = if grouped {
+            format!("activity-{}", item.id())
+        } else {
+            item.id()
+        };
+        let content = if grouped {
+            self.render_activity(&id, items, index, cx)
+        } else {
+            self.render_entry(item, index, cx)
+        };
+        div()
+            .id(SharedString::from(id))
+            .test_support()
+            .px_3()
+            .py_1()
+            .w_full()
+            .text_size(theme::content_font_size(cx))
+            .child(content_panel().child(content))
+            .into_any_element()
+    }
+
+    pub(super) fn render_entry(
+        &self,
+        item: &Item,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let id = item.id();
-        let content = match item {
+        match item {
             Item::Message { message, .. } if message.role == Role::Thought => {
                 self.render_thought(&id, message, index, cx)
             }
@@ -396,7 +525,10 @@ impl Workspace {
                     .py_2()
                     .rounded_md()
                     .when(user, |message| {
-                        message.border_1().border_color(cx.theme().border)
+                        message
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().muted.opacity(0.35))
                     })
                     .children(
                         message
@@ -435,16 +567,7 @@ impl Workspace {
                 .py_2()
                 .child(caption(text.clone(), cx))
                 .into_any_element(),
-        };
-        div()
-            .id(SharedString::from(id))
-            .test_support()
-            .px_3()
-            .py_1()
-            .w_full()
-            .text_size(theme::content_font_size(cx))
-            .child(content_panel().child(content))
-            .into_any_element()
+        }
     }
 
     pub(super) fn render_block(

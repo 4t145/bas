@@ -400,6 +400,7 @@ impl Workspace {
             return;
         }
         cx.stop_propagation();
+        let text = clipboard.text();
         self.error = None;
         if !self.prompt_capabilities().image {
             self.error = Some("当前 Agent 不支持图片输入".into());
@@ -410,6 +411,14 @@ impl Workspace {
                 Ok(attachments) => self.add_attachments(session, attachments, window, cx),
                 Err(error) => self.error = Some(format!("粘贴图片失败：{error:#}")),
             }
+        }
+        if let Some(text) = text.filter(|text| !text.is_empty()) {
+            let error = self.error.clone();
+            self.composer
+                .update(cx, |input, cx| input.replace(text, window, cx));
+            self.error = error;
+            self.sync_mentions(cx);
+            self.save_draft(cx);
         }
         cx.notify();
     }

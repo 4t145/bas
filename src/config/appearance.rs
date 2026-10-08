@@ -13,10 +13,18 @@ pub struct Appearance {
     pub content_font_size: Option<f32>,
     pub content_line_height: Option<f32>,
     pub content_opacity: Option<f32>,
+    pub composer_enter_behavior: ComposerEnterBehavior,
     pub background: Background,
     pub theme_source: ThemeSource,
     pub theme_mode: ThemeMode,
     pub theme_file: Option<PathBuf>,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComposerEnterBehavior {
+    #[default]
+    Send,
+    Newline,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
