@@ -16,6 +16,8 @@ use crate::{
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(unix)]
+mod elicitation;
+#[cfg(unix)]
 mod permissions;
 
 #[cfg(unix)]
@@ -532,7 +534,7 @@ async fn connection_checks_are_short_lived_and_not_registry_sessions() {
 #[tokio::test]
 async fn auth_required_startup_preserves_acp_details_without_creating_session() {
     use basr::service::{pb, pb::basr_server::Basr};
-    for (mode, method) in [("auth_session", "login"), ("auth_data", "specific")] {
+    for (mode, method) in [("auth_session", None), ("auth_data", Some("specific"))] {
         let directory = tempfile::tempdir().unwrap();
         let registry = Arc::new(fixture(mode, &directory, TIMEOUT));
         let service = crate::service::Service::new(registry.clone());
@@ -546,7 +548,23 @@ async fn auth_required_startup_preserves_acp_details_without_creating_session() 
         assert_eq!(error.code(), tonic::Code::Unauthenticated);
         let acp: v1::Error = serde_json::from_slice(error.details()).unwrap();
         assert_eq!(acp.code, agent_client_protocol::ErrorCode::AuthRequired);
-        assert_eq!(acp.data.as_ref().unwrap()["authMethods"][0]["id"], method);
+        if let Some(method) = method {
+            assert_eq!(
+                acp.data.as_ref().expect("agent method list")["authMethods"][0]["id"],
+                method
+            );
+            let raw: serde_json::Value =
+                serde_json::from_slice(error.details()).expect("original ACP error");
+            assert_eq!(raw["futureError"], json!({"preserved":true}));
+        } else {
+            assert!(
+                acp.data
+                    .as_ref()
+                    .and_then(|data| data.get("authMethods"))
+                    .is_none(),
+                "initialization methods are separate from native errors"
+            );
+        }
         assert!(!error.message().contains("SECRET"));
         assert!(registry.list().await.is_empty());
         assert!(!directory.path().join("pid.prompt").exists());

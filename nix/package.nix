@@ -54,9 +54,8 @@ rustPlatform.buildRustPackage {
       ]
     else
       [ "--all-targets" ];
-  nativeBuildInputs = lib.optionals gui [
+  nativeBuildInputs = [ makeWrapper ] ++ lib.optionals gui [
     pkg-config
-    makeWrapper
   ];
   buildInputs = lib.optionals gui desktopLibraries;
   postInstall =
@@ -79,6 +78,10 @@ rustPlatform.buildRustPackage {
       ''
     else
       ''
+        wrapProgram "$out/bin/basrd" \
+          --set-default BASRD_ACP_PATCHELF ${pkgs.patchelf}/bin/patchelf \
+          --set-default BASRD_ACP_ELF_LOADER ${pkgs.stdenv.cc.bintools.dynamicLinker} \
+          --set-default BASRD_ACP_ELF_LIBRARY_PATH ${lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.glibc pkgs.zlib pkgs.openssl ]}
         install -Dm644 ${../contrib/basrd-user.service} "$out/share/systemd/user/basrd.service"
         substituteInPlace "$out/share/systemd/user/basrd.service" \
           --replace-fail '@basrd@' "$out/bin/basrd"

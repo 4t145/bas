@@ -145,6 +145,8 @@ impl Workspace {
                         .child(caption(
                             if self.creating {
                                 "正在创建 thread…"
+                            } else if self.waiting_for_agent_selection {
+                                "选择 Agent 后开始新 thread"
                             } else if self.active.is_some() {
                                 "Agent 的回复会显示在这里"
                             } else if self.compact {
@@ -199,6 +201,30 @@ impl Workspace {
                 )
             })
             .children(self.render_queue_panel(cx))
+            .when_some(self.authentication_panel.clone(), |area, panel| {
+                area.child(
+                    div()
+                        .id("thread-authentication")
+                        .test_support()
+                        .px_3()
+                        .py_2()
+                        .max_h(px(360.))
+                        .overflow_y_scroll()
+                        .child(panel),
+                )
+            })
+            .when(!self.elicitation_panels.is_empty(), |area| {
+                area.child(
+                    div()
+                        .id("thread-elicitations")
+                        .test_support()
+                        .px_3()
+                        .py_2()
+                        .max_h(px(360.))
+                        .overflow_y_scroll()
+                        .children(self.elicitation_panels.values().cloned()),
+                )
+            })
             .into_any_element()
     }
 
@@ -219,8 +245,10 @@ impl Workspace {
         if self.active.is_none() {
             return if self.creating {
                 "正在创建 thread…".into()
+            } else if self.waiting_for_agent_selection {
+                "等待选择 Agent".into()
             } else if self.authentication_required.is_some() {
-                "Agent 已连接，需要认证".into()
+                "Agent 需要认证".into()
             } else if self.agents.is_empty() {
                 "basrd 暂未配置可用的 Agent".into()
             } else {

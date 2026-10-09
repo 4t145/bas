@@ -18,6 +18,10 @@ mod archive;
 mod config;
 
 #[cfg(unix)]
+#[path = "daemon/management.rs"]
+mod management;
+
+#[cfg(unix)]
 #[path = "daemon/storage.rs"]
 mod storage;
 

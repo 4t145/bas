@@ -123,6 +123,7 @@ impl Workspace {
             })
             .hover(|row| row.bg(cx.theme().sidebar_accent))
             .on_click(cx.listener(move |this, _, window, cx| this.select(id, window, cx)))
+            .child(self.agent_icon(format!("thread-agent-{id}"), session.agent.as_str(), cx))
             .child(
                 div()
                     .id(SharedString::from(format!("thread-title-{id}")))

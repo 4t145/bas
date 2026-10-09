@@ -95,6 +95,17 @@ pub(crate) fn open_agent(agent: &str, cx: &mut App) -> anyhow::Result<WindowHand
     Ok(handle)
 }
 
+/// # Errors
+/// Returns an error if the catalogue settings window cannot be opened or updated.
+pub(crate) fn open_catalog(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
+    let handle = open(cx)?;
+    let settings = cx.global::<OpenWindow>().settings.clone();
+    handle.update(cx, |_, window, cx| {
+        settings.update(cx, |settings, cx| settings.show_catalog(window, cx))
+    })??;
+    Ok(handle)
+}
+
 /// Persist valid edits even when the workspace which opened settings is gone.
 pub(crate) fn flush_pending(cx: &mut App) {
     let Some(state) = cx.try_global::<OpenWindow>() else {

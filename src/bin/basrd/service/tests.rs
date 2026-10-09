@@ -1,6 +1,9 @@
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 mod archive;
+#[cfg(unix)]
+mod authentication;
+mod management;
 mod permissions;
 
 use basr::{

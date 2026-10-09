@@ -9,7 +9,12 @@ pub(super) async fn watch_session(
 ) {
     let stream = open(&mut client, session).await;
     let approvals = watch_permissions(client.clone(), updates.clone(), session, epoch, stream);
-    tokio::join!(super::watch(client, updates, session, epoch), approvals);
+    let elicitations = super::elicitations::watch(client.clone(), updates.clone(), session, epoch);
+    tokio::join!(
+        super::watch(client, updates, session, epoch),
+        approvals,
+        elicitations
+    );
 }
 
 async fn open(

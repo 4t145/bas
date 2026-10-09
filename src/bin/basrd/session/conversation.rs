@@ -269,6 +269,7 @@ impl Session {
                 }
                 let mut meta = state.meta.clone();
                 meta.initialization = agent.initialization();
+                meta.initialization_raw = agent.initialization_raw();
                 meta.acp = agent.session_info().map(|mut info| {
                     info.session_id = meta.id.to_string().into();
                     info

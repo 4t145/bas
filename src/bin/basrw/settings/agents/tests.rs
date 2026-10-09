@@ -36,7 +36,7 @@ fn fill(window: &mut Window, id: &'static str, value: &str, cx: &mut App) {
 }
 
 #[gpui_kit::test]
-fn custom_acp_is_the_only_add_action_and_save_preserves_other_settings(cx: &mut TestAppContext) {
+fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("temporary settings directory");
     let path = directory.path().join("settings.json");
     let initial = serde_json::json!({
@@ -283,61 +283,4 @@ fn only_matching_connected_specs_unlock_advanced_fields(cx: &mut TestAppContext)
         assert!(window.try_find("agents-grace").is_none());
     })
     .expect("connection gated configuration");
-}
-
-#[gpui_kit::test]
-fn installation_guidance_only_opens_documentation_and_preserves_configuration(
-    cx: &mut TestAppContext,
-) {
-    let directory = tempfile::tempdir().expect("settings fixture");
-    let path = directory.path().join("settings.json");
-    // Legacy adapter paths remain exactly as the user configured them.
-    let initial = r#"{"daemon":{"agents":[{"id":"codex","kind":"acp","command":{"program":"/nix/store/old-basr-codex-acp/bin/codex-acp","args":[]},"env":{"KEEP":"unchanged"}}]}}"#;
-    std::fs::write(&path, initial).expect("legacy configuration");
-    cx.update(gpui_kit::init);
-    let mut view = None;
-    let window = cx.open_window(size(px(760.), px(680.)), |window, cx| {
-        let page = cx.new(|cx| Agents::new(Store::at(path.clone()), window, cx));
-        view = Some(page.clone());
-        Root::new(page, window, cx)
-    });
-    let view = view.expect("page");
-    cx.update_window(window.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.try_find("agents-installation-guide").is_none());
-        window.click("agents-installation-help", cx);
-        window.render_frame(cx);
-        assert!(window.try_find("agents-installation-guide").is_some());
-        assert!(
-            view.read(cx).draft.is_none(),
-            "help must not start a preset draft"
-        );
-    })
-    .expect("open read-only guide");
-    for (id, url) in [
-        (
-            "agents-guide-codex",
-            "https://github.com/agentclientprotocol/codex-acp#installation",
-        ),
-        ("agents-guide-opencode", "https://opencode.ai/docs/acp/"),
-        (
-            "agents-guide-pi",
-            "https://github.com/svkozak/pi-acp#install",
-        ),
-    ] {
-        cx.update_window(window.into(), |_, window, cx| click(window, id, cx))
-            .expect("open official guide");
-        assert_eq!(cx.opened_url().as_deref(), Some(url));
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("config retained"),
-            initial
-        );
-    }
-    cx.update_window(window.into(), |_, window, cx| {
-        click(window, "agents-installation-toggle", cx);
-        window.render_frame(cx);
-        assert!(window.try_find("agents-installation-guide").is_none());
-        assert!(!view.read(cx).dirty(cx));
-    })
-    .expect("collapse guide without configuration edits");
 }

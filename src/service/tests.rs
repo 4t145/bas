@@ -144,6 +144,10 @@ fn session_capabilities_modes_and_options_round_trip() {
                 ),
             ),
     );
+    session.initialization_raw = session
+        .initialization
+        .as_ref()
+        .map(|initialization| serde_json::to_value(initialization).expect("initialization JSON"));
     session.acp = Some(
         acp::NewSessionResponse::new(session.id.to_string()).config_options(vec![
             acp::SessionConfigOption::boolean("enabled", "Enabled", true),
@@ -157,6 +161,33 @@ fn session_capabilities_modes_and_options_round_trip() {
             .expect("metadata"),
         session
     );
+}
+
+#[test]
+fn session_preserves_original_initialization_extensions_across_protobuf() {
+    let raw = serde_json::json!({
+        "protocolVersion": 1,
+        "agentCapabilities": {},
+        "agentInfo": {"name":"fixture", "version":"1.0.0", "future":"retained"},
+        "authMethods": [{
+            "id":"future", "name":"Provider authorization", "type":"future-auth",
+            "providerField":{"scope":"example"}, "_meta":{"vendor":"retained"}
+        }],
+        "futureInitialization":{"opaque":9007199254740993_u64}
+    });
+    let mut session = SessionMeta::new(SessionId::new(), "fixture".into(), Owner::current());
+    session.initialization = Some(serde_json::from_value(raw.clone()).expect("typed projection"));
+    session.initialization_raw = Some(raw.clone());
+    let wire = pb::Session::try_from(&session).expect("wire metadata");
+    assert_eq!(
+        wire.initialization
+            .as_ref()
+            .expect("original initialization")
+            .decode::<serde_json::Value>()
+            .expect("JSON"),
+        raw
+    );
+    assert_eq!(SessionMeta::try_from(wire).expect("metadata"), session);
 }
 
 #[test]

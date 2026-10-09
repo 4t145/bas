@@ -78,6 +78,32 @@ struct Service {
 
 #[tonic::async_trait]
 impl Basr for Service {
+    type AuthenticateAgentInteractiveStream =
+        Pin<Box<dyn Stream<Item = Result<pb::AuthenticationEvent, Status>> + Send>>;
+    type WatchElicitationsStream =
+        Pin<Box<dyn Stream<Item = Result<pb::ElicitationSnapshot, Status>> + Send>>;
+
+    async fn authenticate_agent_interactive(
+        &self,
+        _: Request<tonic::Streaming<pb::AuthenticationInput>>,
+    ) -> Result<Response<Self::AuthenticateAgentInteractiveStream>, Status> {
+        Err(Status::unimplemented("unrelated auth"))
+    }
+    async fn watch_elicitations(
+        &self,
+        _: Request<pb::WatchElicitationsRequest>,
+    ) -> Result<Response<Self::WatchElicitationsStream>, Status> {
+        Err(Status::unimplemented("unrelated elicitation"))
+    }
+    async fn respond_elicitation(
+        &self,
+        _: Request<pb::RespondElicitationRequest>,
+    ) -> Result<Response<pb::RespondElicitationResponse>, Status> {
+        Err(Status::unimplemented("unrelated elicitation"))
+    }
+
+    type InstallAgentStream =
+        Pin<Box<dyn Stream<Item = Result<pb::AgentOperation, Status>> + Send>>;
     type AttachStream = Pin<Box<dyn Stream<Item = Result<pb::Event, Status>> + Send>>;
     type SetForegroundStream =
         Pin<Box<dyn Stream<Item = Result<pb::ForegroundResponse, Status>> + Send>>;
@@ -248,6 +274,30 @@ impl Basr for Service {
         &self,
         _: Request<pb::CheckAgentRequest>,
     ) -> Result<Response<pb::CheckAgentResponse>, Status> {
+        Err(Status::unimplemented("old daemon"))
+    }
+    async fn list_agent_catalog(
+        &self,
+        _: Request<pb::ListAgentCatalogRequest>,
+    ) -> Result<Response<pb::ListAgentCatalogResponse>, Status> {
+        Err(Status::unimplemented("old daemon"))
+    }
+    async fn install_agent(
+        &self,
+        _: Request<pb::InstallAgentRequest>,
+    ) -> Result<Response<Self::InstallAgentStream>, Status> {
+        Err(Status::unimplemented("old daemon"))
+    }
+    async fn remove_agent(
+        &self,
+        _: Request<pb::RemoveAgentRequest>,
+    ) -> Result<Response<pb::RemoveAgentResponse>, Status> {
+        Err(Status::unimplemented("old daemon"))
+    }
+    async fn authenticate_agent(
+        &self,
+        _: Request<pb::AuthenticateAgentRequest>,
+    ) -> Result<Response<pb::AuthenticateAgentResponse>, Status> {
         Err(Status::unimplemented("old daemon"))
     }
     async fn list_sessions(

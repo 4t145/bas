@@ -185,13 +185,35 @@ impl Workspace {
                                     .when(draft_selected, |column| {
                                         column.child(
                                             div()
+                                                .id(SharedString::from(format!(
+                                                    "draft-thread-{index}"
+                                                )))
+                                                .test_support()
                                                 .ml_5()
                                                 .px_3()
                                                 .py_2()
                                                 .rounded_md()
                                                 .bg(cx.theme().sidebar_accent)
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
                                                 .text_sm()
-                                                .child("新 thread"),
+                                                .child(self.agent_icon(
+                                                    format!("draft-thread-agent-{index}"),
+                                                    &self.selected_agent,
+                                                    cx,
+                                                ))
+                                                .child(
+                                                    div()
+                                                        .id(SharedString::from(format!(
+                                                            "draft-thread-title-{index}"
+                                                        )))
+                                                        .test_support()
+                                                        .flex_1()
+                                                        .min_w_0()
+                                                        .truncate()
+                                                        .child("新 thread"),
+                                                ),
                                         )
                                     })
                                     .when(group.threads.is_empty() && !draft_selected, |column| {

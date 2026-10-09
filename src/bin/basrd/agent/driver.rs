@@ -23,6 +23,13 @@ use super::{AgentSpec, Kind};
 pub enum Error {
     #[error(transparent)]
     Acp(#[from] acp::Error),
+    /// Original ACP error object retained before SDK projection.
+    #[error("{error}")]
+    AcpRaw {
+        #[source]
+        error: Box<acp::Error>,
+        raw: serde_json::Value,
+    },
     /// The backend could not be started or died.
     #[error("agent backend {agent} failed: {message}")]
     Backend {
@@ -115,6 +122,10 @@ pub trait Agent: Send {
 
     fn initialization(&self) -> Option<acp::InitializeResponse> {
         None
+    }
+    fn initialization_raw(&self) -> Option<serde_json::Value> {
+        self.initialization()
+            .map(|response| serde_json::to_value(response).expect("ACP initialization serializes"))
     }
     fn session_info(&self) -> Option<acp::NewSessionResponse> {
         None
@@ -226,6 +237,31 @@ pub(super) fn spawn_worker(
 /// Services a backend may call back into while it runs.
 #[async_trait]
 pub trait Host: Send + Sync {
+    /// Registers the current ACP connection generation for a BASR session.
+    fn open_elicitation_connection(&self, _session: SessionId, _connection: uuid::Uuid) {}
+
+    /// Requests connection-scoped structured information from an attached frontend.
+    ///
+    /// # Errors
+    /// Reports unavailable frontends or invalid elicitation descriptors.
+    async fn elicit(
+        &self,
+        _session: SessionId,
+        _connection: uuid::Uuid,
+        _request: serde_json::Value,
+    ) -> Result<serde_json::Value, Error> {
+        Ok(serde_json::json!({"action":"cancel"}))
+    }
+
+    fn complete_elicitation(
+        &self,
+        _session: SessionId,
+        _connection: uuid::Uuid,
+        _elicitation_id: &str,
+    ) {
+    }
+    fn cancel_elicitations(&self, _session: SessionId, _connection: uuid::Uuid) {}
+
     /// Asks the user to approve a tool call.
     ///
     /// # Errors

@@ -66,6 +66,7 @@ pub struct Registry {
     catalog: std::sync::RwLock<Arc<Catalog>>,
     host: Arc<dyn Host>,
     permissions: Arc<agent::permissions::Permissions>,
+    elicitations: Arc<agent::elicitation::Elicitations>,
     limits: Limits,
     sessions: Arc<RwLock<BTreeMap<SessionId, Arc<Session>>>>,
     stopping: CancellationToken,
@@ -98,11 +99,13 @@ impl Drop for PendingSession {
 impl Registry {
     pub fn new(catalog: Arc<Catalog>, host: Arc<dyn Host>, limits: Limits) -> Self {
         let permissions = Arc::new(agent::permissions::Permissions::default());
-        let host = permissions.host(host);
+        let elicitations = Arc::new(agent::elicitation::Elicitations::default());
+        let host = elicitations.host(permissions.host(host));
         Self {
             catalog: std::sync::RwLock::new(catalog),
             host,
             permissions,
+            elicitations,
             limits,
             sessions: Arc::new(RwLock::new(BTreeMap::new())),
             stopping: CancellationToken::new(),
@@ -190,9 +193,36 @@ impl Registry {
         &self.permissions
     }
 
+    pub fn elicitations(&self) -> &Arc<agent::elicitation::Elicitations> {
+        &self.elicitations
+    }
+
     /// Publishing a catalog never mutates or stops existing sessions.
+    #[cfg(test)]
     pub fn replace_catalog(&self, catalog: Arc<Catalog>) {
-        *self.catalog.write().expect("catalog lock poisoned") = catalog;
+        let mut current = self.catalog.write().expect("catalog lock poisoned");
+        if current.specs().eq(catalog.specs()) {
+            return;
+        }
+        *current = catalog;
+    }
+
+    /// Read and publish while holding one generation lock, so a file watcher
+    /// cannot publish an older read after a management operation's newer save.
+    ///
+    /// # Errors
+    /// Preserves the current catalog on read or validation failure.
+    pub fn reload_catalog(
+        &self,
+        load: impl FnOnce() -> anyhow::Result<Vec<agent::AgentSpec>>,
+    ) -> anyhow::Result<Vec<agent::AgentSpec>> {
+        let mut current = self.catalog.write().expect("catalog lock poisoned");
+        let agents = load()?;
+        let catalog = Catalog::from_specs(agents.clone())?;
+        if !current.specs().eq(catalog.specs()) {
+            *current = Arc::new(catalog);
+        }
+        Ok(agents)
     }
 
     /// Lets connection-scoped streams end before the server finishes draining.
@@ -407,6 +437,7 @@ impl Registry {
         let sessions = Arc::clone(&self.sessions);
         let storage = self.storage.clone();
         let permissions = Arc::clone(&self.permissions);
+        let elicitations = Arc::clone(&self.elicitations);
         // Deletion and registry eviction form one owned operation: an RPC
         // disconnect cannot leave an in-memory session pointing at a deleted row.
         tokio::spawn(async move {
@@ -418,10 +449,12 @@ impl Registry {
                 session.delete_storage().await?;
                 sessions.write().await.remove(&id);
                 permissions.close(id);
+                elicitations.close(id);
                 session.suspend().await;
             } else {
                 sessions.write().await.remove(&id);
                 permissions.close(id);
+                elicitations.close(id);
                 session.shutdown().await;
                 if let Some(storage) = storage {
                     storage.delete(id).await?;
@@ -437,6 +470,7 @@ impl Registry {
     pub async fn shutdown(&self) {
         self.stopping.cancel();
         self.permissions.cancel_all();
+        self.elicitations.cancel_all();
         let sessions = std::mem::take(&mut *self.sessions.write().await);
         if self
             .storage

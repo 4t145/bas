@@ -8,6 +8,7 @@
 mod agent;
 mod clap;
 mod config;
+mod management;
 mod notify;
 mod service;
 mod session;
@@ -73,6 +74,12 @@ async fn run(config: Config) -> Result<()> {
         registry = registry.with_completions(watcher.sender.clone());
     }
     let registry = Arc::new(registry);
+    let manager = Arc::new(management::Manager::new(
+        config
+            .catalog_source
+            .as_ref()
+            .and_then(|source| source.settings_store()),
+    )?);
     let listener = tokio::net::TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("cannot listen on {}", config.listen))?;
@@ -89,7 +96,11 @@ async fn run(config: Config) -> Result<()> {
         )
     });
     let server = tonic::transport::Server::builder()
-        .add_service(service::Service::new(Arc::clone(&registry)).into_server())
+        .add_service(
+            service::Service::new(Arc::clone(&registry))
+                .with_manager(manager)
+                .into_server(),
+        )
         .serve_with_incoming_shutdown(
             tokio_stream::wrappers::TcpListenerStream::new(listener),
             stopping.clone().cancelled_owned(),

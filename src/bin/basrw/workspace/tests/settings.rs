@@ -292,3 +292,169 @@ fn settings_window_survives_the_workspace_that_opened_it(cx: &mut TestAppContext
     close_settings(cx);
     cx.update(|cx| assert!(cx.windows().is_empty()));
 }
+
+#[gpui_kit::test]
+fn successful_agent_login_retries_initialization_and_preserves_the_draft(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.creating = false;
+            view.authentication_required = Some("embedded".into());
+            view.composer.update(cx, |input, cx| {
+                input.set_value("登录后继续的草稿", window, cx)
+            });
+        });
+    })
+    .expect("authentication draft");
+    cx.update(|cx| {
+        cx.update_global::<crate::settings::AgentChanges, _>(|changes, _| {
+            changes.server = Some("127.0.0.1:7337".parse().expect("fixture server"));
+            changes.ready = Some("embedded".into());
+            changes.revision += 1;
+        });
+    });
+    cx.executor().run_until_parked();
+    let mut retried = false;
+    while let Ok(command) = fixture.commands.try_recv() {
+        if let Command::Create(request) = command {
+            assert_eq!(request.agent, "embedded");
+            retried = true;
+        }
+    }
+    assert!(
+        retried,
+        "successful login automatically retries the pending session"
+    );
+    cx.update(|cx| {
+        let view = fixture.view.read(cx);
+        assert!(view.authentication_required.is_none());
+        assert_eq!(view.composer.read(cx).value(), "登录后继续的草稿");
+    });
+}
+
+#[gpui_kit::test]
+fn an_empty_agent_picker_still_opens_the_installation_catalogue(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let popup = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            fixture.view.update(cx, |view, cx| {
+                view.agents.clear();
+                view.creating = false;
+                view.selected_agent.clear();
+                view.toggle_mode(window, cx);
+            });
+            window.bounds_changed(cx);
+            window.render_frame(cx);
+            window.click("agent-picker", cx);
+            fixture
+                .view
+                .read(cx)
+                .menu
+                .as_ref()
+                .expect("empty picker remains actionable")
+                .window
+                .expect("agent popup")
+        })
+        .expect("empty picker");
+    cx.update_window(popup, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("popup-menu").click(0usize, cx);
+    })
+    .expect("installation entry");
+    let settings = settings_window(cx);
+    cx.update_window(settings.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("agents-registry").is_some());
+    })
+    .expect("catalogue opened from chat");
+    close_settings(cx);
+}
+
+#[gpui_kit::test]
+fn installation_catalog_starts_a_new_agent_chat_and_preserves_the_old_draft(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = fixture(cx);
+    let previous = session();
+    attach(&fixture, previous.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.composer.update(cx, |input, cx| {
+                input.set_value("previous thread draft", window, cx)
+            });
+            cx.update_global::<crate::settings::AgentChanges, _>(|changes, _| {
+                changes.target = Some(view.window.window_id());
+            });
+        });
+    })
+    .expect("existing chat recorded as settings target");
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update(|cx| {
+        cx.update_global::<crate::settings::AgentChanges, _>(|changes, _| {
+            changes.server = Some("127.0.0.1:7337".parse().expect("fixture server"));
+            changes.ready = Some("codex-acp".into());
+            changes.select = Some("codex-acp".into());
+            changes.revision += 1;
+        });
+    });
+    cx.run_until_parked();
+    let mut created = None;
+    let mut detached = false;
+    while let Ok(command) = fixture.commands.try_recv() {
+        match command {
+            Command::Refresh => {}
+            Command::Detach => detached = true,
+            Command::Create(request) => {
+                assert!(
+                    created.is_none(),
+                    "explicit start creates exactly one new chat"
+                );
+                assert_eq!(request.agent, "codex-acp");
+                created = Some(request);
+            }
+            Command::Foreground(_) => {}
+            _ => panic!("starting a chat never prompts or modifies the old session"),
+        }
+    }
+    assert!(detached);
+    let created = created.expect("explicit catalogue action starts a new session");
+    cx.update(|cx| {
+        let view = fixture.view.read(cx);
+        assert_eq!(view.active, None);
+        assert_eq!(view.selected_agent, "codex-acp");
+        assert!(view.creating);
+        assert!(view.composer.read(cx).value().is_empty());
+        assert_eq!(view.drafts[&previous.id].text, "previous thread draft");
+        assert_eq!(
+            view.sessions
+                .iter()
+                .find(|meta| meta.id == previous.id)
+                .expect("old session kept")
+                .agent
+                .as_str(),
+            "embedded"
+        );
+    });
+    let mut next = session();
+    next.agent = "codex-acp".into();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.update(
+                Update::Created {
+                    epoch: created.epoch,
+                    result: Ok(next.clone()),
+                },
+                window,
+                cx,
+            );
+            assert_eq!(view.active, Some(next.id));
+            assert_eq!(
+                view.current().expect("new session").agent.as_str(),
+                "codex-acp"
+            );
+            view.select(previous.id, window, cx);
+            assert_eq!(view.composer.read(cx).value(), "previous thread draft");
+        });
+    })
+    .expect("old and new chats retain separate agents and drafts");
+}

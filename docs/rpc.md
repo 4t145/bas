@@ -12,6 +12,10 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | gRPC 接口或字段 | ACP 类型 / BASR 职责 |
 | --- | --- |
 | ListAgents、CreateSession、ListSessions、GetSession、DeleteSession | 后端选择、进程与会话生命周期 |
+| ListAgentCatalog | `basr::management::Catalog` JSON，包含 Registry 和已配置后端 |
+| InstallAgent | 可取消的安装进度流，最终返回已保存的 `AgentSpec` |
+| RemoveAgent | 移除托管注册，保留原生凭据与版本目录 |
+| AuthenticateAgent | daemon 持有 ACP 连接执行标准 agent 认证，再检查 session/new |
 | Session.initialization | `InitializeResponse`，包含 Agent 能力、实现信息与认证方法 |
 | Session.acp | `NewSessionResponse`，包含当前 modes、configOptions 和初始扩展元数据 |
 | Session.available_commands | 最新 `AvailableCommandsUpdate`，不受事件历史裁剪影响 |
@@ -77,10 +81,52 @@ let options = client.set_config_option_acp(
 客户端不能将“已找到程序”“ACP 已连接”和“会话可用”混为同一状态。
 
 正常 `CreateSession` 的 ACP `AuthRequired` 映射为 gRPC `UNAUTHENTICATED`，
-原始 ACP 错误保存在 status details；缺少 `data.authMethods` 时补入初始化广告的认证方式。
+原始 ACP 错误保存在 status details，保留扩展字段；初始化广告的方式与错误来源分别读取。
+GUI 遇到认证需求时重新执行 `CheckAgent`，取得完整初始化响应和当次错误。
 失败的启动不注册空会话、不发 prompt，所拥有的后端进程照常回收。
 终端认证能力 `auth.terminal` 与代理工具用的 `terminal` 执行能力不同；
 声明前者不会授权 Agent 在连接检测时执行主机终端命令。
+
+### 后端目录、安装与认证
+
+`ListAgentCatalog` 包含未安装、缺失程序和不支持的分发条目，不改变 `ListAgents`
+只列出可启动配置的含义。`catalog_json` 使用公开 `basr::management::Catalog` 的 Serde 类型。
+`refresh=true` 更新官方目录；失败时保留上次有效缓存并返回 warning。
+远端目录不携带完整启动配置，避免暴露用户配置中的环境变量。
+
+`InstallAgent` 从 Registry ID 解析固定版本和平台分发，在 daemon 主机安装并保存启动配置。
+`AgentOperation` 的 phase/message 表示进度；`complete=true` 且 spec_json 非空表示注册已完成。
+客户端放弃进度流会取消未完成的下载或安装。最终原子注册阶段可能已完成，
+取消后应重新读取目录确定状态。daemon 关闭也会结束安装。
+安装与移除保留现有会话；更新产生独立启动路径。
+
+安装、移除和认证只接受 loopback 连接；显式目录覆盖时托管安装不可用。
+`AuthenticateAgent` 同样要求配置快照一致，重新握手核对当前广告的 agent 方法 ID，
+在同一连接调用 authenticate 和 session/new。terminal 方法应由客户端在交互终端执行，
+然后重新检查 ACP 连接，不能传给这个 RPC。
+
+`AuthenticateAgentInteractive` 是双向认证流。客户端首先发送 `start`，包含配置快照、
+方法 ID 与 `expected_method_json`；推荐传入共享 `authentication::Method` 的完整 JSON，
+包括原始描述符、来源和执行计划。daemon 重新发现并核对方法后才执行。
+后续事件包含交互请求、URL 完成、取消、终端执行计划和最终检测结果。
+客户端使用 daemon 生成的请求 ID 回答 Form / URL，不能把 Agent 的 URL ID 当作回答 ID。
+
+两种认证 RPC 的失败提示保留执行阶段、ACP 错误码及 Agent 返回的文字原因。
+额外诊断只接受 `data` 字符串或单层的 `data.message` / `data.details` 字符串，
+不把完整原始数据、堆栈或凭据对象展开为提示。Agent 方法的浏览器回调由 Agent 自己
+处理，daemon 等待 `authenticate` 响应；网页完成授权之后，Agent 仍可能在账号、
+项目初始化或配置保存阶段返回错误。认证请求成功后才执行会话可用性检测。
+
+初始化响应、错误和方法均保留原始 JSON。标准 Terminal 参数追加到配置命令；旧
+`_meta["terminal-auth"]` 按完整命令处理，经过验证的 Qwen 0.25.0 描述符只替换应用参数。
+daemon 从托管安装记录验证启动边界，保留 Node 入口。无法确定边界的自定义包装命令
+返回明确错误，提示按 Agent 说明手动配置。终端事件中的程序、参数、环境按字面执行，
+客户端报告真实退出码后由 daemon 再次检测；打开终端本身不表示认证成功。
+
+Form 支持平面字符串、数值、整数、布尔、枚举与多选，校验必填、默认值与约束。
+URL 由用户确认后打开，接受请求后仍等待该连接的 `elicitation/complete`。
+认证过程中关闭输入流、窗口或取消会释放 ACP 连接和待处理交互。
+交互内容不进入会话历史；凭据的输入与保存由 Agent 的终端或网站管理。
 
 ### 快照与回合确认
 
@@ -115,6 +161,18 @@ daemon 生成的唯一 `request_id` 和完整 `RequestPermissionRequest`；新�
 回答的请求；进入过交互审批的会话在无订阅期间取消后续请求，不能回退为自动允许。
 从未建立交互审批的会话沿用原有无界面权限策略。审批状态不持久化到历史，客户端
 断线重连必须使用新的待审批快照，不能重放旧的回答。
+
+### 会话内 Elicitation
+
+`WatchElicitations { session }` 与 `RespondElicitation { session, request_id, response }`
+为已有会话提供同一套 Form / URL 交互。外层 session 使用 BASR UUID；请求中的 ACP
+`sessionId` / `requestId` 保留原始值，由 daemon 对照当前连接校验，不由客户端改写。
+待处理快照包含原始请求、唯一回答 ID 和 `answered`；URL 已接受时保持等待状态，匹配
+完成通知后进入 `completed_ids`，其中记录的是 BASR 回答 ID。
+
+响应只消费一次，校验失败保留请求供修正。回调取消、回合取消、会话关闭、连接替换
+或最后一个查看者断开会清理交互；无查看者时返回取消。旧连接的完成或取消不会影响
+新连接。重连读取当前快照，不能重放旧答案或自动打开 URL。
 
 ### 可恢复归档
 

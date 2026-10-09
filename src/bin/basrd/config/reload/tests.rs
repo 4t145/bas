@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    agent::{Command, LocalHost},
+    agent::{Catalog, Command, LocalHost},
     session::{AttachOptions, CreateRequest, Limits},
 };
 use basr::model::{EventKind, Owner};

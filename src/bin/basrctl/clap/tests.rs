@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn agent_management_preserves_existing_agents_command() {
+    assert!(matches!(
+        Args::try_parse_from(["basrctl", "agents"])
+            .expect("existing command")
+            .command,
+        Command::Agents
+    ));
+    assert!(matches!(
+        Args::try_parse_from(["basrctl", "agent", "catalog", "--refresh", "--json"])
+            .expect("catalog")
+            .command,
+        Command::Agent(Agent::Catalog {
+            refresh: true,
+            json: true
+        })
+    ));
+    assert!(
+        matches!(Args::try_parse_from(["basrctl", "agent", "login", "codex-acp", "--method", "login"]).expect("login").command,
+        Command::Agent(Agent::Login { id, method: Some(method) }) if id == "codex-acp" && method == "login")
+    );
+    for operation in ["install", "check", "login", "remove"] {
+        assert!(
+            Args::try_parse_from(["basrctl", "agent", operation]).is_err(),
+            "{operation} needs an id"
+        );
+    }
+}
+
+#[test]
 fn list_defaults_to_non_archived_and_all_is_explicit() {
     for (args, expected) in [
         (vec!["basrctl", "session", "list"], false),

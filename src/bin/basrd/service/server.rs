@@ -30,13 +30,28 @@ const DEFAULT_PAGE: usize = 128;
 #[derive(Clone)]
 pub struct Service {
     registry: Arc<Registry>,
+    manager: Option<Arc<crate::management::Manager>>,
 }
 
 impl Service {
     /// Serves the sessions held by `registry`.
     #[must_use]
     pub fn new(registry: Arc<Registry>) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            manager: None,
+        }
+    }
+
+    pub fn with_manager(mut self, manager: Arc<crate::management::Manager>) -> Self {
+        self.manager = Some(manager);
+        self
+    }
+
+    fn manager(&self) -> Result<Arc<crate::management::Manager>, Status> {
+        self.manager
+            .clone()
+            .ok_or_else(|| Status::unimplemented("Agent management is unavailable"))
     }
 
     /// Wraps the service for `tonic`'s server builder.
@@ -60,6 +75,267 @@ impl Service {
 
 #[tonic::async_trait]
 impl Basr for Service {
+    type AuthenticateAgentInteractiveStream =
+        Pin<Box<dyn Stream<Item = Result<pb::AuthenticationEvent, Status>> + Send + 'static>>;
+
+    async fn authenticate_agent_interactive(
+        &self,
+        request: Request<tonic::Streaming<pb::AuthenticationInput>>,
+    ) -> Result<Response<Self::AuthenticateAgentInteractiveStream>, Status> {
+        local_management(&request)?;
+        let mut input = request.into_inner();
+        let first = tokio::time::timeout(std::time::Duration::from_secs(30), input.message())
+            .await
+            .map_err(|_| Status::deadline_exceeded("Authentication start was not received"))??
+            .ok_or_else(|| Status::invalid_argument("Authentication requires a start message"))?;
+        let Some(pb::authentication_input::Kind::Start(start)) = first.kind else {
+            return Err(Status::invalid_argument(
+                "The first authentication message must be start",
+            ));
+        };
+        let expected: AgentSpec =
+            serde_json::from_slice(&start.expected_spec_json).map_err(|_| {
+                Status::invalid_argument("expected_spec_json must contain a saved AgentSpec")
+            })?;
+        let catalog = self.registry.catalog();
+        let spec = catalog
+            .spec(&start.agent.clone().into())
+            .filter(|spec| spec.as_ref() == &expected)
+            .cloned()
+            .ok_or_else(|| Status::failed_precondition("Agent configuration changed; retry"))?;
+        if spec.kind != crate::agent::Kind::Acp {
+            return Err(Status::invalid_argument(
+                "Only ACP agents support authentication",
+            ));
+        }
+        let program = crate::agent::acp::resolve_program(&spec)
+            .ok_or_else(|| Status::failed_precondition("Agent executable is missing"))?;
+        let registry = Arc::clone(&self.registry);
+        let (send, receive) = tokio::sync::mpsc::channel(32);
+        let task = tokio::spawn(async move {
+            let (controls, controls_receive) = tokio::sync::mpsc::channel(16);
+            let operation = crate::agent::acp::authenticate_interactive(
+                &spec,
+                &start,
+                send.clone(),
+                controls_receive,
+                std::time::Duration::from_secs(900),
+            );
+            tokio::pin!(operation);
+            let result = loop {
+                tokio::select! {
+                    biased;
+                    () = send.closed() => return,
+                    () = registry.stopped() => break Err(Status::unavailable("Daemon is stopping")),
+                    result = &mut operation => break result.map_err(|error| super::authentication_error::status(&error)),
+                    message = input.message() => match message {
+                        Ok(Some(message)) => {
+                            if !Arc::ptr_eq(&catalog, &registry.catalog()) {
+                                break Err(Status::failed_precondition("Agent catalog changed during authentication; retry"));
+                            }
+                            if controls.send(message).await.is_err() { break Err(Status::cancelled("Authentication flow closed")); }
+                        }
+                        Ok(None) => break Err(Status::cancelled("Authentication input closed")),
+                        Err(error) => break Err(error),
+                    },
+                }
+            };
+            let result = result.and_then(|result| {
+                if !Arc::ptr_eq(&catalog, &registry.catalog()) {
+                    return Err(Status::failed_precondition(
+                        "Agent catalog changed during authentication; retry",
+                    ));
+                }
+                Ok(pb::AuthenticationEvent {
+                    kind: Some(pb::authentication_event::Kind::Check(authentication_check(
+                        result, &program,
+                    ))),
+                })
+            });
+            let _ = send.send(result).await;
+        });
+        let stream = futures::stream::unfold(
+            (receive, tokio_util::task::AbortOnDropHandle::new(task)),
+            |(mut receive, task)| async move {
+                receive.recv().await.map(|event| (event, (receive, task)))
+            },
+        );
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn list_agent_catalog(
+        &self,
+        request: Request<pb::ListAgentCatalogRequest>,
+    ) -> Result<Response<pb::ListAgentCatalogResponse>, Status> {
+        let manager = self.manager()?;
+        let specs = self
+            .registry
+            .catalog()
+            .specs()
+            .map(|spec| spec.as_ref().clone())
+            .collect();
+        let local = request
+            .remote_addr()
+            .is_some_and(|address| address.ip().is_loopback());
+        let mut catalog = manager
+            .catalog(specs, request.into_inner().refresh)
+            .await
+            .map_err(|error| Status::unavailable(error.to_string()))?;
+        if !local {
+            catalog.can_install = false;
+            for entry in &mut catalog.entries {
+                entry.spec = None;
+            }
+        }
+        Ok(Response::new(pb::ListAgentCatalogResponse {
+            catalog_json: serde_json::to_vec(&catalog)
+                .map_err(|_| Status::internal("Could not encode agent catalog"))?,
+        }))
+    }
+
+    type InstallAgentStream =
+        Pin<Box<dyn Stream<Item = Result<pb::AgentOperation, Status>> + Send + 'static>>;
+
+    async fn install_agent(
+        &self,
+        request: Request<pb::InstallAgentRequest>,
+    ) -> Result<Response<Self::InstallAgentStream>, Status> {
+        local_management(&request)?;
+        let manager = self.manager()?;
+        let registry = Arc::clone(&self.registry);
+        let id = request.into_inner().id;
+        let (send, receive) = tokio::sync::mpsc::channel(16);
+        let task = tokio::spawn(async move {
+            let (progress, mut updates) = tokio::sync::mpsc::channel(16);
+            let install = manager.install(&id, progress);
+            tokio::pin!(install);
+            let result = loop {
+                tokio::select! {
+                    biased;
+                    () = registry.stopped() => break Err(anyhow::anyhow!("Daemon is stopping")),
+                    () = send.closed() => return,
+                    result = &mut install => break result,
+                    Some(update) = updates.recv() => {
+                        if send.send(Ok(update)).await.is_err() { return; }
+                    }
+                }
+            };
+            let result = result.and_then(|spec| {
+                let store = manager
+                    .store()
+                    .ok_or_else(|| anyhow::anyhow!("No writable settings catalog"))?;
+                registry.reload_catalog(|| Ok(store.load()?.settings.daemon.agents))?;
+                Ok(spec)
+            });
+            let update = match result {
+                Ok(spec) => serde_json::to_vec(&spec)
+                    .map(|spec_json| pb::AgentOperation {
+                        phase: "complete".into(),
+                        message: "Agent installed and registered".into(),
+                        spec_json,
+                        complete: true,
+                    })
+                    .map_err(|_| Status::internal("Could not encode installed agent")),
+                Err(error) => Err(Status::failed_precondition(error.to_string())),
+            };
+            let _ = send.send(update).await;
+        });
+        let stream = futures::stream::unfold(
+            (receive, tokio_util::task::AbortOnDropHandle::new(task)),
+            |(mut receive, task)| async move {
+                receive.recv().await.map(|update| (update, (receive, task)))
+            },
+        );
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn remove_agent(
+        &self,
+        request: Request<pb::RemoveAgentRequest>,
+    ) -> Result<Response<pb::RemoveAgentResponse>, Status> {
+        local_management(&request)?;
+        let manager = self.manager()?;
+        manager
+            .remove(&request.into_inner().id)
+            .await
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        self.registry
+            .reload_catalog(|| {
+                Ok(manager
+                    .store()
+                    .ok_or_else(|| anyhow::anyhow!("No writable settings catalog"))?
+                    .load()?
+                    .settings
+                    .daemon
+                    .agents)
+            })
+            .map_err(|error| Status::internal(error.to_string()))?;
+        Ok(Response::new(pb::RemoveAgentResponse {}))
+    }
+
+    async fn authenticate_agent(
+        &self,
+        request: Request<pb::AuthenticateAgentRequest>,
+    ) -> Result<Response<pb::AuthenticateAgentResponse>, Status> {
+        local_management(&request)?;
+        let request = request.into_inner();
+        let expected: AgentSpec =
+            serde_json::from_slice(&request.expected_spec_json).map_err(|_| {
+                Status::invalid_argument("expected_spec_json must contain a saved AgentSpec")
+            })?;
+        let catalog = self.registry.catalog();
+        let spec = catalog
+            .spec(&request.agent.into())
+            .filter(|spec| spec.as_ref() == &expected)
+            .ok_or_else(|| Status::failed_precondition("Agent configuration changed; retry"))?;
+        if spec.kind != crate::agent::Kind::Acp {
+            return Err(Status::invalid_argument(
+                "Only ACP agents support authentication",
+            ));
+        }
+        let program = crate::agent::acp::resolve_program(spec)
+            .ok_or_else(|| Status::failed_precondition("Agent executable is missing"))?;
+        let expected_method = if request.expected_method_json.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::from_slice(&request.expected_method_json).map_err(|_| {
+                    Status::invalid_argument(
+                        "expected_method_json must contain a method descriptor",
+                    )
+                })?,
+            )
+        };
+        let result = tokio::select! {
+            result = crate::agent::acp::authenticate_expected(spec, &request.method_id, expected_method, std::time::Duration::from_secs(300)) => result,
+            () = self.registry.stopped() => return Err(Status::unavailable("Daemon is stopping")),
+        }.map_err(|error| super::authentication_error::status(&error))?;
+        if !Arc::ptr_eq(&catalog, &self.registry.catalog()) {
+            return Err(Status::failed_precondition(
+                "Agent catalog changed during authentication; retry",
+            ));
+        }
+        let (status, initialized, authentication_error) = match result {
+            crate::agent::acp::CheckResult::Connected(initialized) => {
+                (pb::AgentCheckStatus::Connected, initialized, None)
+            }
+            crate::agent::acp::CheckResult::AuthenticationRequired(initialized, error) => (
+                pb::AgentCheckStatus::AuthenticationRequired,
+                initialized,
+                Some((&error).into()),
+            ),
+        };
+        Ok(Response::new(pb::AuthenticateAgentResponse {
+            check: Some(pb::CheckAgentResponse {
+                status: status.into(),
+                message: "Authentication flow completed; session readiness checked".into(),
+                resolved_program: program.to_string_lossy().into_owned(),
+                initialization: Some((&initialized).into()),
+                authentication_error,
+            }),
+        }))
+    }
+
     async fn list_agents(
         &self,
         _request: Request<pb::ListAgentsRequest>,
@@ -300,6 +576,7 @@ impl Basr for Service {
         self.registry.ensure_restored(&session).await?;
         session.cancel_acp(request).await?;
         self.registry.permissions().cancel(session.id());
+        self.registry.elicitations().cancel(session.id());
 
         Ok(Response::new(pb::CancelResponse {}))
     }
@@ -376,6 +653,81 @@ impl Basr for Service {
         Ok(Response::new(pb::RespondPermissionResponse {}))
     }
 
+    type WatchElicitationsStream =
+        Pin<Box<dyn Stream<Item = Result<pb::ElicitationSnapshot, Status>> + Send + 'static>>;
+
+    async fn watch_elicitations(
+        &self,
+        request: Request<pb::WatchElicitationsRequest>,
+    ) -> Result<Response<Self::WatchElicitationsStream>, Status> {
+        let session = self.session(&request.into_inner().session).await?;
+        let id = session.id();
+        let subscription = self.registry.elicitations().subscribe(id);
+        if let Err(error) = self.registry.get(id).await {
+            self.registry.elicitations().close(id);
+            return Err(Status::not_found(error.to_string()));
+        }
+        let registry = Arc::clone(&self.registry);
+        let stream = futures::stream::try_unfold(
+            (subscription, true),
+            move |(mut subscription, first)| {
+                let registry = Arc::clone(&registry);
+                async move {
+                    if !first {
+                        tokio::select! {
+                            biased;
+                            () = registry.stopped() => return Ok(None),
+                            result = subscription.snapshots.changed() => if result.is_err() { return Ok(None); },
+                        }
+                    }
+                    let snapshot = subscription.snapshots.borrow_and_update().clone();
+                    Ok(Some((
+                        pb::ElicitationSnapshot {
+                            session: id.to_string(),
+                            pending: snapshot
+                                .pending
+                                .iter()
+                                .map(|pending| pb::PendingElicitation {
+                                    request_id: pending.request_id.clone(),
+                                    request: Some((&pending.request).into()),
+                                    answered: pending.answered,
+                                })
+                                .collect(),
+                            completed_ids: snapshot.completed_ids,
+                        },
+                        (subscription, false),
+                    )))
+                }
+            },
+        );
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn respond_elicitation(
+        &self,
+        request: Request<pb::RespondElicitationRequest>,
+    ) -> Result<Response<pb::RespondElicitationResponse>, Status> {
+        let request = request.into_inner();
+        let session = self.session(&request.session).await?;
+        let response = request
+            .response
+            .ok_or_else(|| Status::invalid_argument("Missing elicitation response"))?
+            .decode()
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        self.registry
+            .elicitations()
+            .respond(session.id(), &request.request_id, response)
+            .map_err(|error| match error {
+                crate::agent::elicitation::ElicitationError::Invalid(_) => {
+                    Status::invalid_argument(error.to_string())
+                }
+                crate::agent::elicitation::ElicitationError::Expired => {
+                    Status::failed_precondition(error.to_string())
+                }
+            })?;
+        Ok(Response::new(pb::RespondElicitationResponse {}))
+    }
+
     async fn set_config_option(
         &self,
         request: Request<pb::AcpPayload>,
@@ -449,7 +801,34 @@ impl Basr for Service {
     }
 }
 
+fn authentication_check(
+    result: crate::agent::acp::CheckResult,
+    program: &std::path::Path,
+) -> pb::CheckAgentResponse {
+    let (status, initialized, authentication_error) = match result {
+        crate::agent::acp::CheckResult::Connected(initialized) => {
+            (pb::AgentCheckStatus::Connected, initialized, None)
+        }
+        crate::agent::acp::CheckResult::AuthenticationRequired(initialized, error) => (
+            pb::AgentCheckStatus::AuthenticationRequired,
+            initialized,
+            Some((&error).into()),
+        ),
+    };
+    pb::CheckAgentResponse {
+        status: status.into(),
+        message: "Agent setup completed; readiness checked".into(),
+        resolved_program: program.to_string_lossy().into_owned(),
+        initialization: Some((&initialized).into()),
+        authentication_error,
+    }
+}
+
 fn acp_status(error: &acp::Error) -> Status {
+    acp_status_raw(error, &serde_json::to_value(error).expect("ACP error JSON"))
+}
+
+fn acp_status_raw(error: &acp::Error, raw: &serde_json::Value) -> Status {
     let code = match error.code {
         acp::ErrorCode::AuthRequired => tonic::Code::Unauthenticated,
         acp::ErrorCode::InvalidParams | acp::ErrorCode::InvalidRequest => {
@@ -461,7 +840,7 @@ fn acp_status(error: &acp::Error) -> Status {
     Status::with_details(
         code,
         error.message.clone(),
-        serde_json::to_vec(error).expect("ACP error JSON").into(),
+        serde_json::to_vec(raw).expect("ACP error JSON").into(),
     )
 }
 
@@ -481,6 +860,9 @@ impl From<SessionError> for Status {
             ) => Status::invalid_argument(error.to_string()),
             SessionError::Storage(_) => Status::unavailable(error.to_string()),
             SessionError::CommitTask(_) => Status::unavailable(error.to_string()),
+            SessionError::Agent(crate::agent::Error::AcpRaw { error, raw }) => {
+                acp_status_raw(error, raw)
+            }
             SessionError::Agent(crate::agent::Error::Acp(error)) => {
                 let code = match error.code {
                     acp::ErrorCode::InvalidParams | acp::ErrorCode::InvalidRequest => {
@@ -527,6 +909,9 @@ impl From<CreateError> for Status {
             }
             CreateError::Storage(_) => Status::unavailable(error.to_string()),
             CreateError::Agent(crate::agent::Error::Acp(acp_error)) => acp_status(&acp_error),
+            CreateError::Agent(crate::agent::Error::AcpRaw { error, raw }) => {
+                acp_status_raw(&error, &raw)
+            }
             CreateError::Agent(crate::agent::Error::Unsupported { .. }) => {
                 Status::failed_precondition(error.to_string())
             }
@@ -547,6 +932,19 @@ impl From<AttachError> for Status {
 
 fn metadata_error(error: basr::service::Error) -> Status {
     Status::failed_precondition(error.to_string())
+}
+
+fn local_management<T>(request: &Request<T>) -> Result<(), Status> {
+    if request
+        .remote_addr()
+        .is_some_and(|address| address.ip().is_loopback())
+    {
+        Ok(())
+    } else {
+        Err(Status::permission_denied(
+            "Agent installation and authentication require a local daemon connection",
+        ))
+    }
 }
 
 fn decode<T: serde::de::DeserializeOwned>(request: Request<pb::AcpPayload>) -> Result<T, Status> {

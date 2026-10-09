@@ -132,7 +132,11 @@ impl TryFrom<&model::SessionMeta> for pb::Session {
             last_reply: meta.last_reply.raw(),
             revision: meta.revision.raw(),
             active_turn: meta.active_turn.map(|turn| turn.to_string()),
-            initialization: meta.initialization.as_ref().map(pb::AcpPayload::from),
+            initialization: meta
+                .initialization_raw
+                .as_ref()
+                .map(pb::AcpPayload::from)
+                .or_else(|| meta.initialization.as_ref().map(pb::AcpPayload::from)),
             acp: meta.acp.as_ref().map(pb::AcpPayload::from),
             available_commands: meta.available_commands.as_ref().map(pb::AcpPayload::from),
         })
@@ -158,6 +162,11 @@ impl TryFrom<pb::Session> for model::SessionMeta {
             active_turn: session
                 .active_turn
                 .map(|turn| model::TurnId::from_str(&turn))
+                .transpose()?,
+            initialization_raw: session
+                .initialization
+                .as_ref()
+                .map(|p| p.decode())
                 .transpose()?,
             initialization: session.initialization.map(|p| p.decode()).transpose()?,
             acp: session.acp.map(|p| p.decode()).transpose()?,
@@ -197,7 +206,7 @@ impl pb::AcpPayload {
     }
 }
 
-// Implement only SDK schemas carried by this service, avoiding an untyped public API.
+// Include original protocol objects so future extension fields survive projection.
 macro_rules! acp_payload {
     ($($ty:ty),* $(,)?) => {$(
         impl From<&$ty> for pb::AcpPayload {
@@ -208,6 +217,7 @@ macro_rules! acp_payload {
     )*};
 }
 acp_payload!(
+    serde_json::Value,
     crate::acp::Error,
     crate::acp::InitializeResponse,
     crate::acp::NewSessionResponse,

@@ -12,8 +12,8 @@ basrw
 ```
 
 `install-basrd` 只安装 release 版 `basrd` 和 `basrctl`，不安装、更新或卸载任何外部
-ACP 适配器及其 CLI，也不创建或修改用户配置。外部工具由用户按各自官方文档独立安装和管理。
-未配置后端时只提供 `embedded` echo 后端；安装外部工具后再手动添加对应命令。
+ACP 适配器及其 CLI，也不创建或修改用户配置。外部后端可通过运行中的 daemon 按需从 ACP Registry 安装，或由用户按官方文档独立管理。
+未配置后端时只提供 `embedded` echo 后端。
 `--service` 链接并启用 systemd **用户服务**，立即启动；无需 root，服务使用当前用户的目录与登录状态。
 脚本包含尚未加入 Git 的源码，排除 `.env`、测试输出和构建目录。
 
@@ -30,7 +30,52 @@ basrd
 源码均已加入 Git 后，也可使用 `nix profile install .#basrd` 或 `nix run .#basrd`。
 NixOS / Home Manager 可将 `inputs.basr.packages.${pkgs.stdenv.hostPlatform.system}.basrd`
 加入 `environment.systemPackages` / `home.packages`，服务另行声明。
-BASR flake 不再提供外部适配器安装包；在 NixOS 上请自行选择适合系统的上游发行方式。
+BASR flake 本身不捆绑外部适配器。Nix 安装的 daemon 为托管 ELF 程序提供安装时的解释器和运行库修补；
+用户独立管理的程序继续使用自己的发行方式。
+
+## 从 ACP Registry 安装后端
+
+在 GUI 的 Agent 选择器中点“安装 Agent…”，或打开设置的 Agent 服务页。
+搜索后端并点击“安装”；daemon 下载对应平台的二进制，或安装固定版本的 npm 包，
+自动写入启动配置并检测 ACP 连接。需要认证时选择 Agent 提供的登录方式，完成后自动重新检查。
+模型、账号和工具权限继续使用后端自己的配置。
+
+无 GUI 时使用同一套 daemon 接口：
+
+```sh
+basrctl agent catalog
+basrctl agent catalog --refresh
+basrctl agent install codex-acp
+basrctl agent login codex-acp
+basrctl agent install opencode
+basrctl agent install pi-acp
+basrctl agent check pi-acp
+```
+
+多个认证方式可用时，`agent login` 列出方法 ID，使用 `--method <id>` 选择。
+terminal 方法直接在当前终端运行登录；agent 方法通过 ACP `authenticate` 完成。
+命令行与 GUI 共用原始认证描述符和执行计划。交互式终端可回答 Agent 的表单或确认
+授权链接；非交互输入会取消表单，不自动打开网站。认证完成后重新检测会话可用性。
+检查只验证 initialize 与 session/new，不发送模型请求；实际对话仍可能遇到模型或网络错误。
+
+安装目录、版本记录和 Registry 缓存由 daemon 管理。优先选择当前平台 binary，
+其次使用 npm；npm 安装隔离在后端版本目录，Node 优先复用 daemon 环境中的可用版本，
+缺少时下载经过校验的私有 runtime。Pi 的 npm 安装包含它需要的 Pi 本体。
+目前 uvx 分发仍会显示在目录中，并标记暂不支持安装。
+
+再次安装同一 ID 可更新版本。新版本采用独立启动路径，现有会话继续使用原进程；
+旧版本目录保留，避免影响正在运行的会话。`basrctl agent remove <id>` 或 GUI“移除”
+只移除托管注册和安装记录，保留版本目录、原生凭据和会话记录。
+独立安装的自定义后端不会被托管安装覆盖。
+
+安装和认证要求连接本机 daemon。使用 `--agents` 或旧 `--agents-file` 覆盖目录时，
+Registry 可浏览，但托管安装不可用；使用统一 settings 文件即可启用。
+GUI 会核对 daemon 的 settings 路径，路径不同或远端连接时不修改本机后端配置。
+Registry 无法刷新时使用上次有效缓存并显示提示；没有缓存时仍显示已配置后端。
+
+官方目录与格式见 [ACP Registry](https://github.com/agentclientprotocol/registry)。
+Registry URL、数据目录和 ELF 修补环境变量见下文；这些选项适合测试、镜像或系统打包，
+日常使用无需设置。
 
 ## 配置 ACP 后端
 
@@ -84,12 +129,14 @@ ACP 后端可设置 `cancellation_grace_ms`，表示发送取消后等待本轮�
 
 文件配置每秒自动检查，整份目录校验成功后原子替换；非法更新或已读取文件消失时保留上次有效目录。
 新建会话使用新配置，运行中的会话及后台进程不变。`--agents` 字符串覆盖不监听文件。
-GUI 的“Agent 服务”仅编辑本机配置；保存成功不等于已经确认某个远端或旧版本 daemon 采用该配置。
+GUI 自定义配置仅编辑核对过的本机 settings；托管安装由 daemon 保存并注册。
+保存自定义配置成功不等于远端或旧版本 daemon 已采用该配置。
 
 `ListAgents` 只返回当前可找到可执行文件的工具条目；缺失、目录或无执行权限的 ACP 程序会被隐藏，
 但配置文件仍保留，安装工具或修正路径后下次刷新即可重新出现。
 查找与实际启动共用 daemon 的 PATH（含该 Agent 的 `env.PATH` 覆盖），不使用 GUI 的 PATH。
-设置页的显式连接检测会验证 ACP 握手；“已找到程序”与“已连通”是两个状态。
+设置页“检测”验证 ACP 握手和临时会话；程序可用、上次检测结果与登录需求分别显示。
+检测结束不会保持连接，也不验证模型请求。登录是单独的认证操作，检测按钮不会启动登录。
 使用此检测功能需要同时升级 `basrw` 与 `basrd`，旧版 daemon 会提示不支持。
 
 修改 Agent 目录不需要重启。升级 daemon 可执行文件仍需重启；新版默认使用 `localdb`，
@@ -149,6 +196,20 @@ command -v pi-acp
 仓库的 Pi 固定依赖仅供开发 shell 和虚拟机测试，不属于 BASR 安装包或用户安装渠道。
 配置命令不执行安装、下载、登录或模型请求。
 如果服务找不到程序，可填写绝对路径；GUI 自身的 PATH 不代表 systemd 服务的 PATH。
+
+## Registry 与运行环境覆盖
+
+| 环境变量 | 默认 / 用途 |
+| --- | --- |
+| `BASRD_ACP_REGISTRY_URL` | 官方 Registry CDN；允许 HTTPS，HTTP 仅限 loopback 测试服务 |
+| `BASRD_ACP_DATA_DIR` | 用户数据目录下 `basr/acp`；覆盖时必须为绝对路径 |
+| `BASRD_ACP_PATCHELF` | 可选的 patchelf 程序路径，Nix daemon 安装包自动提供 |
+| `BASRD_ACP_ELF_LOADER` | 托管 ELF 的动态解释器，Nix 安装包自动提供 |
+| `BASRD_ACP_ELF_LIBRARY_PATH` | 托管 ELF 的运行库路径，Nix 安装包自动提供 |
+
+这些 ELF 选项只作用于 BASR 下载的托管程序，不改动用户独立安装的程序。
+从源码运行 NixOS daemon 时可使用系统 Node 和已安装的后端；需要验证下载的 ELF 时，
+设置与 Nix 安装包相同的修补环境。
 
 ## 服务管理
 

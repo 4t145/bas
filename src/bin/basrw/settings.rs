@@ -11,13 +11,25 @@ use gpui_kit::{
     px,
 };
 
-mod agents;
+pub(crate) mod agents;
 mod appearance;
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
 
+pub(crate) use agents::AgentCatalogService;
 pub(crate) use agents::init_checks;
 pub(crate) use agents::run_helper_if_requested;
+
+/// Settings changes wake every chat window attached to the same daemon.
+#[derive(Clone, Default)]
+pub(crate) struct AgentChanges {
+    pub server: Option<std::net::SocketAddr>,
+    pub ready: Option<String>,
+    pub select: Option<String>,
+    pub target: Option<gpui_kit::WindowId>,
+    pub revision: u64,
+}
+impl gpui_kit::Global for AgentChanges {}
 
 // Keep actions distinct from the ghost navigation items, using upstream state styling.
 fn action_button(id: impl Into<gpui_kit::ElementId>) -> Button {
@@ -113,10 +125,16 @@ impl Settings {
                 if matches!(event, InputEvent::Change) {
                     let query = this.search.read(cx).value().to_string();
                     if !query.trim().is_empty() {
-                        this.category = Category::for_query(&query);
+                        if this.category != Category::Agents {
+                            this.category = Category::for_query(&query);
+                        }
                         this.expanded.insert(this.category);
                     }
                     this.appearance.update(cx, |page, cx| {
+                        page.query = query.clone();
+                        cx.notify();
+                    });
+                    this.agents.update(cx, |page, cx| {
                         page.query = query;
                         cx.notify();
                     });
@@ -147,6 +165,12 @@ impl Settings {
         self.select_agents(None, window, cx);
         self.agent_section = self.agents.update(cx, |page, cx| page.reveal(id, cx));
         cx.notify();
+    }
+
+    pub(crate) fn show_catalog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_agents(None, window, cx);
+        self.agents
+            .update(cx, |page, cx| page.open_installation(cx));
     }
 
     /// Point the appearance page at one of its sections without hiding the others.
@@ -183,8 +207,7 @@ impl Settings {
         self.search
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.agents.update(cx, |page, cx| {
-            page.scroll_to = Some(section.unwrap_or(0));
-            cx.notify();
+            page.show_section(section, cx);
         });
         cx.notify();
     }

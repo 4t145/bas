@@ -42,5 +42,5 @@ async fn run() -> Result<()> {
         .await
         .with_context(|| format!("cannot connect to basrd at {}; is it running?", args.server))?;
 
-    args.command.run(&mut client).await
+    args.command.run(&mut client, args.server).await
 }

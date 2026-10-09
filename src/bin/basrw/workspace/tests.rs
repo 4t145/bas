@@ -14,7 +14,10 @@ mod clipboard;
 mod composer_expansion;
 mod composer_geometry;
 mod composer_queue;
+mod config;
+mod elicitation;
 mod navigation;
+mod picker;
 mod rename;
 mod rows;
 mod settings;
@@ -651,9 +654,18 @@ fn late_initialization_cannot_steal_another_agent_or_workspace(cx: &mut TestAppC
         window.render_frame(cx);
         window.input("保留草稿", cx);
         fixture.view.update(cx, |view, cx| {
+            view.update(
+                Update::Created {
+                    epoch: fixture.initial_create.epoch,
+                    result: Err("initialization failed before choosing another backend".into()),
+                },
+                window,
+                cx,
+            );
             view.select_agent("other-agent".into(), window, cx);
             assert_eq!(view.composer.read(cx).value(), "保留草稿");
             view.new_thread(Some(PathBuf::from("/other")), window, cx);
+            view.select_agent("other-agent".into(), window, cx);
         });
         window.input("另一工作区草稿", cx);
         fixture.view.update(cx, |view, cx| {
@@ -679,6 +691,7 @@ fn late_initialization_cannot_steal_another_agent_or_workspace(cx: &mut TestAppC
     assert!(
         matches!(fixture.commands.try_recv(), Ok(Command::Create(form)) if form.agent == "other-agent" && form.cwd == "/tmp")
     );
+    assert!(matches!(fixture.commands.try_recv(), Ok(Command::Detach)));
     assert!(matches!(fixture.commands.try_recv(), Ok(Command::Detach)));
     let Command::Create(form) = fixture
         .commands
@@ -1134,7 +1147,7 @@ fn compact_menus_escape_window_bounds_and_keep_the_composer_small(cx: &mut TestA
             "Escape should only close the menu"
         );
         assert_eq!(window.viewport_size(), compact_size);
-        window.click("agent-picker", cx);
+        window.click("workspace-picker", cx);
         assert!(fixture.view.read(cx).menu.is_some());
         window.click("composer-editor", cx);
         assert!(
@@ -1148,7 +1161,19 @@ fn compact_menus_escape_window_bounds_and_keep_the_composer_small(cx: &mut TestA
 #[gpui_kit::test]
 fn compact_menu_actions_use_the_parent_window(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
-    attach(&fixture, session(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.update(
+                Update::Created {
+                    epoch: fixture.initial_create.epoch,
+                    result: Err("initialization failed before choosing an agent".into()),
+                },
+                window,
+                cx,
+            );
+        });
+    })
+    .expect("an uncreated draft can choose its agent");
     while fixture.commands.try_recv().is_ok() {}
     let popup = cx
         .update_window(fixture.window.into(), |_, window, cx| {
@@ -1266,11 +1291,16 @@ fn composer_toolbar_keeps_options_attachments_and_send_on_one_row_in_both_modes(
             for id in ["add-attachment", "config-thinking", "agent-picker"] {
                 let control = window.find(id);
                 assert!(control.visible());
-                assert_eq!(
-                    control.bounds().origin.y,
-                    send.origin.y,
-                    "{id} must align with send"
-                );
+                if id == "config-thinking" {
+                    // The smaller Switch track centers within the button row; paint rounds to pixels.
+                    assert!(f32::from(control.bounds().center().y - send.center().y).abs() <= 0.5);
+                } else {
+                    assert_eq!(
+                        control.bounds().origin.y,
+                        send.origin.y,
+                        "{id} must align with send"
+                    );
+                }
                 assert!(control.bounds().origin.y >= toolbar.origin.y);
             }
             assert!(send.origin.x + send.size.width <= toolbar.origin.x + toolbar.size.width);

@@ -18,8 +18,11 @@ use super::{
     driver::{Driver as DriverTrait, spawn_worker},
 };
 
+mod authentication;
 mod convert;
 mod probe;
+pub use authentication::{authenticate_expected, interactive as authenticate_interactive};
+pub(crate) use probe::AuthenticationError;
 pub use probe::{CheckResult, check_connection, resolve_program};
 
 #[cfg(test)]
@@ -70,9 +73,30 @@ impl Driver {
         startup: Startup,
     ) -> Result<Box<dyn AgentTrait>, Error> {
         let (corrupt, mut corruption) = mpsc::channel(1);
+        let errors = probe::ErrorCapture::default();
+        let capture = errors.clone();
+        let requests = Arc::new(std::sync::Mutex::new(
+            std::collections::BTreeSet::<String>::new(),
+        ));
+        let transport_requests = Arc::clone(&requests);
         let transport =
             convert::agent(request.spec.as_ref())?.with_debug(move |line, direction| {
                 tracing::trace!(?direction, bytes = line.len(), "ACP transport line");
+                capture.observe(line, direction);
+                if let Ok(message) = serde_json::from_str::<serde_json::Value>(line)
+                    && let Some(id) = message.get("id")
+                {
+                    let mut pending = transport_requests.lock().expect("ACP request IDs lock");
+                    if matches!(direction, agent_client_protocol::LineDirection::Stdin)
+                        && message.get("method").is_some()
+                    {
+                        pending.insert(id.to_string());
+                    } else if matches!(direction, agent_client_protocol::LineDirection::Stdout)
+                        && message.get("method").is_none()
+                    {
+                        pending.remove(&id.to_string());
+                    }
+                }
                 // The SDK answers parse errors and keeps reading. A daemon-owned peer
                 // emitting damaged protocol data must not leave a prompt hung forever.
                 // Ignore whitespace; valid unknown messages remain the SDK's concern.
@@ -95,6 +119,8 @@ impl Driver {
             agent: request.spec.id.clone(),
             ready,
             startup,
+            requests,
+            errors,
         };
         let agent = request.spec.id.clone();
         let task = spawn_worker(request.updates.clone(), async move {
@@ -114,6 +140,7 @@ impl Driver {
             connection: opened.connection,
             acp_session: opened.created.session_id.clone(),
             initialized: opened.initialized,
+            initialization_raw: opened.initialization_raw,
             created: opened.created,
             state,
             updates: request.updates,
@@ -136,6 +163,20 @@ struct Connection {
     agent: AgentId,
     ready: oneshot::Sender<Result<Opened, Error>>,
     startup: Startup,
+    requests: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+    errors: probe::ErrorCapture,
+}
+
+struct ElicitationConnection {
+    host: Arc<dyn Host>,
+    session: SessionId,
+    connection: uuid::Uuid,
+}
+
+impl Drop for ElicitationConnection {
+    fn drop(&mut self) {
+        self.host.cancel_elicitations(self.session, self.connection);
+    }
 }
 
 impl Connection {
@@ -152,10 +193,22 @@ impl Connection {
             agent,
             ready,
             startup,
+            requests,
+            errors,
         } = self;
+        let elicitation_connection = uuid::Uuid::new_v4();
+        host.open_elicitation_connection(session, elicitation_connection);
+        let _elicitation_connection = ElicitationConnection {
+            host: Arc::clone(&host),
+            session,
+            connection: elicitation_connection,
+        };
         let notification_state = Arc::clone(&state);
         let permission_host = Arc::clone(&host);
         let read_host = Arc::clone(&host);
+        let elicitation_host = Arc::clone(&host);
+        let completion_host = Arc::clone(&host);
+        let elicitation_state = Arc::clone(&state);
         let startup_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let failed = Arc::clone(&startup_failed);
         let startup_agent = agent.clone();
@@ -185,8 +238,50 @@ impl Connection {
             responder.respond(v1::WriteTextFileResponse::new())?;
             Ok(())
         }, on_receive_request!())
+        .on_receive_request(async move |request: agent_client_protocol::UntypedMessage, responder, cx| {
+            if request.method != "elicitation/create" {
+                responder.respond_with_error(agent_client_protocol::Error::method_not_found())?;
+                return Ok(());
+            }
+            if let Err(error) = basr::authentication::elicitation::parse_request(&request.params) {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params().data(error.to_string()))?;
+                return Ok(());
+            }
+            if let Some(id) = request.params.get("requestId")
+                && !requests.lock().expect("ACP request IDs lock").contains(&id.to_string())
+            {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            }
+            if let Some(requested) = request.params.get("sessionId").and_then(serde_json::Value::as_str) {
+                let current = elicitation_state.lock().await.session.clone();
+                if current.as_ref().is_none_or(|current| current.0.as_ref() != requested) {
+                    responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                    return Ok(());
+                }
+            }
+            let host = Arc::clone(&elicitation_host);
+            let cancellation = responder.cancellation();
+            cx.spawn(async move {
+                let response = cancellation.run_until_cancelled(async move {
+                    host.elicit(session, elicitation_connection, request.params).await
+                        .map_err(|error| agent_client_protocol::Error::invalid_params().data(error.to_string()))
+                }).await;
+                responder.respond_with_result(response)?;
+                Ok(())
+            })?;
+            Ok(())
+        }, on_receive_request!())
+        .on_receive_notification(async move |notification: agent_client_protocol::UntypedMessage, _cx| {
+            if notification.method == "elicitation/complete"
+                && let Some(id) = notification.params.get("elicitationId").and_then(serde_json::Value::as_str)
+            { completion_host.complete_elicitation(session, elicitation_connection, id); }
+            Ok(())
+        }, on_receive_notification!())
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            let initialized = match cx.send_request(v1::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(Self::capabilities())).block_task().await {
+            let initialize = v1::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(Self::capabilities());
+            let initialize = agent_client_protocol::UntypedMessage::new("initialize", initialize)?;
+            let initialization_raw = match cx.send_request(initialize).block_task().await {
                 Ok(value) => value,
                 Err(error) => {
                     failed.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -194,30 +289,43 @@ impl Connection {
                     return Ok(());
                 }
             };
+            let initialized: v1::InitializeResponse = match serde_json::from_value(initialization_raw.clone()) {
+                Ok(value) => value,
+                Err(error) => {
+                    failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let _ = ready.send(Err(Error::with_source(startup_agent.clone(), "invalid ACP initialization", error)));
+                    return Ok(());
+                }
+            };
             let opened_session = match startup {
-                Startup::Create => cx.send_request(v1::NewSessionRequest::new(cwd))
-                    .block_task().await.map_err(Error::Acp),
+                Startup::Create => {
+                    let sent = cx.send_request(v1::NewSessionRequest::new(cwd));
+                    let id = serde_json::to_value(sent.id())?.to_string();
+                    sent.block_task().await.map_err(|error| startup_error(&errors, &id, error))
+                }
                 Startup::Restore(id) => {
                     // ACP requires session/load to finish history replay before its
                     // response; session/resume does not replay history.
                     // https://agentclientprotocol.com/protocol/session-setup#loading-sessions
                     state.lock().await.session = Some(id.clone());
                     if initialized.agent_capabilities.load_session {
-                        cx.send_request(v1::LoadSessionRequest::new(id.clone(), cwd))
-                            .block_task().await.map(|loaded| {
+                        let sent = cx.send_request(v1::LoadSessionRequest::new(id.clone(), cwd));
+                        let request_id = serde_json::to_value(sent.id())?.to_string();
+                        sent.block_task().await.map(|loaded| {
                                 v1::NewSessionResponse::new(id)
                                     .modes(loaded.modes)
                                     .config_options(loaded.config_options)
                                     .meta(loaded.meta)
-                            }).map_err(Error::Acp)
+                            }).map_err(|error| startup_error(&errors, &request_id, error))
                     } else if initialized.agent_capabilities.session_capabilities.resume.is_some() {
-                        cx.send_request(v1::ResumeSessionRequest::new(id.clone(), cwd))
-                            .block_task().await.map(|resumed| {
+                        let sent = cx.send_request(v1::ResumeSessionRequest::new(id.clone(), cwd));
+                        let request_id = serde_json::to_value(sent.id())?.to_string();
+                        sent.block_task().await.map(|resumed| {
                                 v1::NewSessionResponse::new(id)
                                     .modes(resumed.modes)
                                     .config_options(resumed.config_options)
                                     .meta(resumed.meta)
-                            }).map_err(Error::Acp)
+                            }).map_err(|error| startup_error(&errors, &request_id, error))
                     } else {
                         Err(Error::Unsupported { agent: startup_agent.clone(), operation: "session/load or session/resume" })
                     }
@@ -225,19 +333,7 @@ impl Connection {
             };
             let created = match opened_session {
                 Ok(value) => value,
-                Err(mut error) => {
-                    if let Error::Acp(ref mut acp_error) = error
-                        && acp_error.code == agent_client_protocol::ErrorCode::AuthRequired
-                        && acp_error.data.as_ref().and_then(|data| data.get("authMethods")).is_none()
-                        && !initialized.auth_methods.is_empty()
-                    {
-                        let methods = serde_json::to_value(&initialized.auth_methods)
-                            .expect("ACP auth methods serialize as JSON");
-                        match &mut acp_error.data {
-                            Some(serde_json::Value::Object(data)) => { data.insert("authMethods".into(), methods); }
-                            _ => acp_error.data = Some(serde_json::json!({"authMethods": methods})),
-                        }
-                    }
+                Err(error) => {
                     failed.store(true, std::sync::atomic::Ordering::Relaxed);
                     let _ = ready.send(Err(error));
                     return Ok(());
@@ -245,7 +341,7 @@ impl Connection {
             };
             state.lock().await.session = Some(created.session_id.clone());
             tracing::debug!(agent = ?initialized.agent_info, acp_session = %created.session_id, "ACP session ready");
-            if ready.send(Ok(Opened { connection: cx.clone(), initialized, created })).is_err() { return Ok(()); }
+            if ready.send(Ok(Opened { connection: cx.clone(), initialized, initialization_raw, created })).is_err() { return Ok(()); }
             cx.incoming_closed().await;
             Ok(())
         }).await.map_err(|error| Error::with_source(agent.clone(), "ACP connection failed", error))?;
@@ -259,6 +355,11 @@ impl Connection {
     fn capabilities() -> v1::ClientCapabilities {
         v1::ClientCapabilities::new()
             .auth(v1::AuthCapabilities::new().terminal(true))
+            .elicitation(
+                v1::ElicitationCapabilities::new()
+                    .form(v1::ElicitationFormCapabilities::new())
+                    .url(v1::ElicitationUrlCapabilities::new()),
+            )
             .fs(v1::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
@@ -276,9 +377,22 @@ impl Connection {
     }
 }
 
+fn startup_error(errors: &probe::ErrorCapture, id: &str, error: v1::Error) -> Error {
+    if error.code == agent_client_protocol::ErrorCode::AuthRequired {
+        let (error, raw) = errors.take(id, error).into_parts();
+        Error::AcpRaw {
+            error: Box::new(error),
+            raw,
+        }
+    } else {
+        Error::Acp(error)
+    }
+}
+
 struct Opened {
     connection: ConnectionTo<Agent>,
     initialized: v1::InitializeResponse,
+    initialization_raw: serde_json::Value,
     created: v1::NewSessionResponse,
 }
 
@@ -287,6 +401,7 @@ struct Session {
     connection: ConnectionTo<Agent>,
     acp_session: v1::SessionId,
     initialized: v1::InitializeResponse,
+    initialization_raw: serde_json::Value,
     created: v1::NewSessionResponse,
     state: Arc<Mutex<State>>,
     updates: mpsc::Sender<Update>,
@@ -299,6 +414,9 @@ struct Session {
 
 #[async_trait]
 impl AgentTrait for Session {
+    fn initialization_raw(&self) -> Option<serde_json::Value> {
+        Some(self.initialization_raw.clone())
+    }
     fn initialization(&self) -> Option<v1::InitializeResponse> {
         Some(self.initialized.clone())
     }

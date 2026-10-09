@@ -45,9 +45,30 @@ fn authentication_preserves_draft_and_attachments_until_explicit_retry(cx: &mut 
     );
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
+            view.authentication_panel = Some(cx.new(|_| {
+                crate::authentication::Authentication::new(
+                    basr::config::AgentSpec::embedded(),
+                    crate::settings::agents::check::Status::AuthenticationRequired {
+                        program: String::new(),
+                        methods: Vec::new(),
+                    },
+                    "/fixture/settings.json".into(),
+                    window.window_handle(),
+                )
+            }));
+            view.authentication_load =
+                Some(cx.spawn(async move |_, _| std::future::pending::<()>().await));
             view.refresh(cx);
             assert!(view.creating);
             assert!(view.authentication_required.is_none());
+            assert!(
+                view.authentication_panel.is_none(),
+                "retry drops the old epoch's UI and stream"
+            );
+            assert!(
+                view.authentication_load.is_none(),
+                "retry cancels the old method lookup"
+            );
             let epoch = view.epoch;
             view.update(auth_required(&fixture), window, cx);
             assert!(

@@ -296,49 +296,70 @@ impl Workspace {
             .current()
             .map(|session| session.agent.to_string())
             .unwrap_or_else(|| self.selected_agent.clone());
-        let hint = if selected.is_empty() {
-            "无可用 Agent".into()
+        let disabled = !self.can_select_agent();
+        let hint = if disabled {
+            format!("Agent · {selected}")
+        } else if selected.is_empty() {
+            "选择或安装 Agent".into()
         } else {
-            format!("切换 Agent · {selected}")
+            format!("选择 Agent · {selected}")
         };
         let view = cx.entity().downgrade();
         let parent = self.window;
-        let disabled = self.active.is_some()
-            && (self
-                .conversation
-                .as_ref()
-                .is_none_or(|c| !c.items.is_empty())
-                || self.working()
-                || self.active.is_some_and(|id| self.sending(id)));
         let button = Button::new("agent-picker")
             .ghost()
             .xsmall()
-            .icon(IconName::Bot)
-            .disabled(disabled);
-        let menu = self.menu_button(
-            button,
-            agents.len(),
-            disabled,
-            move |mut menu, _, _| {
-                for id in &agents {
-                    let id = id.clone();
+            .disabled(disabled)
+            .accessibility_label(hint.clone())
+            .when(self.waiting_for_agent_selection, |button| {
+                button.label("选择 Agent")
+            })
+            .child(
+                self.agent_icon("agent-picker-icon", &selected, cx)
+                    .text_color(if disabled {
+                        cx.theme().muted_foreground
+                    } else {
+                        cx.theme().foreground
+                    }),
+            );
+        let menu = if disabled {
+            button.into_any_element()
+        } else {
+            self.menu_button(
+                button,
+                agents.len() + 2,
+                false,
+                move |mut menu, _, _| {
+                    for id in &agents {
+                        let id = id.clone();
+                        let view = view.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(id.clone())
+                                .checked(id == selected)
+                                .on_click(move |_, window, cx| {
+                                    menus::in_parent(parent, window, cx, |window, cx| {
+                                        let _ = view.update(cx, |this, cx| {
+                                            this.select_agent(id.clone(), window, cx);
+                                        });
+                                    });
+                                }),
+                        );
+                    }
                     let view = view.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(id.clone())
-                            .checked(id == selected)
+                    menu.separator().item(
+                        PopupMenuItem::new("安装 Agent…")
+                            .icon(IconName::Plus)
                             .on_click(move |_, window, cx| {
                                 menus::in_parent(parent, window, cx, |window, cx| {
-                                    let _ = view.update(cx, |this, cx| {
-                                        this.select_agent(id.clone(), window, cx);
-                                    });
+                                    let _ = view
+                                        .update(cx, |this, cx| this.open_agent_catalog(window, cx));
                                 });
                             }),
-                    );
-                }
-                menu
-            },
-            cx,
-        );
+                    )
+                },
+                cx,
+            )
+        };
         crate::tooltip::bounded("agent-picker-hint", menu, hint)
     }
 
@@ -514,42 +535,50 @@ impl Workspace {
                     ));
                 }
                 acp::SessionConfigKind::Boolean(boolean) => {
-                    let request = acp::SetSessionConfigOptionRequest::new(
-                        session.to_string(),
-                        config_id,
-                        !boolean.current_value,
-                    );
+                    let hint = settings::config_option_hint(option);
                     row = row.child(
-                        Button::new(id)
+                        div()
+                            .id(SharedString::from(format!("config-field-{}", option.id)))
+                            .test_support()
                             .flex_shrink_0()
-                            .disabled(self.configuring.contains(&session))
-                            .ghost()
-                            .xsmall()
-                            .icon(match option.category.as_ref() {
-                                Some(acp::SessionConfigOptionCategory::ThoughtLevel) => {
-                                    IconName::Brain
-                                }
-                                Some(acp::SessionConfigOptionCategory::Model) => IconName::Cpu,
-                                Some(acp::SessionConfigOptionCategory::Mode) => IconName::Shield,
-                                _ => IconName::Settings,
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_1()
+                            .hoverable_tooltip(move |window, cx| {
+                                crate::tooltip::view(hint.clone(), window, cx)
                             })
-                            .when(boolean.current_value, |button| {
-                                button.text_color(cx.theme().primary)
-                            })
-                            .tooltip(format!(
-                                "{} · {}",
-                                option.name,
-                                if boolean.current_value {
-                                    "开启"
-                                } else {
-                                    "关闭"
-                                }
-                            ))
-                            .on_click(move |_, _, cx| {
-                                let _ = view.update(cx, |this, cx| {
-                                    this.configure(request.clone(), cx);
-                                });
-                            }),
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("config-label-{}", option.id)))
+                                    .test_support()
+                                    .text_xs()
+                                    .text_color(if self.configuring.contains(&session) {
+                                        cx.theme().muted_foreground
+                                    } else {
+                                        cx.theme().foreground
+                                    })
+                                    .child(option.name.clone()),
+                            )
+                            .child(
+                                gpui_kit::component::switch::Switch::new(id)
+                                    .flex_shrink_0()
+                                    .checked(boolean.current_value)
+                                    .disabled(self.configuring.contains(&session))
+                                    .xsmall()
+                                    .accessibility_label(option.name.clone())
+                                    .on_change(move |checked, window, cx| {
+                                        let request = acp::SetSessionConfigOptionRequest::new(
+                                            session.to_string(),
+                                            config_id.clone(),
+                                            *checked,
+                                        );
+                                        let _ = view.update(cx, |this, cx| {
+                                            this.configure(request, cx);
+                                            this.focus_input(window, cx);
+                                        });
+                                    }),
+                            ),
                     );
                 }
                 _ => {}

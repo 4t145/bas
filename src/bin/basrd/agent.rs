@@ -15,6 +15,7 @@ mod driver;
 mod spec;
 
 pub mod acp;
+pub mod elicitation;
 pub mod embedded;
 pub mod permissions;
 

@@ -1,23 +1,36 @@
-//! Local catalog onboarding; only an explicit connection action starts an ACP probe.
+//! Local catalog onboarding; only an explicit detection action starts an ACP probe.
 
 use super::action_button as button;
 mod authentication;
-mod check;
+pub(crate) mod check;
 mod installation;
-pub(crate) use authentication::run_helper_if_requested;
+pub(crate) use crate::authentication::terminal::run_helper_if_requested;
 use basr::config::{
     Document, Store,
     agent::{AgentSpec, Command, Kind, ValidationError},
     validate_agents,
 };
-pub(crate) use check::init as init_checks;
 use gpui_kit::{
     App, Context, Entity, Render, ScrollHandle, Subscription, Task, TestSupportExt, Window,
-    component::{group_box::*, input::*, *},
+    component::{button::*, group_box::*, input::*, *},
     div,
     prelude::*,
 };
-use std::{collections::HashMap, time::Duration};
+pub(crate) use installation::Service as AgentCatalogService;
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+
+pub(crate) fn init_checks(
+    server: std::net::SocketAddr,
+    runtime: tokio::runtime::Handle,
+    cx: &mut App,
+) {
+    check::init(server, runtime.clone(), cx);
+    installation::init(server, runtime, cx);
+    cx.set_global(super::AgentChanges::default());
+}
 
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
@@ -25,6 +38,7 @@ mod tests;
 struct Check {
     spec: AgentSpec,
     status: check::Status,
+    completed_at: Option<Instant>,
     _task: Option<Task<()>>,
 }
 
@@ -122,6 +136,8 @@ enum DraftError {
     Validation(#[from] ValidationError),
     #[error("{0}")]
     Store(#[from] basr::config::Error),
+    #[error("请连接使用当前配置文件的本机 basrd，再编辑 Agent 配置。")]
+    ReadOnly,
 }
 
 pub(super) struct Agents {
@@ -136,7 +152,16 @@ pub(super) struct Agents {
     pub(super) scroll_to: Option<usize>,
     scroll: ScrollHandle,
     checks: HashMap<basr::model::AgentId, Check>,
+    authentications: HashMap<basr::model::AgentId, Entity<crate::authentication::Authentication>>,
     show_installation: bool,
+    registry: Option<basr::management::Catalog>,
+    registry_loading: bool,
+    registry_task: Option<Task<()>>,
+    operations: HashMap<String, installation::Operation>,
+    registry_search: Entity<InputState>,
+    registry_filter: installation::Filter,
+    local_editable: bool,
+    pub(super) query: String,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -149,11 +174,13 @@ pub(super) struct Section {
 impl Agents {
     pub(super) fn new(store: Store, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let form = Form::new(window, cx);
-        let subscriptions = form
+        let registry_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 Agent…"));
+        let mut subscriptions: Vec<_> = form
             .fields()
             .into_iter()
             .map(|input| cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()))
             .collect();
+        subscriptions.push(cx.subscribe(&registry_search, |_, _, _: &InputEvent, cx| cx.notify()));
         let mut page = Self {
             store,
             document: None,
@@ -165,7 +192,16 @@ impl Agents {
             scroll_to: None,
             scroll: ScrollHandle::new(),
             checks: HashMap::new(),
-            show_installation: false,
+            authentications: HashMap::new(),
+            show_installation: true,
+            registry: None,
+            registry_loading: false,
+            registry_task: None,
+            operations: HashMap::new(),
+            registry_search,
+            registry_filter: installation::Filter::All,
+            local_editable: cx.try_global::<installation::Service>().is_none(),
+            query: String::new(),
             _subscriptions: subscriptions,
         };
         page.reload(cx);
@@ -179,9 +215,35 @@ impl Agents {
             .unwrap_or_default()
     }
 
-    fn open_installation(&mut self, cx: &mut Context<Self>) {
+    fn display_catalog(&self) -> Vec<AgentSpec> {
+        if !self.local_editable
+            && let Some(catalog) = &self.registry
+        {
+            return catalog
+                .entries
+                .iter()
+                .filter_map(|entry| entry.spec.clone())
+                .collect();
+        }
+        self.catalog()
+    }
+
+    pub(super) fn open_installation(&mut self, cx: &mut Context<Self>) {
         self.show_installation = true;
-        self.scroll_to = Some(self.catalog().len());
+        self.scroll_to = Some(0);
+        self.refresh_registry(false, cx);
+        cx.notify();
+    }
+
+    pub(super) fn show_section(&mut self, section: Option<usize>, cx: &mut Context<Self>) {
+        self.show_installation = section
+            .is_none_or(|index| index >= self.display_catalog().len() && self.draft.is_none());
+        self.scroll_to = Some(if self.show_installation {
+            0
+        } else {
+            section.unwrap_or(0)
+        });
+        self.query.clear();
         cx.notify();
     }
 
@@ -192,6 +254,7 @@ impl Agents {
             .enumerate()
             .find(|(_, spec)| spec.id.as_str() == id);
         if let Some((index, spec)) = entry {
+            self.show_installation = false;
             self.scroll_to = Some(index);
             self.start_check(spec, true, cx);
             Some(index)
@@ -209,6 +272,7 @@ impl Agents {
                 Check {
                     spec,
                     status: check::Status::Connected(String::new()),
+                    completed_at: None,
                     _task: None,
                 },
             );
@@ -220,17 +284,36 @@ impl Agents {
                 Check {
                     spec,
                     status: check::Status::Failed("本机服务检测未启用。".into()),
+                    completed_at: Some(Instant::now()),
                     _task: None,
                 },
             );
             return;
         };
-        let request = service.request(spec.clone(), connect);
+        if !self.local_editable {
+            self.message = "当前 Agent 目录仅供查看；请连接使用当前配置文件的本机 basrd。".into();
+            cx.notify();
+            return;
+        }
+        self.authentications.remove(&spec.id);
+        let request = service.request(spec.clone(), connect, self.store.path().to_owned());
         let expected = spec.clone();
         let task = cx.spawn(async move |page, cx| {
             let result = request.await;
             let _ = page.update(cx, |page, cx| {
                 page.apply_check(&expected, result);
+                if page.status(&expected).is_some_and(check::Status::connected) {
+                    page.notify_agent_change(Some(expected.id.to_string()), cx);
+                } else if matches!(
+                    page.status(&expected),
+                    Some(check::Status::AuthenticationRequired { .. })
+                ) && !page.show_installation
+                {
+                    page.scroll_to = page
+                        .display_catalog()
+                        .iter()
+                        .position(|spec| spec.id == expected.id);
+                }
                 cx.notify();
             });
         });
@@ -243,6 +326,7 @@ impl Agents {
                 } else {
                     check::Status::Checking
                 },
+                completed_at: None,
                 _task: Some(task),
             },
         );
@@ -253,6 +337,8 @@ impl Agents {
         if let Some(check) = self.checks.get_mut(&expected.id)
             && check.spec == *expected
         {
+            check.completed_at = (!result.busy() && !matches!(result, check::Status::Installed(_)))
+                .then(Instant::now);
             check.status = result;
         }
     }
@@ -262,6 +348,51 @@ impl Agents {
             .get(&spec.id)
             .filter(|check| check.spec == *spec)
             .map(|check| &check.status)
+    }
+
+    fn check_detail(&self, spec: &AgentSpec) -> String {
+        if self.authentications.contains_key(&spec.id) {
+            return "认证方式和结果见下方。".into();
+        }
+        if spec.kind == Kind::Embedded {
+            return "内置 Agent 已就绪，可以直接开始对话。".into();
+        }
+        let check = self
+            .checks
+            .get(&spec.id)
+            .filter(|check| check.spec == *spec);
+        let age = check.and_then(|check| check.completed_at).map(|at| {
+            let seconds = at.elapsed().as_secs();
+            if seconds < 60 {
+                "刚刚".into()
+            } else {
+                format!("约 {} 分钟前", seconds / 60)
+            }
+        });
+        let previous = format!(
+            "上次检测结果（{}）",
+            age.as_deref().unwrap_or("本次打开设置时")
+        );
+        match check.map(|check| &check.status) {
+            Some(check::Status::Installed(_)) => {
+                "已找到 Agent 程序。点击「检测」检查是否能正常启动、是否需要认证。".into()
+            }
+            Some(check::Status::Connected(_)) => {
+                format!("{previous}：程序启动正常，可以开始对话。")
+            }
+            Some(check::Status::AuthenticationRequired { .. }) => {
+                format!("{previous}：需要认证。请先完成认证，再开始对话。")
+            }
+            Some(check::Status::Missing(message) | check::Status::Failed(message)) => {
+                format!("{previous}：{message}")
+            }
+            Some(check::Status::Authenticating) => "正在等待认证完成，随后会自动重新检测。".into(),
+            Some(check::Status::Checking) => "正在查找 Agent 程序，确认是否已安装。".into(),
+            Some(check::Status::Connecting) => {
+                "正在检查 Agent 是否能正常启动、是否需要认证。".into()
+            }
+            None => "点击「检测」检查程序是否能正常启动、是否需要认证。".into(),
+        }
     }
 
     fn draft_connected(&self, cx: &App) -> bool {
@@ -285,7 +416,7 @@ impl Agents {
     /// Sidebar entries: every configured agent, then the new ACP form.
     pub(super) fn sections(&self) -> Vec<Section> {
         let mut sections: Vec<_> = self
-            .catalog()
+            .display_catalog()
             .iter()
             .enumerate()
             .map(|(index, spec)| Section {
@@ -318,8 +449,12 @@ impl Agents {
                     self.deleting = false;
                     self.message.clear();
                     self.checks.clear();
-                    for spec in self.catalog() {
-                        self.start_check(spec, false, cx);
+                    if cx.try_global::<installation::Service>().is_some() {
+                        self.refresh_registry(false, cx);
+                    } else {
+                        for spec in self.catalog() {
+                            self.start_check(spec, false, cx);
+                        }
                     }
                 }
                 Err(error) => self.message = format!("读取失败：{error}"),
@@ -335,9 +470,12 @@ impl Agents {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.dirty(cx) {
+        if !self.local_editable {
+            self.message = "当前连接的 daemon 与本机配置文件不匹配，不能编辑。".into();
+        } else if self.dirty(cx) {
             self.message = "请先保存或取消当前草稿，再选择其他 Agent。".into();
         } else {
+            self.show_installation = false;
             let form = values(&spec);
             for (input, value) in self.form.fields().into_iter().zip(form.fields()) {
                 input.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
@@ -356,6 +494,9 @@ impl Agents {
     /// # Errors
     /// Rejects missing editor state, malformed form values, and invalid catalogs.
     fn candidate(&self, cx: &App) -> Result<Vec<AgentSpec>, DraftError> {
+        if !self.local_editable {
+            return Err(DraftError::ReadOnly);
+        }
         let mut catalog = self
             .document
             .as_ref()
@@ -413,6 +554,7 @@ impl Agents {
                 self.draft = None;
                 self.deleting = false;
                 self.message = "已保存本机配置。".into();
+                self.notify_agent_change(None, cx);
                 let catalog = self.catalog();
                 self.checks
                     .retain(|id, _| catalog.iter().any(|spec| spec.id == *id));
@@ -493,26 +635,12 @@ impl Agents {
     ) -> gpui_kit::AnyElement {
         let edit = spec.clone();
         let probe = spec.clone();
+        let chat = spec.id.to_string();
         let status = self.status(spec);
         let connected = status.is_some_and(check::Status::connected);
         let busy = status.is_some_and(check::Status::busy);
-        let detail = match status {
-            Some(check::Status::Installed(path)) => {
-                format!("已找到 {path}。连接成功后可进一步配置。")
-            }
-            Some(check::Status::Connected(path)) if !path.is_empty() => {
-                format!("ACP 握手成功 · {path}")
-            }
-            Some(check::Status::AuthenticationRequired { .. }) => {
-                "程序和 ACP 连接正常；请使用下方 Agent 提供的认证方式。".into()
-            }
-            Some(check::Status::Missing(message)) => {
-                format!("{message}。请安装 ACP 工具或填写可执行文件的绝对路径。")
-            }
-            Some(check::Status::Failed(message)) => message.clone(),
-            _ if spec.kind == Kind::Embedded => "内置后端，无需外部工具。".into(),
-            _ => "检测使用 basrd 的 PATH；连接只验证握手，不发送聊天消息。".into(),
-        };
+        let has_authentication = self.authentications.contains_key(&spec.id);
+        let detail = self.check_detail(spec);
         let summary = div()
             .flex()
             .items_center()
@@ -526,33 +654,46 @@ impl Agents {
                     .flex_col()
                     .gap_1()
                     .text_sm()
-                    .child(
-                        div()
-                            .id(format!("agents-status-{index}"))
-                            .test_support()
-                            .child(status.map_or("未检测", check::Status::label)),
-                    )
-                    .child(div().text_color(cx.theme().muted_foreground).child(detail)),
+                    .when(!has_authentication, |summary| {
+                        summary.child(
+                            div()
+                                .id(format!("agents-status-{index}"))
+                                .test_support()
+                                .child(if spec.kind == Kind::Embedded {
+                                    "内置可用"
+                                } else {
+                                    status.map_or("未检测", check::Status::label)
+                                }),
+                        )
+                    })
+                    .when(!has_authentication, |summary| {
+                        summary.child(div().text_color(cx.theme().muted_foreground).child(detail))
+                    }),
             )
             .when(spec.kind == Kind::Acp, |row| {
                 row.child(
-                    button(format!("agents-connect-{index}"))
-                        .label(if busy {
-                            "检测中…"
-                        } else if connected {
-                            "重新连接"
-                        } else {
-                            "连接"
-                        })
-                        .disabled(busy || self.dirty(cx))
+                    button(format!("agents-check-{index}"))
+                        .label(status.map_or("检测", check::Status::check_label))
+                        .disabled(busy || self.dirty(cx) || !self.local_editable)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.start_check(probe.clone(), true, cx)
                         })),
                 )
             })
+            .when(connected, |row| {
+                row.child(
+                    button(format!("agents-start-chat-{index}"))
+                        .label("开始对话")
+                        .disabled(!self.local_editable)
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.begin_chat(chat.clone(), cx)),
+                        ),
+                )
+            })
             .child(
                 button(gpui_kit::SharedString::from(format!("agents-edit-{index}")))
-                    .label(if connected { "配置" } else { "配置路径" })
+                    .label("高级配置")
+                    .disabled(!self.local_editable)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit(edit.clone(), Some(index), window, cx)
                     })),
@@ -580,7 +721,7 @@ impl Agents {
             .when(!embedded && !connected, |form| form.child(
                 div().id("agents-connection-help").test_support().text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child("先安装并登录支持 ACP 的程序，填写可执行文件的绝对路径和启动参数，再保存并连接。普通 CLI 不一定支持 ACP；参见安装指引。"),
+                    .child("填写支持 ACP 的程序路径和启动参数，再保存并检测。检测发现需要认证时会显示 Agent 提供的登录方式；也可通过安装目录选择 Agent。"),
             ))
             .children(self.form.rows(embedded, connected).into_iter().map(
                 |(id, label, input)| {
@@ -619,7 +760,7 @@ impl Agents {
                             } else if connected {
                                 "保存配置"
                             } else {
-                                "保存并连接"
+                                "保存并检测"
                             })
                             .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                     )
@@ -649,15 +790,16 @@ impl Agents {
     }
 
     fn add_content(&self, drafting: bool, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        let mut content = div()
-            .flex()
-            .flex_col()
-            .gap_4()
+        let mut content = div().flex().flex_col().gap_4();
+        if self.show_installation {
+            content = content.child(self.registry_content(cx));
+        }
+        content = content
             .child(
                 div().flex().child(
                     button("agents-add-custom")
                         .label("添加自定义 ACP")
-                        .disabled(self.document.is_none())
+                        .disabled(self.document.is_none() || !self.local_editable)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.edit(AgentSpec::acp("", Command::new("", [])), None, window, cx)
                         })),
@@ -670,8 +812,10 @@ impl Agents {
                     .gap_1()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child("填写支持 ACP 的程序路径与参数。连接检测由本机 basrd 执行；不会自动安装工具。")
-                    .child("认证沿用工具自己的登录状态和环境变量。握手成功不代表模型请求一定可用。"),
+                    .child("自定义后端使用支持 ACP 的程序路径与参数。ACP 检测由本机 basrd 执行。")
+                    .child(
+                        "认证沿用工具自己的登录状态和环境变量。握手成功不代表模型请求一定可用。",
+                    ),
             );
         if drafting {
             content = content.child(self.form_content(cx));
@@ -680,9 +824,9 @@ impl Agents {
             div().flex().child(
                 button("agents-installation-toggle")
                     .label(if self.show_installation {
-                        "收起安装指引"
+                        "收起安装目录"
                     } else {
-                        "安装与登录指引"
+                        "安装 Agent…"
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.show_installation = !this.show_installation;
@@ -690,54 +834,132 @@ impl Agents {
                     })),
             ),
         );
-        if self.show_installation {
-            content = content.child(installation::render(cx));
-        }
         content.into_any_element()
     }
 }
 
 impl Render for Agents {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_authentication_panels(window, cx);
         let dirty = self.dirty(cx);
-        let catalog = self.catalog();
+        let catalog = self.display_catalog();
         let drafting = self.draft.is_some() && self.selected.is_none();
-        let section_count = catalog.len() + 1;
+        let section_count = if self.show_installation {
+            2
+        } else {
+            catalog.len() + 1
+        };
         if let Some(index) = self.scroll_to.take() {
             self.scroll
                 .scroll_to_top_of_item(index.min(section_count.saturating_sub(1)));
         }
-        let cards: Vec<gpui_kit::AnyElement> = catalog
-            .iter()
-            .enumerate()
-            .map(|(index, spec)| {
-                let content = if self.selected == Some(index) {
+        let header = if self.show_installation {
+            self.registry_header(cx)
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(div().text_xl().child("Agent 高级配置"))
+                        .child(
+                            button("agents-installation-help")
+                                .label("安装 Agent…")
+                                .on_click(cx.listener(|this, _, _, cx| this.open_installation(cx))),
+                        )
+                        .child(
+                            button("agents-reload")
+                                .label("重新加载配置")
+                                .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("配置文件：{}", self.store.path().display())),
+                )
+                .into_any_element()
+        };
+        let mut content = Vec::new();
+        if self.show_installation {
+            content.push(self.registry_content(cx));
+            content.push(
+                div()
+                    .flex()
+                    .justify_end()
+                    .child(
+                        Button::new("agents-add-custom")
+                            .ghost()
+                            .small()
+                            .label("添加自定义 ACP…")
+                            .disabled(self.document.is_none() || !self.local_editable)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.edit(
+                                    AgentSpec::acp("", Command::new("", [])),
+                                    None,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .into_any_element(),
+            );
+        } else {
+            for (index, spec) in catalog.iter().enumerate() {
+                let body = if self.selected == Some(index) {
                     self.form_content(cx)
                 } else {
                     self.summary_content(index, spec, cx)
                 };
-                self.card(
+                let entry = self.registry.as_ref().and_then(|catalog| {
+                    catalog
+                        .entries
+                        .iter()
+                        .find(|entry| entry.spec.as_ref() == Some(spec))
+                });
+                let title = entry.map_or_else(|| spec.id.to_string(), |entry| entry.name.clone());
+                let description = entry
+                    .filter(|entry| entry.source == basr::management::Source::Registry)
+                    .map_or_else(
+                        || summary(spec),
+                        |entry| {
+                            format!(
+                                "{} · ACP Registry · {}",
+                                entry.description,
+                                entry.installed_version.as_deref().unwrap_or(&entry.version)
+                            )
+                        },
+                    );
+                content.push(self.card(
                     format!("agents-card-{index}"),
-                    spec.id.to_string(),
-                    summary(spec),
-                    content,
+                    title,
+                    description,
+                    body,
                     cx,
-                )
-            })
-            .collect();
-        let add = self.card(
-            "agents-card-add".to_owned(),
-            "添加 Agent".to_owned(),
-            "接入自己的 ACP 工具。".to_owned(),
-            self.add_content(drafting, cx),
-            cx,
-        );
+                ));
+            }
+            let add = self.add_content(drafting, cx);
+            content.push(self.card(
+                "agents-card-add".to_owned(),
+                "添加自定义 Agent".to_owned(),
+                "接入自己的 ACP 工具。".to_owned(),
+                add,
+                cx,
+            ));
+        }
         div()
             .id("agents-page")
             .test_support()
             .size_full()
             .flex()
             .flex_col()
+            .bg(installation::Palette::current(cx).background)
             .child(
                 div()
                     .p_5()
@@ -745,51 +967,26 @@ impl Render for Agents {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_3()
-                            .child(div().text_xl().child("Agent 服务"))
-                            .child(
-                                button("agents-installation-help")
-                                    .label("安装指引")
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.open_installation(cx)),
-                                    ),
-                            )
-                            .child(
-                                button("agents-reload")
-                                    .label("重新检测")
-                                    .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child("本机 ACP 工具 · 不可用的程序不会显示在聊天选择器中。")
-                            .child("先连接，再配置。修改只影响新会话；不重启已有会话。")
-                            .child(format!("配置文件：{}", self.store.path().display())),
-                    )
-                    .child(
-                        div()
-                            .id("agents-dirty")
-                            .test_support()
-                            .text_sm()
-                            .when(dirty, |line| line.child("尚有未保存的修改")),
-                    )
-                    .child(
-                        div()
-                            .id("agents-message")
-                            .test_support()
-                            .text_sm()
-                            .child(self.message.clone()),
-                    ),
+                    .child(header)
+                    .when(dirty, |header| {
+                        header.child(
+                            div()
+                                .id("agents-dirty")
+                                .test_support()
+                                .text_xs()
+                                .child("尚有未保存的修改"),
+                        )
+                    })
+                    .when(!self.message.is_empty(), |header| {
+                        header.child(
+                            div()
+                                .id("agents-message")
+                                .test_support()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(self.message.clone()),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -799,12 +996,12 @@ impl Render for Agents {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    .p_5()
+                    .px_5()
+                    .pb_5()
                     .flex()
                     .flex_col()
-                    .gap_5()
-                    .children(cards)
-                    .child(add),
+                    .gap_4()
+                    .children(content),
             )
     }
 }

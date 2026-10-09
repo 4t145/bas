@@ -8,7 +8,20 @@ while IFS= read -r request; do
     id=$(printf '%s' "$request" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
     case "$request" in
         *'"method":"initialize"'*)
-            if [ "$BASR_FIXTURE_MODE" = auth_session ] || [ "$BASR_FIXTURE_MODE" = auth_data ]; then
+            if [ "${BASR_FIXTURE_MODE#agent_auth}" != "$BASR_FIXTURE_MODE" ]; then
+                printf '%s\n' "$request" > "$BASR_FIXTURE_PID.initialize"
+                if [ "$BASR_FIXTURE_MODE" = agent_auth_rpc_initialize_reject ]; then
+                    printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"Internal error","data":{"message":"Provider initialization failed","credentials":"private initialization credentials"}}}\n' "$id"
+                    continue
+                fi
+                if [ "$BASR_FIXTURE_MODE" = agent_auth_terminal ] || [ "$BASR_FIXTURE_MODE" = agent_auth_terminal_ready ]; then
+                    printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"authMethods":[{"type":"terminal","id":"login","name":"Sign in","args":["login"]}],"agentCapabilities":{}}}\n' "$id"
+                elif [ "$BASR_FIXTURE_MODE" = agent_auth_unknown ]; then
+                    printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"authMethods":[{"type":"future_mode","id":"login","name":"Future setup","futureField":{"kept":true}}],"agentCapabilities":{},"futureInitialize":17}}\n' "$id"
+                else
+                    printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"authMethods":[{"id":"login","name":"Sign in","_meta":{"command":"ignored"}}],"agentCapabilities":{}}}\n' "$id"
+                fi
+            elif [ "$BASR_FIXTURE_MODE" = auth_session ] || [ "$BASR_FIXTURE_MODE" = auth_data ]; then
                 case "$request" in *'"auth":{"terminal":true}'*) ;; *) exit 1;; esac
                 printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"authMethods":[{"type":"terminal","id":"login","name":"Sign in","args":["auth","login"],"env":{"AUTH_MODE":"fixture"}}],"agentCapabilities":{}}}\n' "$id"
             else
@@ -19,6 +32,56 @@ while IFS= read -r request; do
                 else
                     printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"promptCapabilities":{"image":true,"audio":true,"embeddedContext":true}}}}\n' "$id"
                 fi
+            fi
+            ;;
+        *'"method":"authenticate"'*)
+            printf '%s\n' "$request" > "$BASR_FIXTURE_PID.authenticate"
+            if [ "$BASR_FIXTURE_MODE" = agent_auth_reject ]; then
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"authentication rejected SECRET"}}\n' "$id"
+            elif [ "$BASR_FIXTURE_MODE" = agent_auth_rpc_reject ]; then
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"Internal error","data":{"message":"Provider rejected this authentication method","access_token":"private access credential","refresh_token":"private refresh credential","env":{"API_KEY":"private environment"},"stderr":"private stderr","stack":"private stack"}}}\n' "$id"
+            elif [ "$BASR_FIXTURE_MODE" = agent_auth_rpc_reject_details ]; then
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"Internal error","data":{"details":"Could not save authentication settings","credentials":"private credentials","stack":"private stack"}}}\n' "$id"
+            elif [ "$BASR_FIXTURE_MODE" = agent_auth_rpc_reject_string ]; then
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"Internal error","data":"Provider rejected authentication: refresh_token=private-refresh Authorization: Bearer private-bearer at https://user:password@provider.example/callback?code=private-code&state=private-state"}}\n' "$id"
+            elif [ "$BASR_FIXTURE_MODE" = agent_auth_hang ]; then
+                sleep 60 &
+                printf '%s\n' "$!" > "$BASR_FIXTURE_PID.auth-child"
+                wait
+            elif [ "$BASR_FIXTURE_MODE" = agent_auth_form ] || [ "$BASR_FIXTURE_MODE" = agent_auth_url ] || [ "$BASR_FIXTURE_MODE" = agent_auth_form_wrong_scope ] || [ "$BASR_FIXTURE_MODE" = agent_auth_form_cancel ] || [ "$BASR_FIXTURE_MODE" = agent_auth_form_wrong_session ]; then
+                auth_id=$id
+                if [ "$BASR_FIXTURE_MODE" = agent_auth_url ]; then
+                    printf '{"jsonrpc":"2.0","id":"elicit","method":"elicitation/create","params":{"mode":"url","requestId":%s,"message":"Authorize the fixture","elicitationId":"opaque/url:17","url":"https://example.com/authorize"}}\n' "$auth_id"
+                elif [ "$BASR_FIXTURE_MODE" = agent_auth_form_wrong_session ]; then
+                    printf '%s\n' '{"jsonrpc":"2.0","id":"elicit","method":"elicitation/create","params":{"mode":"form","sessionId":"unrelated","message":"Choose project","requestedSchema":{"type":"object","properties":{"project":{"type":"string"}},"required":["project"]}}}'
+                else
+                    scope_id=$auth_id
+                    if [ "$BASR_FIXTURE_MODE" = agent_auth_form_wrong_scope ]; then scope_id='"not-live"'; fi
+                    printf '{"jsonrpc":"2.0","id":"elicit","method":"elicitation/create","params":{"mode":"form","requestId":%s,"message":"Choose a project","requestedSchema":{"type":"object","properties":{"project":{"type":"string","minLength":1}},"required":["project"]},"_meta":{"futureHint":"preserved"}}}\n' "$scope_id"
+                fi
+                if [ "$BASR_FIXTURE_MODE" = agent_auth_form_cancel ]; then
+                    printf '%s\n' '{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"elicit"}}'
+                fi
+                IFS= read -r response
+                printf '%s\n' "$response" > "$BASR_FIXTURE_PID.elicitation"
+                case "$response" in
+                    *'"code":-32800'*)
+                        authenticated=yes
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$auth_id"
+                        ;;
+                    *'"action":"accept"'*)
+                        authenticated=yes
+                        if [ "$BASR_FIXTURE_MODE" = agent_auth_url ]; then
+                            printf '%s\n' '{"jsonrpc":"2.0","method":"elicitation/complete","params":{"elicitationId":"unknown"}}'
+                            printf '%s\n' '{"jsonrpc":"2.0","method":"elicitation/complete","params":{"elicitationId":"opaque/url:17","_meta":{"future":"preserved"}}}'
+                        fi
+                        printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$auth_id"
+                        ;;
+                    *) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"setup cancelled"}}\n' "$auth_id" ;;
+                esac
+            else
+                authenticated=yes
+                printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
             fi
             ;;
         *'"method":"session/load"'*)
@@ -39,6 +102,30 @@ while IFS= read -r request; do
             ;;
         *'"method":"session/new"'*)
             printf '%s\n' "$request" > "$BASR_FIXTURE_PID.new"
+            if [ "$BASR_FIXTURE_MODE" = agent_auth_rpc_discovery_reject ]; then
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Provider configuration rejected","data":{"message":"Provider project is missing","env":"private project environment"}}}\n' "$id"
+                continue
+            fi
+            if [ "$BASR_FIXTURE_MODE" = agent_auth_rpc_after_reject ] && [ "$authenticated" = yes ]; then
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"Internal error","data":{"message":"Provider cannot create a session","stderr":"private session stderr"}}}\n' "$id"
+                continue
+            fi
+            if [ "$BASR_FIXTURE_MODE" = agent_auth_strict ]; then
+                case "$request" in
+                    *'"mcpServers":[]'*) ;;
+                    *) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"mcpServers must be an array"}}\n' "$id"; continue ;;
+                esac
+                session_new_count=$((${session_new_count:-0} + 1))
+                printf '%s\n' "$request" > "$BASR_FIXTURE_PID.new.$session_new_count"
+            fi
+            if [ "${BASR_FIXTURE_MODE#agent_auth}" != "$BASR_FIXTURE_MODE" ] && { [ "$authenticated" != yes ] || [ "$BASR_FIXTURE_MODE" = agent_auth_still_required ]; } && [ ! -f "$BASR_FIXTURE_PID.ready" ]; then
+                if [ "$BASR_FIXTURE_MODE" = agent_auth_unknown ]; then
+                    printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Setup required","futureError":{"preserved":true}}}\n' "$id"
+                else
+                    printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Sign in required"}}\n' "$id"
+                fi
+                continue
+            fi
             if [ "$BASR_FIXTURE_MODE" = context ]; then printf '0\n' > "$BASR_FIXTURE_PID.context"; fi
             if [ "$BASR_FIXTURE_MODE" = reject_session ]; then
                 printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"session rejected SECRET"}}\n' "$id"
@@ -46,13 +133,13 @@ while IFS= read -r request; do
             fi
             if [ "$BASR_FIXTURE_MODE" = auth_session ] || [ "$BASR_FIXTURE_MODE" = auth_data ]; then
                 if [ "$BASR_FIXTURE_MODE" = auth_data ]; then
-                    printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Sign in required","data":{"authMethods":[{"type":"terminal","id":"specific","name":"Use specific login","args":["login"]}],"reason":"expired"}}}\n' "$id"
+                    printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Sign in required","data":{"authMethods":[{"type":"terminal","id":"specific","name":"Use specific login","args":["login"]}],"reason":"expired"},"futureError":{"preserved":true}}}\n' "$id"
                 else
                     printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Sign in required"}}\n' "$id"
                 fi
                 continue
             fi
-            if [ "$BASR_FIXTURE_MODE" = probe_access ]; then
+            if [ "$BASR_FIXTURE_MODE" = probe_access ] || [ "$BASR_FIXTURE_MODE" = agent_auth_access ]; then
                 printf '{"jsonrpc":"2.0","id":"write","method":"fs/write_text_file","params":{"sessionId":"fixture","path":"%s.write","content":"forbidden"}}\n' "$BASR_FIXTURE_PID"
                 IFS= read -r response
                 case "$response" in *'"error"'*) ;; *) exit 1;; esac
@@ -96,6 +183,14 @@ while IFS= read -r request; do
                 printf '%s\n' '{"jsonrpc":"2.0","id":"permission","method":"session/request_permission","params":{"sessionId":"fixture","toolCall":{"toolCallId":"execute","title":"run command","kind":"execute","status":"pending","rawInput":{"command":"pwd"}},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"reject-once","name":"Reject once","kind":"reject_once"}]}}'
                 IFS= read -r response
                 printf '%s\n' "$response" > "$BASR_FIXTURE_PID.permission"
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$prompt_id"
+            elif [ "$BASR_FIXTURE_MODE" = session_elicitation ]; then
+                printf '%s\n' '{"jsonrpc":"2.0","id":"session-form","method":"elicitation/create","params":{"mode":"form","sessionId":"fixture","message":"Choose a project","requestedSchema":{"type":"object","properties":{"project":{"type":"string"}},"required":["project"]},"_meta":{"future":"preserved"}}}'
+                while IFS= read -r response; do
+                    case "$response" in *'"method":"session/cancel"'*) continue;; esac
+                    break
+                done
+                printf '%s\n' "$response" > "$BASR_FIXTURE_PID.elicitation"
                 printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$prompt_id"
             elif [ "$BASR_FIXTURE_MODE" = context ]; then
                 previous=$(cat "$BASR_FIXTURE_PID.context")

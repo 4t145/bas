@@ -9,7 +9,9 @@
 //! Backend drivers, session management, runtime configuration, notifications, and the
 //! gRPC service implementation belong to the `basrd` binary.
 
+pub mod authentication;
 pub mod config;
+pub mod management;
 pub mod model;
 pub mod service;
 

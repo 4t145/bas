@@ -1,9 +1,12 @@
 //! Native session management and agent conversations for BASR.
 
+mod agent_icon;
+mod agent_metadata;
 mod application;
 mod approval;
 mod assets;
 mod attachment;
+mod authentication;
 mod branding;
 mod clipboard;
 mod connection;
@@ -86,6 +89,7 @@ fn main() -> Result<()> {
         .run(move |cx| {
             gpui_kit::init(cx);
             settings::init_checks(args.server, handle.clone(), cx);
+            agent_metadata::init(args.server, handle.clone(), cx);
             theme::init(args.theme_file, args.settings_file, cx);
             theme::watch(cx);
             application::init(cx);

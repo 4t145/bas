@@ -16,6 +16,7 @@ use tokio::{
 };
 use tonic::{Code, transport::Endpoint};
 
+mod elicitations;
 mod foreground;
 mod permissions;
 
@@ -59,6 +60,11 @@ pub(super) enum Command {
         request_id: String,
         outcome: acp::RequestPermissionOutcome,
     },
+    RespondElicitation {
+        session: SessionId,
+        request_id: String,
+        response: serde_json::Value,
+    },
     Watch {
         session: SessionId,
         epoch: u64,
@@ -73,6 +79,20 @@ pub(super) struct Catalog {
 }
 
 pub(super) enum Update {
+    Elicitations {
+        epoch: u64,
+        pending: Vec<pb::PendingElicitation>,
+        completed_ids: Vec<String>,
+    },
+    ElicitationUnavailable {
+        epoch: u64,
+        message: String,
+    },
+    ElicitationResponded {
+        session: SessionId,
+        request_id: String,
+        result: Result<(), String>,
+    },
     Permissions {
         epoch: u64,
         pending: Vec<PendingPermission>,
@@ -333,6 +353,30 @@ fn creation_result(
 
 async fn execute(mut client: Client, command: Command) -> Update {
     match command {
+        Command::RespondElicitation {
+            session,
+            request_id,
+            response,
+        } => {
+            let result = request(async {
+                client
+                    .respond_elicitation(pb::RespondElicitationRequest {
+                        session: session.to_string(),
+                        request_id: request_id.clone(),
+                        response: Some(pb::AcpPayload {
+                            json: serde_json::to_vec(&response)?,
+                        }),
+                    })
+                    .await?;
+                Ok(())
+            })
+            .await;
+            Update::ElicitationResponded {
+                session,
+                request_id,
+                result,
+            }
+        }
         Command::RespondPermission {
             session,
             request_id,

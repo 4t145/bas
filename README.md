@@ -106,8 +106,8 @@ basrctl agents
 ```
 
 只安装 `basrd`、`basrctl` 并启用 systemd 用户服务；不创建或修改用户配置。
-只安装可执行程序可省略 `--service`。Codex、OpenCode、Pi 等外部 CLI 与 ACP 适配器
-由用户按官方说明独立安装、登录和更新，再配置 daemon 可用的可执行文件路径。
+只安装可执行程序可省略 `--service`。Codex、OpenCode、Pi 等外部后端可在 GUI 的 Agent 目录或 `basrctl agent install` 中按需安装，
+也可沿用用户独立安装的程序和原生登录状态。
 旧 `--with-codex` 已移除，已有捆绑包和配置不会被自动删除或改写。
 官方安装链接、路径配置、迁移及服务管理见 [安装与后端配置](docs/install.md)。
 
@@ -176,7 +176,8 @@ basrw --server 127.0.0.1:7337
 应用自己的字体、字号、行高、透明度和主题偏好保存在统一 JSON 的 `appearance` section；
 `--settings-file` 可指定位置。用 `Ctrl+,` 打开独立设置窗口，外观按“主题 / 字体 / 布局”分组。
 有效外观修改自动保存并热更新所有窗口，非法配置不会覆盖当前外观。
-Agent 服务页提供 Codex、OpenCode、Pi 与自定义 ACP 模板；命令编辑需明确保存，不自动安装或启动。
+Agent 服务页提供官方 ACP Registry 目录，可搜索、安装、更新、登录和移除托管后端；
+聊天 Agent 菜单中的“安装 Agent…”打开同一目录。自定义程序仍可编辑路径和参数。
 使用方式和测试命令见 [GUI 说明](docs/gui.md)。
 
 第一方代码保持 MIT；UI 使用许可兼容的 GPUI 组件，不复制或链接 Zed 的 GPL 上层面板。
@@ -186,7 +187,11 @@ Agent 服务页提供 Codex、OpenCode、Pi 与自定义 ACP 模板；命令编�
 ## basrctl
 
 ```console
-$ basrctl agents                                  # 列出可用后端
+$ basrctl agents                                  # 列出可启动的已配置后端
+$ basrctl agent catalog                           # 浏览可安装和已配置后端
+$ basrctl agent install codex-acp                  # 在 daemon 主机按需安装并注册
+$ basrctl agent login codex-acp                    # 使用后端原生认证
+$ basrctl agent check codex-acp                    # 检查握手与会话创建
 $ basrctl session create --agent embedded --title demo
 $ basrctl session list
 $ basrctl session show <id>

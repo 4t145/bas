@@ -5,10 +5,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    agent::{AgentSpec, Catalog},
-    session::Registry,
-};
+use crate::{agent::AgentSpec, session::Registry};
 
 #[cfg(test)]
 mod tests;
@@ -23,6 +20,17 @@ pub struct CatalogSource {
 }
 
 impl CatalogSource {
+    /// Settings-backed catalogs can persist managed installations.
+    pub fn settings_store(&self) -> Option<basr::config::Store> {
+        self.settings.then(|| {
+            if self.explicit {
+                basr::config::Store::at(self.path.clone())
+            } else {
+                basr::config::Store::new(None)
+            }
+        })
+    }
+
     pub fn legacy(path: PathBuf) -> Self {
         Self {
             path,
@@ -126,15 +134,11 @@ pub fn watch_catalog(
                 () = stopping.cancelled() => break,
                 _ = interval.tick() => {}
             }
-            let result = source.load().and_then(|agents| {
-                let catalog = Catalog::from_specs(agents.clone())?;
-                Ok((agents, catalog))
-            });
+            let result = registry.reload_catalog(|| source.load());
             match result {
-                Ok((agents, catalog)) => {
+                Ok(agents) => {
                     last_error = None;
                     if agents != current {
-                        registry.replace_catalog(Arc::new(catalog));
                         current = agents;
                         ::tracing::info!(agents = current.len(), "agent catalog reloaded");
                     }

@@ -1,5 +1,196 @@
 use super::*;
 
+const CODEX_ICON: &str = "https://cdn.agentclientprotocol.com/registry/v1/latest/codex-acp.svg";
+const PI_ICON: &str = "https://cdn.agentclientprotocol.com/registry/v1/latest/pi-acp.svg";
+
+fn agent_icon_catalog() -> basr::management::Catalog {
+    use basr::management::{Catalog, Entry, Source, Status};
+
+    let entry = |id: &str, icon: &str| Entry {
+        id: id.into(),
+        name: id.into(),
+        description: String::new(),
+        version: "1.0.0".into(),
+        repository: String::new(),
+        license: String::new(),
+        license_url: String::new(),
+        icon: icon.into(),
+        installed_version: None,
+        source: Source::Registry,
+        status: Status::NotInstalled,
+        message: String::new(),
+        spec: None,
+    };
+    let mut pi = entry("pi", "");
+    pi.source = Source::Custom;
+    pi.status = Status::Installed;
+    pi.spec = Some(basr::config::AgentSpec::acp(
+        "pi",
+        basr::config::agent::Command::new("/home/atlas/.npm-global/bin/pi-acp", []),
+    ));
+    Catalog {
+        entries: vec![entry("codex-acp", CODEX_ICON), entry("pi-acp", PI_ICON), pi],
+        warning: None,
+        settings_path: None,
+        can_install: false,
+    }
+}
+
+fn icon_fixture(cx: &mut TestAppContext) -> Fixture {
+    cx.update(|cx| {
+        crate::agent_metadata::for_test(
+            "127.0.0.1:7337".parse().expect("test server"),
+            &agent_icon_catalog(),
+            cx,
+        );
+    });
+    fixture(cx)
+}
+
+#[gpui_kit::test]
+fn rows_icons_follow_each_session_agent_and_precede_title(cx: &mut TestAppContext) {
+    let fixture = icon_fixture(cx);
+    let mut pi = session();
+    pi.agent = "pi".into();
+    let mut codex = session();
+    codex.agent = "codex-acp".into();
+    let mut unknown = session();
+    unknown.agent = "removed-backend".into();
+    for meta in [pi.clone(), codex.clone(), unknown.clone()] {
+        attach(&fixture, meta, cx);
+    }
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        for selected in ["pi", "codex-acp", "removed-backend"] {
+            fixture.view.update(cx, |view, cx| {
+                view.selected_agent = selected.into();
+                cx.notify();
+            });
+            window.render_frame(cx);
+            for (session, expected) in [(&pi, PI_ICON), (&codex, CODEX_ICON)] {
+                let icon_id = format!("thread-agent-{}", session.id);
+                let icon = window.find(icon_id.clone());
+                assert_eq!(
+                    crate::agent_icon::rendered_source(&icon_id, cx).as_deref(),
+                    Some(expected)
+                );
+                let title = window.find(format!("thread-title-{}", session.id)).bounds();
+                let rail = window.find(format!("thread-rail-{}", session.id)).bounds();
+                assert_eq!(icon.bounds().size, size(px(16.), px(16.)));
+                assert!(icon.bounds().right() < title.left());
+                assert_eq!(icon.bounds().center().y, title.center().y);
+                assert!(title.right() <= rail.left());
+            }
+            assert!(
+                window
+                    .find(format!("thread-agent-{}-fallback", unknown.id))
+                    .visible(),
+                "a missing backend must keep a visible generic icon"
+            );
+        }
+    })
+    .expect("independent session icons and stable row layout");
+}
+
+#[gpui_kit::test]
+fn draft_icon_follows_selected_agent_and_selected_workspace(cx: &mut TestAppContext) {
+    let fixture = icon_fixture(cx);
+    let mut existing = session();
+    existing.agent = "pi".into();
+    existing.cwd = Some("/workspace/a".into());
+    attach(&fixture, existing.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.connected = false;
+            view.new_thread(Some("/workspace/b".into()), window, cx);
+        });
+        for (agent, directory, expected) in [
+            ("pi", "/workspace/b", PI_ICON),
+            ("codex-acp", "/workspace/b", CODEX_ICON),
+            ("codex-acp", "/workspace/c", CODEX_ICON),
+        ] {
+            fixture.view.update(cx, |view, cx| {
+                view.select_agent(agent.into(), window, cx);
+                if view.selected_directory.as_deref() != Some(std::path::Path::new(directory)) {
+                    view.new_thread(Some(directory.into()), window, cx);
+                }
+            });
+            window.render_frame(cx);
+            let view = fixture.view.read(cx);
+            let visible = view.visible_sessions();
+            let groups = view.grouped_threads(&visible, "");
+            let index = groups
+                .iter()
+                .position(|group| group.directory == view.selected_directory)
+                .expect("selected workspace is in sidebar");
+            let icon_id = format!("draft-thread-agent-{index}");
+            let icon = window.find(icon_id.clone());
+            assert_eq!(
+                crate::agent_icon::rendered_source(&icon_id, cx).as_deref(),
+                Some(expected)
+            );
+            let title = window.find(format!("draft-thread-title-{index}")).bounds();
+            assert_eq!(icon.bounds().size, size(px(16.), px(16.)));
+            assert!(icon.bounds().right() < title.left());
+            assert_eq!(icon.bounds().center().y, title.center().y);
+            for other in 0..groups.len() {
+                if other != index {
+                    assert!(
+                        window
+                            .try_find(format!("draft-thread-agent-{other}"))
+                            .is_none()
+                    );
+                }
+            }
+            assert_eq!(
+                crate::agent_icon::rendered_source(&format!("thread-agent-{}", existing.id), cx,)
+                    .as_deref(),
+                Some(PI_ICON),
+                "changing the draft agent does not relabel an existing thread"
+            );
+            assert_eq!(
+                crate::agent_icon::rendered_source("agent-picker-icon", cx).as_deref(),
+                Some(expected)
+            );
+        }
+    })
+    .expect("draft icon follows the agent used to create it");
+}
+
+#[gpui_kit::test]
+fn rows_receive_icons_when_shared_catalog_arrives_after_sessions(cx: &mut TestAppContext) {
+    let empty = basr::management::Catalog {
+        entries: Vec::new(),
+        warning: None,
+        settings_path: None,
+        can_install: false,
+    };
+    let server = "127.0.0.1:7337".parse().expect("test server");
+    cx.update(|cx| crate::agent_metadata::for_test(server, &empty, cx));
+    let fixture = fixture(cx);
+    let mut meta = session();
+    meta.agent = "codex-acp".into();
+    attach(&fixture, meta.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .find(format!("thread-agent-{}-fallback", meta.id))
+                .visible()
+        );
+        crate::agent_metadata::publish(server, &agent_icon_catalog(), cx);
+    })
+    .expect("catalog publishes metadata after session restoration");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            crate::agent_icon::rendered_source(&format!("thread-agent-{}", meta.id), cx).as_deref(),
+            Some(CODEX_ICON)
+        );
+    })
+    .expect("sidebar observes shared metadata changes");
+}
+
 #[gpui_kit::test]
 fn rows_status_changes_preserve_rail_title_and_hover_action(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
@@ -9,8 +200,10 @@ fn rows_status_changes_preserve_rail_title_and_hover_action(cx: &mut TestAppCont
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
         let title_id = format!("thread-title-{id}");
+        let icon_id = format!("thread-agent-{id}");
         let rail_id = format!("thread-rail-{id}");
         let title = window.find(title_id.clone()).bounds();
+        let icon = window.find(icon_id.clone()).bounds();
         let rail = window.find(rail_id.clone()).bounds();
         for (status, unread, dimensions) in [
             (SessionStatus::Starting, true, (12., 12.)),
@@ -35,6 +228,7 @@ fn rows_status_changes_preserve_rail_title_and_hover_action(cx: &mut TestAppCont
             window.render_frame(cx);
             assert_eq!(window.find(rail_id.clone()).bounds(), rail);
             assert_eq!(window.find(title_id.clone()).bounds(), title);
+            assert_eq!(window.find(icon_id.clone()).bounds(), icon);
             let indicator = window.find(format!("thread-indicator-{id}")).bounds();
             assert_eq!(indicator.size, size(px(dimensions.0), px(dimensions.1)));
             if dimensions.0 > 0. {
@@ -45,6 +239,7 @@ fn rows_status_changes_preserve_rail_title_and_hover_action(cx: &mut TestAppCont
             assert!(window.find(format!("archive-{id}")).visible());
             assert_eq!(window.find(format!("archive-{id}")).bounds(), rail);
             assert_eq!(window.find(title_id.clone()).bounds(), title);
+            assert_eq!(window.find(icon_id.clone()).bounds(), icon);
         }
     })
     .expect("status geometry remains stable");

@@ -58,6 +58,7 @@ use crate::{
 const EVENT_BATCH: usize = 64;
 const LIST_OVERDRAW: f32 = 800.;
 const SIDEBAR_WIDTH: f32 = 252.;
+const AGENT_ICON_SIZE: f32 = 16.;
 
 use crate::application::OpenSettings;
 pub(super) use layout::initial_size;
@@ -118,6 +119,7 @@ pub(super) struct Workspace {
     catalog_ids: HashSet<SessionId>,
     removed_sessions: HashSet<SessionId>,
     agents: Vec<pb::Agent>,
+    agent_metadata: Option<Entity<crate::agent_metadata::Metadata>>,
     active: Option<SessionId>,
     conversation: Option<Conversation>,
     epoch: u64,
@@ -126,6 +128,10 @@ pub(super) struct Workspace {
     connection_error: Option<String>,
     error: Option<String>,
     authentication_required: Option<String>,
+    authentication_panel: Option<Entity<crate::authentication::Authentication>>,
+    authentication_load: Option<Task<()>>,
+    elicitation_panels:
+        std::collections::BTreeMap<String, Entity<crate::authentication::elicitation::Panel>>,
     search: Entity<InputState>,
     composer: Entity<EditorState>,
     composer_expanded: bool,
@@ -158,6 +164,7 @@ pub(super) struct Workspace {
     configuring: HashSet<SessionId>,
     cancelling: HashSet<SessionId>,
     creating: bool,
+    waiting_for_agent_selection: bool,
     editing_title: bool,
     renaming: bool,
     archived_list: bool,
@@ -241,7 +248,34 @@ impl Workspace {
             input
         });
         let rename = cx.new(|cx| InputState::new(window, cx).placeholder("会话标题"));
-        let subscriptions = vec![
+        if cx.try_global::<crate::settings::AgentChanges>().is_none() {
+            cx.set_global(crate::settings::AgentChanges::default());
+        }
+        crate::agent_metadata::ensure(server, cx);
+        let agent_metadata = crate::agent_metadata::entity(cx);
+        let mut subscriptions = vec![
+            cx.observe_global_in::<crate::settings::AgentChanges>(window, |this, window, cx| {
+                let changes = cx.global::<crate::settings::AgentChanges>().clone();
+                if changes.server != Some(this.server) {
+                    return;
+                }
+                this.command(Command::Refresh);
+                if changes.target == Some(this.window.window_id())
+                    && let Some(agent) = changes.select
+                {
+                    this.start_agent_chat(agent, window, cx);
+                    window.activate_window();
+                    return;
+                }
+                if changes
+                    .ready
+                    .as_ref()
+                    .is_some_and(|agent| this.authentication_required.as_ref() == Some(agent))
+                {
+                    this.refresh(cx);
+                }
+                cx.notify();
+            }),
             cx.observe_window_activation(window, |this, window, cx| {
                 this.sync_foreground(window);
                 if !window.is_window_active() {
@@ -302,6 +336,9 @@ impl Workspace {
                 cx.notify();
             }),
         ];
+        if let Some(metadata) = &agent_metadata {
+            subscriptions.push(cx.observe(metadata, |_, _, cx| cx.notify()));
+        }
         let event_task = cx.spawn_in(window, async move |view, cx| {
             while let Some(first) = events.recv().await {
                 let mut batch = vec![first];
@@ -340,6 +377,7 @@ impl Workspace {
             catalog_ids: HashSet::new(),
             removed_sessions: HashSet::new(),
             agents: Vec::new(),
+            agent_metadata,
             active: None,
             conversation: None,
             epoch: 0,
@@ -348,6 +386,9 @@ impl Workspace {
             connection_error: None,
             error: None,
             authentication_required: None,
+            authentication_panel: None,
+            authentication_load: None,
+            elicitation_panels: std::collections::BTreeMap::new(),
             search,
             composer,
             composer_expanded: false,
@@ -383,6 +424,7 @@ impl Workspace {
             configuring: HashSet::new(),
             cancelling: HashSet::new(),
             creating: false,
+            waiting_for_agent_selection: false,
             editing_title: false,
             renaming: false,
             archived_list: false,
@@ -474,6 +516,8 @@ impl Workspace {
             "连接未就绪，暂不能发送"
         } else if self.creating {
             "正在创建 thread，暂不能发送"
+        } else if self.waiting_for_agent_selection {
+            "请先选择 Agent"
         } else if self.active.is_some_and(|id| self.archive_blocked(id)) {
             "已归档或正在更新归档状态；恢复后可发送，待发送队列需手动重试"
         } else if self.active.is_some_and(|id| self.sending(id)) {
@@ -507,6 +551,8 @@ impl Workspace {
             if self.authentication_required.take().is_some() {
                 self.epoch += 1;
                 self.creating = false;
+                self.authentication_panel = None;
+                self.authentication_load = None;
             }
             self.error = None;
             self.prepare_session(cx);
@@ -568,10 +614,14 @@ impl Workspace {
         self.save_draft(cx);
         self.close_reply_preview(window, cx);
         self.active = Some(id);
+        self.waiting_for_agent_selection = false;
         self.restore_on_connect = false;
         self.remember_thread();
         self.creating = false;
         self.authentication_required = None;
+        self.authentication_panel = None;
+        self.authentication_load = None;
+        self.elicitation_panels.clear();
         self.markdown.borrow_mut().clear();
         self.commands_dismissed = false;
         if let Some(session) = self.sessions.iter().find(|session| session.id == id) {
@@ -620,6 +670,7 @@ impl Workspace {
         self.save_draft(cx);
         self.close_reply_preview(window, cx);
         self.active = None;
+        self.waiting_for_agent_selection = true;
         self.composer_generation += 1;
         self.restore_on_connect = false;
         self.remember_thread();
@@ -628,6 +679,9 @@ impl Workspace {
         self.approval_error = None;
         self.creating = false;
         self.authentication_required = None;
+        self.authentication_panel = None;
+        self.authentication_load = None;
+        self.elicitation_panels.clear();
         self.markdown.borrow_mut().clear();
         self.commands_dismissed = false;
         self.expanded.clear();
@@ -654,7 +708,6 @@ impl Workspace {
             input.set_value(draft.text, window, cx);
         });
         self.focus_input(window, cx);
-        self.prepare_session(cx);
         cx.notify();
     }
 
@@ -667,6 +720,20 @@ impl Workspace {
                     .iter()
                     .find(|session| Some(session.id) == self.active)
             })
+    }
+
+    fn agent_icon(
+        &self,
+        element_id: impl Into<SharedString>,
+        agent: &str,
+        cx: &App,
+    ) -> crate::agent_icon::AgentIcon {
+        let uri = self
+            .agent_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.read(cx).icon(self.server, agent))
+            .unwrap_or_default();
+        crate::agent_icon::AgentIcon::new(element_id, uri).size(px(AGENT_ICON_SIZE))
     }
 
     fn working(&self) -> bool {
@@ -703,6 +770,7 @@ impl Workspace {
             || self.archived_list
             || self.active.is_some()
             || self.creating
+            || self.waiting_for_agent_selection
             || self.authentication_required.is_some()
             || self.selected_agent.is_empty()
         {
@@ -731,12 +799,19 @@ impl Workspace {
         cx.notify();
     }
 
+    fn can_select_agent(&self) -> bool {
+        self.active.is_none() && self.current().is_none() && !self.creating
+    }
+
+    fn start_agent_chat(&mut self, agent: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected_agent = agent;
+        self.new_thread(self.selected_directory.clone(), window, cx);
+        self.waiting_for_agent_selection = false;
+        self.prepare_session(cx);
+    }
+
     fn select_agent(&mut self, agent: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .current()
-            .is_some_and(|session| session.agent.as_str() == agent)
-            || (self.active.is_none() && self.selected_agent == agent && self.creating)
-        {
+        if !self.can_select_agent() {
             return;
         }
         let draft = self.composer.read(cx).value().to_string();
@@ -746,6 +821,8 @@ impl Workspace {
         self.attachments = attachments;
         self.composer
             .update(cx, |input, cx| input.set_value(draft, window, cx));
+        self.waiting_for_agent_selection = false;
+        self.prepare_session(cx);
     }
 
     fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -798,6 +875,31 @@ impl Workspace {
 
     fn update(&mut self, update: Update, window: &mut Window, cx: &mut Context<Self>) {
         match update {
+            Update::Elicitations {
+                epoch,
+                pending,
+                completed_ids,
+            } if epoch == self.epoch && self.active.is_some() => {
+                self.sync_elicitations(pending, completed_ids, window, cx);
+            }
+            Update::ElicitationUnavailable { epoch, message } if epoch == self.epoch => {
+                if !self.elicitation_panels.is_empty() {
+                    self.error = Some(message);
+                }
+                self.elicitation_panels.clear();
+            }
+            Update::ElicitationResponded {
+                session,
+                request_id,
+                result,
+            } => {
+                if self.active == Some(session)
+                    && let Err(error) = result
+                    && let Some(panel) = self.elicitation_panels.get(&request_id)
+                {
+                    panel.update(cx, |panel, cx| panel.failed(error, cx));
+                }
+            }
             Update::Configured { session, result } => {
                 self.configuring.remove(&session);
                 match result {
@@ -808,6 +910,9 @@ impl Workspace {
             }
             Update::Catalog(result) => match result {
                 Ok(mut catalog) => {
+                    if !self.connected {
+                        crate::agent_metadata::ensure(self.server, cx);
+                    }
                     self.connected = true;
                     self.connection_error = None;
                     // Session IDs are never reused. Older snapshots cannot revive
@@ -841,10 +946,13 @@ impl Workspace {
                         .sort_by_key(|session| std::cmp::Reverse(session.updated_at));
                     self.sessions = catalog.sessions;
                     self.agents = catalog.agents;
-                    if !self
-                        .agents
-                        .iter()
-                        .any(|agent| agent.id == self.selected_agent)
+                    // An older catalog can arrive after choosing a newly installed agent.
+                    if !self.creating
+                        && self.authentication_required.is_none()
+                        && !self
+                            .agents
+                            .iter()
+                            .any(|agent| agent.id == self.selected_agent)
                     {
                         self.selected_agent = self
                             .agents
@@ -916,6 +1024,7 @@ impl Workspace {
                     self.creating = false;
                     self.error = None;
                     self.authentication_required = Some(agent);
+                    self.load_authentication_panel(window, cx);
                 }
             }
             Update::Renamed { session, result } => {
@@ -982,7 +1091,7 @@ impl Workspace {
                             {
                                 self.select(next, window, cx);
                             } else {
-                                self.new_session(window, cx);
+                                self.start_agent_chat(self.selected_agent.clone(), window, cx);
                             }
                         }
                         self.drafts.remove(&session);
@@ -1158,6 +1267,7 @@ impl Workspace {
             | Update::Stream { .. }
             | Update::Permissions { .. }
             | Update::PermissionUnavailable { .. } => {}
+            Update::Elicitations { .. } | Update::ElicitationUnavailable { .. } => {}
         }
         self.pause_archived();
         self.flush_queue(cx);

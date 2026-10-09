@@ -88,6 +88,9 @@ pub struct SessionMeta {
     pub active_turn: Option<TurnId>,
     /// Agent capabilities, authentication methods and implementation information.
     pub initialization: Option<crate::acp::InitializeResponse>,
+    /// Original ACP initialization, including unknown authentication descriptors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initialization_raw: Option<serde_json::Value>,
     /// Current ACP options and modes, with the public daemon session id.
     pub acp: Option<crate::acp::NewSessionResponse>,
     /// Latest command catalog, independent of the bounded event history.
@@ -114,6 +117,7 @@ impl SessionMeta {
             revision: Cursor::START,
             active_turn: None,
             initialization: None,
+            initialization_raw: None,
             acp: None,
             available_commands: None,
         }

@@ -13,6 +13,16 @@ service Basr {
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   // Checks a saved configuration, optionally performing an isolated ACP handshake.
   rpc CheckAgent(CheckAgentRequest) returns (CheckAgentResponse);
+  // Includes installable registry entries and configured agents, even when missing.
+  rpc ListAgentCatalog(ListAgentCatalogRequest) returns (ListAgentCatalogResponse);
+  // Installs a pinned distribution on the daemon host; dropping the stream cancels work.
+  rpc InstallAgent(InstallAgentRequest) returns (stream AgentOperation);
+  // Removes managed registration, preserving credentials and version directories.
+  rpc RemoveAgent(RemoveAgentRequest) returns (RemoveAgentResponse);
+  // Standard agent-driven ACP authentication on a daemon-owned connection.
+  rpc AuthenticateAgent(AuthenticateAgentRequest) returns (AuthenticateAgentResponse);
+  // Interactive ACP authentication; dropping the stream cancels the owned flow.
+  rpc AuthenticateAgentInteractive(stream AuthenticationInput) returns (stream AuthenticationEvent);
   // Starts a session on a backend.
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   // Lists non-archived sessions by default.
@@ -42,6 +52,9 @@ service Basr {
   rpc WatchPermissions(WatchPermissionsRequest) returns (stream PermissionSnapshot);
   // Answers exactly one live ACP request using an agent-provided option id.
   rpc RespondPermission(RespondPermissionRequest) returns (RespondPermissionResponse);
+  // Pending agent-driven forms and external authorization for one session.
+  rpc WatchElicitations(WatchElicitationsRequest) returns (stream ElicitationSnapshot);
+  rpc RespondElicitation(RespondElicitationRequest) returns (RespondElicitationResponse);
   // Renames a session.
   rpc SetTitle(SetTitleRequest) returns (SetTitleResponse);
   // Loads a page of history by cursor.
@@ -58,6 +71,75 @@ message Agent {
 }
 
 message ListAgentsRequest {}
+
+message ListAgentCatalogRequest { bool refresh = 1; }
+message ListAgentCatalogResponse {
+  // Serialized basr::management::Catalog.
+  bytes catalog_json = 1;
+}
+message InstallAgentRequest { string id = 1; }
+message AgentOperation {
+  string phase = 1;
+  string message = 2;
+  // Saved AgentSpec, present only after registration succeeds.
+  bytes spec_json = 3;
+  bool complete = 4;
+}
+message RemoveAgentRequest { string id = 1; }
+message RemoveAgentResponse {}
+message AuthenticateAgentRequest {
+  string agent = 1;
+  bytes expected_spec_json = 2;
+  string method_id = 3;
+  // Serialized normalized method, or a raw descriptor from older clients.
+  // Empty is accepted for clients predating descriptor freshness checking.
+  bytes expected_method_json = 4;
+}
+message AuthenticateAgentResponse { CheckAgentResponse check = 1; }
+
+message ElicitationAnswer {
+  string request_id = 1;
+  AcpPayload response = 2;
+}
+message PendingElicitation {
+  string request_id = 1;
+  // Complete original elicitation/create parameters.
+  AcpPayload request = 2;
+  // Accepted URL requests remain visible until elicitation/complete.
+  bool answered = 3;
+}
+message WatchElicitationsRequest { string session = 1; }
+message ElicitationSnapshot {
+  string session = 1;
+  repeated PendingElicitation pending = 2;
+  repeated string completed_ids = 3;
+}
+message RespondElicitationRequest {
+  string session = 1;
+  string request_id = 2;
+  AcpPayload response = 3;
+}
+message RespondElicitationResponse {}
+message TerminalAuthenticationResult { int32 exit_code = 1; }
+message AuthenticationInput {
+  oneof kind {
+    AuthenticateAgentRequest start = 1;
+    ElicitationAnswer elicitation_response = 2;
+    TerminalAuthenticationResult terminal_result = 3;
+  }
+}
+message AuthenticationEvent {
+  oneof kind {
+    CheckAgentResponse check = 1;
+    PendingElicitation elicitation = 2;
+    AcpPayload elicitation_complete = 3;
+    // Serialized basr::authentication::Invocation, prepared by the daemon.
+    AcpPayload terminal = 4;
+    string progress = 5;
+    // Agent cancelled this live elicitation/create request.
+    string elicitation_cancelled = 6;
+  }
+}
 
 message CheckAgentRequest {
   string agent = 1;

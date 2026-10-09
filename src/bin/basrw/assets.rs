@@ -60,6 +60,8 @@ gpui_kit::assets::icon_assets!(
     ]
 );
 
+gpui_kit::assets::icon_assets!(RegistryIcons, [Download, Scale, Bot]);
+
 pub(super) struct Assets;
 
 impl AssetSource for Assets {
@@ -70,12 +72,16 @@ impl AssetSource for Assets {
         if let Some(bytes) = ExtraIcons.load(path)? {
             return Ok(Some(bytes));
         }
+        if let Some(bytes) = RegistryIcons.load(path)? {
+            return Ok(Some(bytes));
+        }
         gpui_kit::assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> anyhow::Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
         paths.extend(ExtraIcons.list(path)?);
+        paths.extend(RegistryIcons.list(path)?);
         paths.extend(
             BRANDING
                 .iter()
@@ -87,3 +93,6 @@ impl AssetSource for Assets {
         Ok(paths)
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -20,6 +20,10 @@ pub enum Command {
     /// List the agent backends the daemon can launch.
     Agents,
 
+    /// Discover, install and authenticate agent backends.
+    #[command(subcommand)]
+    Agent(Agent),
+
     /// Manage sessions.
     #[command(subcommand)]
     Session(Session),
@@ -64,6 +68,30 @@ pub enum Command {
         #[arg(long, default_value_t = 50)]
         limit: u32,
     },
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum Agent {
+    /// Browse the ACP registry and configured agents, including missing programs.
+    Catalog {
+        #[arg(long)]
+        refresh: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install or update a registry agent on the local daemon host.
+    Install { id: String },
+    /// Check ACP session readiness without sending a model request.
+    Check { id: String },
+    /// Authenticate using an agent-advertised method in this terminal.
+    Login {
+        id: String,
+        /// Authentication method id; required when several are advertised.
+        #[arg(long)]
+        method: Option<String>,
+    },
+    /// Remove a managed registration; retain credentials and version directories.
+    Remove { id: String },
 }
 
 /// Session administration.
