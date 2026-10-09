@@ -35,18 +35,19 @@ pub(super) struct Resolved {
 
 impl Sources {
     pub fn discover(theme_file: Option<PathBuf>) -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let config = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".config"));
-        let cache = std::env::var_os("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".cache"));
+        let config = basr::config::paths::config_root().unwrap_or_default();
+        let cache = basr::config::paths::cache_root().unwrap_or_default();
+        // Zed uses ~/.config on macOS, independently of BASR's native settings root.
+        #[cfg(target_os = "macos")]
+        let zed_config = dirs::home_dir()
+            .map(|home| home.join(".config"))
+            .unwrap_or_else(|| config.clone());
+        #[cfg(not(target_os = "macos"))]
+        let zed_config = config.clone();
         Self {
-            zed_theme: theme_file.unwrap_or_else(|| config.join("zed/themes/dank-zed-theme.json")),
-            zed_settings: config.join("zed/settings.json"),
+            zed_theme: theme_file
+                .unwrap_or_else(|| zed_config.join("zed/themes/dank-zed-theme.json")),
+            zed_settings: zed_config.join("zed/settings.json"),
             dms_colors: cache.join("DankMaterialShell/dms-colors.json"),
             dms_settings: config.join("DankMaterialShell/settings.json"),
         }

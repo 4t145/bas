@@ -174,15 +174,9 @@ fn managed_links_are_readable_but_never_overwritten_or_treated_as_missing() {
 }
 
 #[test]
-fn path_precedence_ignores_relative_xdg() {
-    assert_eq!(
-        default_path(Some("/xdg".into()), Some("/home/dummy".into())),
-        PathBuf::from("/xdg/basr/settings.json")
-    );
-    assert_eq!(
-        default_path(Some("relative".into()), Some("/home/dummy".into())),
-        PathBuf::from("/home/dummy/.config/basr/settings.json")
-    );
+fn settings_paths_use_shared_user_directories_and_preserve_explicit_paths() {
+    let root = super::super::paths::config_root().expect("user config directory");
+    assert_eq!(Store::new(None).path(), root.join("basr/settings.json"));
     assert_eq!(
         Store::new(Some("chosen.json".into())).path(),
         Path::new("chosen.json")

@@ -135,6 +135,7 @@ pub(super) struct Workspace {
     approval_error: Option<String>,
     composer_layout: input_layout::InputLayout,
     composer_rows: usize,
+    composer_content_left: Cell<Pixels>,
     mention_decorations: TextDecorationCollection,
     decorated_mentions: Vec<TextDecoration>,
     mention_selection: std::ops::Range<usize>,
@@ -144,6 +145,8 @@ pub(super) struct Workspace {
     drafts: HashMap<SessionId, Draft>,
     attachments: Vec<Attachment>,
     loading_attachments: HashSet<SessionId>,
+    paste_pending: bool,
+    composer_generation: u64,
     new_drafts: HashMap<Option<PathBuf>, Draft>,
     directories: Vec<PathBuf>,
     selected_directory: Option<PathBuf>,
@@ -357,6 +360,7 @@ impl Workspace {
                 theme::content_font_size(cx),
             ),
             composer_rows: 1,
+            composer_content_left: Cell::new(gpui_kit::component::Size::Medium.input_px()),
             mention_decorations,
             decorated_mentions: Vec::new(),
             mention_selection: 0..0,
@@ -366,6 +370,8 @@ impl Workspace {
             drafts: HashMap::new(),
             attachments: Vec::new(),
             loading_attachments: HashSet::new(),
+            paste_pending: false,
+            composer_generation: 0,
             new_drafts: HashMap::new(),
             selected_directory,
             directories,
@@ -462,7 +468,9 @@ impl Workspace {
     }
 
     fn send_hint(&self, cx: &App) -> String {
-        let hint = if self.connection_status() != status::ConnectionStatus::Connected {
+        let hint = if self.paste_pending {
+            "正在读取剪贴板…"
+        } else if self.connection_status() != status::ConnectionStatus::Connected {
             "连接未就绪，暂不能发送"
         } else if self.creating {
             "正在创建 thread，暂不能发送"
@@ -583,6 +591,7 @@ impl Workspace {
         self.list.reset(0);
         self.list.set_follow_mode(FollowMode::Tail);
         if restore_draft {
+            self.composer_generation += 1;
             let draft = self.drafts.get(&id).cloned().unwrap_or_default();
             self.attachments = draft.attachments;
             self.composer.update(cx, |input, cx| {
@@ -611,6 +620,7 @@ impl Workspace {
         self.save_draft(cx);
         self.close_reply_preview(window, cx);
         self.active = None;
+        self.composer_generation += 1;
         self.restore_on_connect = false;
         self.remember_thread();
         self.conversation = None;
@@ -665,6 +675,9 @@ impl Workspace {
     }
 
     fn can_send(&self, cx: &App) -> bool {
+        if self.paste_pending {
+            return false;
+        }
         if self.approval_error.is_some() {
             return false;
         }

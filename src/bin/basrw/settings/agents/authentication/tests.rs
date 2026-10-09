@@ -5,6 +5,13 @@ fn spec() -> AgentSpec {
     AgentSpec::acp("tool", Command::new("/configured/agent", ["--base".into()]))
 }
 
+fn resolved_program() -> String {
+    std::env::temp_dir()
+        .join("resolved-agent")
+        .to_string_lossy()
+        .into_owned()
+}
+
 #[test]
 fn terminal_auth_appends_arguments_and_overrides_env_without_interpreting_meta() {
     let mut spec = spec();
@@ -19,8 +26,9 @@ fn terminal_auth_appends_arguments_and_overrides_env_without_interpreting_meta()
         "_meta": {"terminal-auth":{"command":"/untrusted/other-command","args":["--bad"]}}
     }))
     .expect("terminal auth schema");
-    let invocation = Invocation::new(&spec, "/resolved/agent", &method).expect("invocation");
-    assert_eq!(invocation.program, PathBuf::from("/resolved/agent"));
+    let program = resolved_program();
+    let invocation = Invocation::new(&spec, &program, &method).expect("invocation");
+    assert_eq!(invocation.program, PathBuf::from(program));
     assert_eq!(
         invocation.args,
         ["--base", "--login", "a b", "$(not-a-shell)"]
@@ -36,7 +44,7 @@ fn terminal_auth_appends_arguments_and_overrides_env_without_interpreting_meta()
 fn nonterminal_methods_and_unchecked_programs_are_not_executed() {
     let agent = acp::AuthMethod::Agent(acp::AuthMethodAgent::new("login", "Login"));
     assert!(matches!(
-        Invocation::new(&spec(), "/resolved/agent", &agent),
+        Invocation::new(&spec(), &resolved_program(), &agent),
         Err(Error::Unsupported)
     ));
     let terminal = acp::AuthMethod::Terminal(acp::AuthMethodTerminal::new("login", "Login"));
@@ -48,7 +56,7 @@ fn nonterminal_methods_and_unchecked_programs_are_not_executed() {
         acp::AuthMethodTerminal::new("login", "Login").args(vec!["bad\0argument".into()]),
     );
     assert!(matches!(
-        Invocation::new(&spec(), "/resolved/agent", &invalid),
+        Invocation::new(&spec(), &resolved_program(), &invalid),
         Err(Error::InvalidCommand)
     ));
 }

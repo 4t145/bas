@@ -9,6 +9,8 @@ mod approval;
 mod archive;
 mod authentication;
 mod chrome;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod clipboard;
 mod composer_expansion;
 mod composer_geometry;
 mod composer_queue;
@@ -1233,10 +1235,18 @@ fn composer_toolbar_keeps_options_attachments_and_send_on_one_row_in_both_modes(
     );
     attach(&fixture, session, cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx)
+    })
+    .expect("measure editor text origin");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
         for compact in [false, true] {
             if compact {
                 window.press("ctrl-shift-m", cx);
             }
+            // GPUI publishes the editor's text origin during paint. The accessory
+            // layout consumes the geometry notification in the following frame.
+            window.render_frame(cx);
             window.render_frame(cx);
             let toolbar = window.find("composer-toolbar").bounds();
             let send = window.find("send-message").bounds();

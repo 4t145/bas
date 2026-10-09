@@ -124,6 +124,17 @@ NixOS / Home Manager 的 flake 配置中，将
 
 ## 本机启动
 
+macOS / Windows 可使用仓库固定的 Rust 工具链原生构建：
+
+```sh
+cargo build --features gui --bin basrw --locked
+cargo run --features gui --bin basrw -- --window
+```
+
+macOS 也可使用 `nix develop .#gui`，该 shell 仅在 Linux 引入 Wayland 等图形运行库。
+Nix 安装包和 systemd 用户服务仍面向 Linux；macOS / Windows 的构建与桌面状态测试
+由 CI 的 `native-desktop` job 检查，实机的输入法、缩放与窗口按钮仍需桌面验收。
+
 在仓库的 `.env` 配置 `DEEPSEEK_API_KEY` 后：
 
 ```sh
@@ -186,6 +197,16 @@ GPUI 同时提供图片和文本条目时保留两者；仅有文本形式的文
 否则 `.nix` 等文本文件使用带文件名和 URI 的原生文本块。不会把界面标记发给 Agent。
 不支持的图片或二进制文件在插入前拒绝；单文件最多 8 MiB、一次最多 16 MiB，可单独发送附件。
 错误只在发送 / 停止按钮的悬浮提示上方显示；操作错误在继续编辑或开始新操作时清除。
+
+Wayland 使用原生 data-control 协议补充 GPUI 的剪贴板读取：支持纯 `text/plain`、
+UTF-8 文本、图片与文本并存，以及文件管理器的 `text/uri-list`。
+只将本机 `file:` URI 作为附件，忽略远程主机和 HTTP URL，重复路径只添加一次。
+macOS 从 pasteboard 同时读取文本、图片和文件；Windows 沿用 GPUI 的多格式读取。
+剪贴板图片的说明文本随图片插入，不因 Agent 不支持图片而丢弃文本。
+原生补充读取在后台进行，最多等待三秒，期间暂停输入和发送；切换 thread 或改换队列
+草稿后，迟到结果会丢弃。当前草稿首次初始化成会话时仍保留粘贴操作。
+合成器不提供 data-control，或补充读取失败时，回退到 GPUI 已读取的内容；
+该回退的可用格式受 GPUI 与平台支持限制。
 
 设置 → 外观 → 布局中的“消息输入框 Enter”决定发送方式：默认 Enter 发送、Shift+Enter 换行；
 选择“Enter 换行”后使用 Ctrl+Enter 发送（macOS 也支持 Cmd+Enter）。设置自动保存，
@@ -293,7 +314,9 @@ prompt 原样发送。实现遵循 [ACP slash commands](https://agentclientproto
 ## 跟随 DMS / Zed 主题
 
 客户端每秒检查 DMS 生成的 `$XDG_CONFIG_HOME/zed/themes/dank-zed-theme.json`
-及 Zed 的 `settings.json`。未指定 XDG 路径时使用 `~/.config`。
+及 Zed 的 `settings.json`。Linux 未指定 XDG 路径时使用 `~/.config`；
+macOS 按 Zed 的路径使用 `~/.config/zed`，Windows 使用 `%APPDATA%\zed`。
+参见 [Zed 设置路径](https://github.com/zed-industries/zed/blob/main/docs/src/configuring-zed.md)。
 优先采用 Zed 选中的主题变体，支持 JSONC、固定深浅模式、系统模式和 `theme_overrides`。
 内容面板默认使用主题背景色、94% 不透明度，并请求窗口背景模糊，保留轻微的磨砂效果。
 侧边栏保留主题 panel 背景的 alpha 通道；侧边栏下方没有额外的不透明底色。
@@ -314,8 +337,19 @@ BASR 只读取桌面主题，不修改 Zed 或 DMS 配置。实现参考
 
 ### 统一设置中的外观偏好
 
-`$XDG_CONFIG_HOME/basr/settings.json`（默认 `~/.config/basr/settings.json`）
-保存 BASR 偏好和 Agent 配置；也可用 `--settings-file /path/to/settings.json` 指定位置。
+BASR 偏好和 Agent 配置保存在系统用户配置目录下的 `basr/settings.json`；
+也可用 `--settings-file /path/to/settings.json` 指定位置。
+
+| 平台 | 默认配置文件 | 默认状态根目录 |
+| --- | --- | --- |
+| Linux | `~/.config/basr/settings.json` | `~/.local/state` |
+| macOS | `~/Library/Application Support/basr/settings.json` | `~/Library/Application Support` |
+| Windows | `%APPDATA%\basr\settings.json` | `%LOCALAPPDATA%` |
+
+绝对的 `XDG_CONFIG_HOME` / `XDG_STATE_HOME` / `XDG_CACHE_HOME` 可覆盖对应目录；
+空值和相对路径忽略，不将默认存储重定位到启动目录。daemon 数据库位于状态根目录的
+`basr/sessions.sqlite3`，窗口恢复与置顶状态位于 `basrw/`。已有 macOS 用户若使用原 Linux
+式目录，可以继续通过 XDG 覆盖或显式文件路径使用原数据；不会自动迁移或删除旧文件。
 文件不存在时读取旧格式作为迁移来源；没有旧文件则沿用默认，不创建空文件。可在独立设置窗口修改，也可直接编辑 JSON；
 两种入口共用校验、合并及热更新规则。
 这是严格 JSON：未知字段、非法枚举、空字体名、非正数或非有限字号/行高，以及不在 `[0, 1]`
@@ -399,6 +433,14 @@ RPC 已支持 ACP 的完整内容类型。
 nix develop .#gui -c cargo check --features gui --bin basrw
 nix develop .#gui -c cargo test --features gui-tests --bin basrw
 nix develop -c cargo test --all-targets
+```
+
+原生 Wayland MIME 协商回归使用独立的 headless Sway，会创建并清理临时 runtime
+目录，不读写当前桌面的剪贴板：
+
+```sh
+nix develop .#gui -c cargo build --features gui-tests --bin basrw --locked
+nix develop .#gui -c nix shell --inputs-from . nixpkgs#sway-unwrapped nixpkgs#python3 -c python3 tests/wayland_clipboard.py
 ```
 
 测试覆盖分组、两种模式切换、输出折叠、提前初始化、草稿隔离、中文与多行输入、

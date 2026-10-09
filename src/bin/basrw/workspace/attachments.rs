@@ -1,8 +1,14 @@
 use super::*;
 use crate::attachment::{MAX_TOTAL_BYTES, mentions};
-use gpui_kit::{ClipboardEntry, EntityInputHandler, PathPromptOptions};
+use gpui_kit::{EntityInputHandler, PathPromptOptions};
 use unicode_segmentation::UnicodeSegmentation;
 mod chips;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) struct PasteTarget {
+    generation: u64,
+    text: SharedString,
+}
 
 impl Workspace {
     pub(super) fn prompt_capabilities(&self) -> basr::acp::PromptCapabilities {
@@ -364,55 +370,112 @@ impl Workspace {
     }
 
     pub(super) fn paste_attachment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active.is_some_and(|id| self.sending(id)) {
+        if self.paste_pending || self.active.is_some_and(|id| self.sending(id)) {
             cx.stop_propagation();
             return;
         }
-        let Some(clipboard) = cx.read_from_clipboard() else {
-            cx.propagate();
+        let clipboard = cx.read_from_clipboard();
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if cfg!(all(target_os = "macos", not(test))) || cx.compositor_name() == "Wayland" {
+            self.paste_native(clipboard, window, cx);
+            cx.stop_propagation();
             return;
-        };
-        let images: Vec<_> = clipboard
-            .entries
-            .iter()
-            .filter_map(|entry| match entry {
-                ClipboardEntry::Image(image) => Some(image),
-                _ => None,
-            })
-            .collect();
-        if images.is_empty() {
-            let paths: Vec<_> = clipboard
-                .entries
-                .iter()
-                .filter_map(|entry| match entry {
-                    ClipboardEntry::ExternalPaths(paths) => Some(paths.paths()),
-                    _ => None,
-                })
-                .flatten()
-                .cloned()
-                .collect();
-            if !paths.is_empty() {
-                cx.stop_propagation();
-                self.drop_attachments(paths, window, cx);
-                return;
-            }
+        }
+        let contents = crate::clipboard::Contents::from_item(clipboard);
+        if !contents.has_attachments() {
             cx.propagate();
             return;
         }
         cx.stop_propagation();
-        let text = clipboard.text();
+        self.apply_clipboard(contents, window, cx);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn paste_native(
+        &mut self,
+        fallback: Option<ClipboardItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use futures::future::{Either, select};
+        let target = self.begin_paste(cx);
+        cx.spawn_in(window, async move |view, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async { crate::clipboard::read_native() });
+            let timeout = cx
+                .background_executor()
+                .timer(std::time::Duration::from_secs(3));
+            let result = match select(Box::pin(read), Box::pin(timeout)).await {
+                Either::Left((result, _)) => result,
+                Either::Right(_) => Err("读取剪贴板超时".into()),
+            };
+            let _ = view.update_in(cx, |this, window, cx| {
+                this.finish_paste(target, result, fallback, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn begin_paste(&mut self, cx: &mut Context<Self>) -> PasteTarget {
+        self.paste_pending = true;
+        cx.notify();
+        PasteTarget {
+            generation: self.composer_generation,
+            text: self.composer.read(cx).value(),
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn finish_paste(
+        &mut self,
+        target: PasteTarget,
+        result: Result<crate::clipboard::Contents, String>,
+        fallback: Option<ClipboardItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.paste_pending = false;
+        // A new thread, queue edit or programmatic draft change invalidates the read.
+        // Initializing the current draft into its first session preserves its generation.
+        if self.composer_generation != target.generation
+            || self.composer.read(cx).value() != target.text
+        {
+            cx.notify();
+            return;
+        }
+        match result {
+            Ok(contents) => self.apply_clipboard(contents, window, cx),
+            Err(error) if fallback.is_some() => {
+                tracing::debug!(%error, "using GPUI clipboard fallback");
+                self.apply_clipboard(crate::clipboard::Contents::from_item(fallback), window, cx);
+            }
+            Err(error) => self.error = Some(format!("粘贴失败：{error}")),
+        }
+        cx.notify();
+    }
+
+    fn apply_clipboard(
+        &mut self,
+        contents: crate::clipboard::Contents,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.error = None;
-        if !self.prompt_capabilities().image {
+        if !contents.paths.is_empty() {
+            self.drop_attachments(contents.paths, window, cx);
+        } else if !contents.images.is_empty() && !self.prompt_capabilities().image {
             self.error = Some("当前 Agent 不支持图片输入".into());
         } else if let Some(session) = self.active {
             let result: anyhow::Result<Vec<_>> =
-                images.into_iter().map(Attachment::image).collect();
+                contents.images.iter().map(Attachment::image).collect();
             match result {
                 Ok(attachments) => self.add_attachments(session, attachments, window, cx),
                 Err(error) => self.error = Some(format!("粘贴图片失败：{error:#}")),
             }
         }
-        if let Some(text) = text.filter(|text| !text.is_empty()) {
+        if let Some(text) = contents.text.filter(|text| !text.is_empty()) {
             let error = self.error.clone();
             self.composer
                 .update(cx, |input, cx| input.replace(text, window, cx));

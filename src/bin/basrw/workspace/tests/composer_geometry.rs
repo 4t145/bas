@@ -1,6 +1,60 @@
 use super::*;
 
 #[gpui_kit::test]
+fn composer_controls_stay_aligned_after_resize_font_change_and_cursor_movement(
+    cx: &mut TestAppContext,
+) {
+    let fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    for (width, font_size) in [(600., 14.), (1400., 24.), (600., 24.)] {
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            window.resize(size(px(width), px(800.)));
+            window.bounds_changed(cx);
+            let editor = theme::Editor::current(cx);
+            let mut document = editor.load().expect("appearance document");
+            let mut preferences = document.preferences.clone();
+            preferences.content_font_size = Some(font_size);
+            editor
+                .save(&mut document, preferences, window, cx)
+                .expect("apply content font");
+            fixture.view.update(cx, |view, cx| {
+                view.composer.update(cx, |input, cx| {
+                    input.set_value("中文 emoji 👩‍💻 English", window, cx);
+                    input.set_selected_range(0..0, cx);
+                });
+            });
+            window.render_frame(cx);
+        })
+        .expect("paint editor geometry");
+        cx.run_until_parked();
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let left = window.find("add-attachment").bounds().left();
+            let composer = fixture.view.read(cx).composer.clone();
+            assert_eq!(
+                composer
+                    .read(cx)
+                    .cursor_layout()
+                    .expect("first caret")
+                    .0
+                    .left(),
+                left
+            );
+            let end = composer.read(cx).value().len();
+            composer.update(cx, |input, cx| input.set_selected_range(end..end, cx));
+            window.render_frame(cx);
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("add-attachment").bounds().left(),
+                left,
+                "alignment follows the text origin rather than the caret"
+            );
+        })
+        .expect("aligned controls");
+    }
+}
+
+#[gpui_kit::test]
 fn composer_remeasures_wrapping_after_narrow_and_wide_window_resizes(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
     attach(&fixture, session(), cx);

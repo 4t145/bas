@@ -31,12 +31,7 @@ pub(super) enum Error {
 
 impl Store {
     pub fn discover(server: SocketAddr) -> Option<Self> {
-        let root = std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .or_else(|| {
-                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state"))
-            })?;
+        let root = basr::config::paths::state_root()?;
         Some(Self::open(root.join("basrw").join(format!(
             "{}.json",
             server.to_string().replace([':', '[', ']'], "_")

@@ -5,10 +5,12 @@ mod approval;
 mod assets;
 mod attachment;
 mod branding;
+mod clipboard;
 mod connection;
 mod conversation;
 mod desktop;
 mod http;
+mod input_geometry;
 mod settings;
 mod settings_window;
 mod theme;
@@ -45,17 +47,24 @@ struct Args {
     /// Override the DMS-generated Zed theme file; changes are reloaded live.
     #[arg(long)]
     theme_file: Option<PathBuf>,
-    /// Unified BASR settings (default: $XDG_CONFIG_HOME/basr/settings.json).
+    /// Unified BASR settings (default: basr/settings.json in the user config directory).
     #[arg(long, env = "BASR_SETTINGS_FILE")]
     settings_file: Option<PathBuf>,
     #[cfg(feature = "gui-tests")]
     #[arg(long, hide = true, value_parser = ["empty", "sample", "layout", "connecting", "disconnected", "menus", "files", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "clipboard", "settings"])]
     preview_panel: Option<String>,
+    #[cfg(all(feature = "gui-tests", target_os = "linux"))]
+    #[arg(long, hide = true)]
+    test_wayland_clipboard: bool,
 }
 
 fn main() -> Result<()> {
     settings::run_helper_if_requested();
     let args = Args::parse();
+    #[cfg(all(feature = "gui-tests", target_os = "linux"))]
+    if args.test_wayland_clipboard {
+        return clipboard::wayland::check();
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),

@@ -84,6 +84,7 @@ impl Workspace {
             return false;
         };
         self.attachments = draft.attachments;
+        self.composer_generation += 1;
         self.composer
             .update(cx, |input, cx| input.set_value(draft.text, window, cx));
         self.save_draft(cx);
@@ -118,6 +119,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.composer_generation += 1;
         self.attachments = draft.attachments;
         self.composer.update(cx, |input, cx| {
             input.set_value(draft.text, window, cx);

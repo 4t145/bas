@@ -79,10 +79,9 @@ impl Store {
         match path {
             Some(path) => Self::at(path),
             None => Self {
-                path: default_path(
-                    std::env::var_os("XDG_CONFIG_HOME"),
-                    std::env::var_os("HOME"),
-                ),
+                path: super::paths::config_root()
+                    .unwrap_or_else(|| PathBuf::from(".config"))
+                    .join("basr/settings.json"),
                 import_legacy: true,
             },
         }
@@ -245,19 +244,6 @@ impl Store {
             section,
         }
     }
-}
-pub(super) fn default_path(
-    xdg: Option<std::ffi::OsString>,
-    home: Option<std::ffi::OsString>,
-) -> PathBuf {
-    xdg.filter(|v| Path::new(v).is_absolute())
-        .map(PathBuf::from)
-        .or_else(|| {
-            home.filter(|v| !v.is_empty())
-                .map(|h| PathBuf::from(h).join(".config"))
-        })
-        .unwrap_or_else(|| PathBuf::from(".config"))
-        .join("basr/settings.json")
 }
 fn io_error(path: &Path, source: io::Error) -> Error {
     Error::Io {

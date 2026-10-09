@@ -120,7 +120,7 @@ basrctl agents
 | --- | --- | --- |
 | `BASRD_LISTEN` | `127.0.0.1:7337` | gRPC 监听地址（默认仅回环） |
 | `BASRD_AGENTS` | 未设置 | 简写后端目录，设置后覆盖 JSON 配置，见下 |
-| `BASR_SETTINGS_FILE` | `$XDG_CONFIG_HOME/basr/settings.json` | GUI 与 daemon 共用配置；XDG 未设置时使用 `~/.config/basr/settings.json` |
+| `BASR_SETTINGS_FILE` | 用户配置目录下的 `basr/settings.json` | GUI 与 daemon 共用配置；Linux 默认 `~/.config`，跨平台目录见 [GUI 说明](docs/gui.md#统一设置中的外观偏好) |
 | `BASRD_AGENTS_FILE` | 未设置 | 显式兼容旧版独立 agent 数组；设置后覆盖统一文件的 agent 目录 |
 | `BASRD_NOTIFY` | `auto` | `auto` 允许无桌面运行，`always` 要求通知服务可用，`never` 禁用 |
 | `BASRD_HISTORY` | `4096` | 每个会话的内存历史窗口容量；localdb 的磁盘历史不受此容量限制 |
@@ -261,7 +261,8 @@ GUI 使用 Agent 返回的 `configOptions` 构建选项控件，并展示图片�
 - **ACP 后端**：已实现初始化、创建会话、prompt、cancel、配置选项和模式设置，
   文件读写及权限回调直接复用 ACP 类型。内容、工具、plan、commands、mode、usage 等
   更新通过 RPC 与历史完整传输；`terminal/*` 尚未实现。GUI 可展示图片与文件内容，
-  支持内嵌文件附件和剪贴板图片；交互审批仍待实现。
+  支持内嵌文件附件、剪贴板图片与标准 ACP 交互审批。
 - **权限**：默认拒绝工具权限申请；`--permissions allow` 可开启自动批准。该策略不隔离
-  后端进程的文件访问。交互式审批需要在守护进程实现 `Host`，将申请通过协议路由给前端。
+  后端进程的文件访问。GUI 连接审批订阅后由用户选择原生允许／拒绝选项；没有审批客户端
+  的会话行为及请求取消规则见 [GUI 说明](docs/gui.md#数据与验证)。
 - **传输**：当前为回环 TCP，Unix domain socket 尚未实现。

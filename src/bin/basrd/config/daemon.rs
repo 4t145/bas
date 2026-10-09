@@ -121,15 +121,8 @@ impl Config {
         if let Some(path) = &self.localdb_path {
             return Ok(Some(path.clone()));
         }
-        let state = std::env::var_os("XDG_STATE_HOME")
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .filter(|path| !path.is_empty())
-                    .map(|home| PathBuf::from(home).join(".local/state"))
-            })
-            .ok_or_else(|| anyhow::anyhow!("set --localdb-path or XDG_STATE_HOME (or HOME)"))?;
+        let state = basr::config::paths::state_root()
+            .ok_or_else(|| anyhow::anyhow!("set --localdb-path or a user state directory"))?;
         Ok(Some(state.join("basr/sessions.sqlite3")))
     }
 }

@@ -23,5 +23,29 @@ jobs:
         run: nix develop .#gui -c cargo test --features gui --bin basrw --locked
       - name: Test headless desktop
         run: nix develop .#gui -c cargo test --features gui-tests --bin basrw --locked
+      - name: Test native Wayland clipboard in a private compositor
+        run: nix develop .#gui -c nix shell --inputs-from . nixpkgs#sway-unwrapped nixpkgs#python3 -c python3 tests/wayland_clipboard.py
       - name: Lint application targets
         run: nix develop .#gui -c cargo clippy --all-targets --features gui-tests --locked -- -D warnings
+
+  native-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: rustup show active-toolchain
+      - name: Use a physical temporary directory on macOS
+        if: runner.os == 'macOS'
+        run: echo 'TMPDIR=/private/tmp' >> "$GITHUB_ENV"
+      - name: Build native desktop and clients
+        run: cargo build --all-targets --features gui-tests --locked
+      - name: Test shared model and configuration
+        run: cargo test --lib --locked
+      - name: Test desktop state and protocol
+        run: cargo test --features gui --bin basrw --locked

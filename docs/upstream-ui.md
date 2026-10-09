@@ -12,7 +12,9 @@
 | `ashpd` | 0.13.13 | crates.io |
 | `gpui-pre-reqwest-client` | 0.3.5 | crates.io，GUI 资源 HTTP 适配器 |
 
-根锁文件为三个原本使用 path 覆盖的包补充 registry source 和 checksum，其他版本保持不变。
+移除覆盖时，根锁文件为三个原本使用 path 覆盖的包补充 registry source 和 checksum。
+窗口适配随后新增 `wl-clipboard-rs 0.9.4`、macOS 的 `arboard 3.6.1` 与 PNG 编码依赖，
+共享用户目录使用 `dirs 6`；这些依赖均为 MIT / Apache-2.0 发布包，不改 GPUI 版本。
 BASR 第一方代码仍是 MIT，不复制或链接 Zed 的 GPL 上层组件；第三方依赖保留原许可证。
 此前的会话、队列、RPC、路径校验、日志和外观配置修复不因这次切换撤销。
 
@@ -27,12 +29,17 @@ BASR 第一方代码仍是 MIT，不复制或链接 Zed 的 GPL 上层组件；�
 
 ### UI-001：输入文字与工具栏左边缘相差 10px
 
-现有测试
+移除覆盖后的测试
 `workspace::tests::composer_toolbar_keeps_options_attachments_and_send_on_one_row_in_both_modes`
 失败。基线测量中，输入光标左边缘为 `287px`，附件按钮左边缘为 `277px`。
 发布版编辑器在当前配置下保留了一段额外 gutter。
 
-原断言保留，不修改 padding 抵消，也不为了测试变绿放宽对齐要求。
+现已通过公开 `text_bounds` 与 `EntityInputHandler::bounds_for_range(0..0)` 测量实际文本
+起点，将控件左侧 inset 设为组件自身 padding 加测得的 gutter。该逻辑封装为
+`input_geometry`，供输入框的附属控件复用，不依赖硬编码的 10px 偏移。
+编辑器在 paint 时发布几何信息，附属布局随几何通知在后续帧更新。
+原来光标与附件按钮严格相等的断言保留并通过；新增回归覆盖宽度、内容字号和光标移动，
+确认按钮跟随文字起点，不跟随当前光标。
 
 ### UI-002：长单行文本软换行后，输入框不随之增高
 
@@ -49,7 +56,7 @@ BASR 第一方代码仍是 MIT，不复制或链接 Zed 的 GPL 上层组件；�
 
 原 `soft_wrapped_composer_text_increases_the_editor_height` 断言通过；新增回归覆盖窄／宽／
 再变窄、中文与 emoji 混排、字号变化、紧凑模式四行上限和末尾空行。
-UI-001 的额外 gutter 左对齐问题仍保留原断言，不用偏移抵消。
+UI-001 的额外 gutter 左对齐问题由独立的公开 API 几何适配处理，见上文。
 
 ## 用户实测观察，待自动化复现
 
@@ -123,8 +130,8 @@ Mermaid 渲染，本轮不通过伪注册语言或屏蔽 warning 宣称完成。
 应用侧复用窗口尺寸约束的 hoverable tooltip：长 token 按 grapheme 插入零宽换行点，
 内容区域可滚动，弹层仍在原生窗口内。回归通过实际鼠标移动及显示延时，测量
 420×80、420×240、1120×800 三种窗口的长错误、多行提示，并直接检查 compact
-发送按钮在初始化失败后的 tooltip 边界。GUI 全套 171 项通过，UI-001、UI-002
-两项既有断言仍失败；严格 Clippy 与所改 Rust 文件格式检查通过。真实桌面合成器
+发送按钮在初始化失败后的 tooltip 边界。当时 GUI 全套 171 项通过，UI-001、UI-002
+两项既有断言仍失败；这两项现已由后续应用适配修复。真实桌面合成器
 的视觉呈现仍需人工确认，headless 边界测量不等于实机截图。
 
 ### UI-011：Markdown 有序列表丢失非 1 起始编号
@@ -142,6 +149,26 @@ Image 后再次插入可能显示 Image 2。这不是当前正在发送的附件
 文本中仍存在的完整附件引用。若需要显示序号连续，应将展示序号与稳定引用解耦，
 不能简单复用名字而令撤销后的引用指向另一张图片。
 
+### UI-012：原生剪贴板只读取第一个匹配格式
+
+发布版 `gpui-pre-linux 0.3.5` 的 Wayland 读取优先返回 UTF-8 文本，图片只在文本不存在
+时读取；没有处理文件管理器的 `text/uri-list`，也未将纯 `text/plain` 作为文本回退。
+macOS pasteboard 同样优先文本。直接在 headless 注入多项 `ClipboardItem` 无法复现
+平台层丢格式的问题。
+
+应用用发布版 [wl-clipboard-rs](https://docs.rs/wl-clipboard-rs/0.9.4/wl_clipboard_rs/paste/index.html)
+与 macOS [arboard](https://docs.rs/arboard/3.6.1/arboard/struct.Clipboard.html) 补充原生读取，
+保留同时存在的文字和图片，读取本机文件 URI；Windows 保留 GPUI 原有多格式路径。
+读取放在后台，有三秒应用期限和单项读取大小限制，不阻塞输入 UI；期间输入和发送禁用。
+草稿代次与内容快照共同防止 thread 切换、队列编辑或程序修改草稿后的迟到结果混入。
+合成器没有 data-control 或读取失败时回退到已有 GPUI 内容，不宣称回退仍覆盖所有 MIME。
+
+`tests/wayland_clipboard.py` 建立独立 headless Sway，实际提供纯 `text/plain`、
+文本与 PNG 并存、文件 URI 三种 offer 并读取验收；不会覆盖用户当前桌面的剪贴板。
+headless Workspace 回归检查发送／输入拦截、失败回退与 Undo、切换后丢弃、首次初始化
+保留粘贴，以及图片不受支持时仍保留文字。macOS 实机 pasteboard 与 Windows 外部来源
+粘贴仍需对应平台桌面验收。
+
 ## 仍需复核的边界
 
 用户提供的 emoji、中英文混排样例已实测正常，不再将该样例列为故障。
@@ -150,11 +177,11 @@ Image 后再次插入可能显示 Image 2。这不是当前正在发送的附件
 | 项目 | 复核方式 |
 | --- | --- |
 | 缩放与重新测量 | 已有混排样例正常；可进一步改变字号、行高和窗口宽度，滚出再滚回，检查是否出现新的裁剪、重叠或异常留白 |
-| Wayland 多格式剪贴板 | 分别从浏览器、截图工具、文件管理器粘贴；覆盖图片与文本并存、纯图片、文件 URI 和普通文本 |
+| Wayland 外部应用剪贴板 | 独立 Sway 已验证真实 MIME 协商；继续从浏览器、截图工具、文件管理器检查实际应用 offer 与回退合成器 |
 | Portal 文件选择功能 | UI-006 的 warning 已确认；打开、保存、取消是否存在功能异常仍需分别验证 |
 
-Headless 剪贴板测试直接注入 `ClipboardItem`，不覆盖合成器实际交付哪些 MIME。
-移除 vendor 后仍通过这些测试，不等于 Wayland 数据协商已验证。
+Headless 剪贴板测试直接注入 `ClipboardItem`；原生数据协商由独立 Sway 的回归补充。
+两者都不替代用户桌面上每个外部应用及合成器的实测。
 
 UI-003、UI-004 是用户实测观察，尚未有对应的自动化复现；不能据现有 GUI 测试通过项
 将其判为已经正常。
@@ -168,7 +195,7 @@ UI-003、UI-004 是用户实测观察，尚未有对应的自动化复现；不�
 设置导航通过公开 `Button::child` 提供可伸展的左对齐文字，并保留 accessibility label；
 不修改依赖。回归同时检查类别、子项、动态 Agent 名称的文字起点和按钮语义。
 
-本机 Linux / Nix 基线结果：
+移除覆盖时的 Linux / Nix 历史基线结果：
 
 | 检查 | 结果 |
 | --- | --- |
@@ -194,4 +221,21 @@ nix develop .#gui -c cargo clippy --all-targets --features gui-tests --locked --
 和立即发送，以及思考／工具活动分组、复杂 Markdown 与整表复制。
 输入框工具栏不再显示单行／多行开关，Enter 行为在设置中持久化，热更新保留草稿和焦点。
 消息编辑器通过 Alt+Shift+Esc 展开／收起，展开时 Enter 换行、Ctrl+Enter 发送。
-UI-001 既有左边缘对齐断言仍保留，没有放宽要求或恢复依赖覆盖。
+UI-001 既有左边缘对齐断言通过，没有放宽要求或恢复依赖覆盖。
+
+当前验证命令与原生剪贴板运行器见 [GUI 说明](gui.md#数据与验证)。
+CI 在 Linux 跑默认目标、GUI、headless GUI 与独立 Wayland 检查；macOS、Windows
+新增原生全目标构建与共享配置、桌面状态测试，本机 Linux 结果不能替代这两个平台验收。
+
+2026-10-09 本机 Linux / Nix 验证：
+
+| 检查 | 结果 |
+| --- | --- |
+| 默认全目标测试 | 180 项通过（库 34、CLI 15、daemon 117、集成 14） |
+| GUI 发布 feature 测试 | 77 项通过 |
+| GUI headless 测试 | 232 项通过，无失败或忽略；包含 UI-001、UI-002 原断言 |
+| 独立 Wayland 剪贴板 | 纯文本、图片与文本并存、文件 URI 检查通过 |
+| 含 GUI 的全目标构建 | 通过 |
+| 默认／GUI 全目标严格 Clippy | 通过 |
+| Rust 格式与 diff 检查 | 通过 |
+| macOS Nix GUI shell | aarch64-darwin 依赖求值通过，未引入 Linux 图形库；没有代替原生构建和实机验收 |

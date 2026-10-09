@@ -1,6 +1,7 @@
 //! Strict shared settings and conflict-aware, section-scoped persistence.
 pub mod agent;
 pub mod appearance;
+pub mod paths;
 mod store;
 pub use agent::{AgentSpec, validate_agents};
 pub use appearance::Appearance;

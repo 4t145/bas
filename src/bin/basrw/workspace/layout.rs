@@ -193,6 +193,14 @@ impl Workspace {
     }
 
     pub(super) fn render_layout(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(left) = crate::input_geometry::content_left(
+            &self.composer,
+            gpui_kit::component::Size::Medium.input_px(),
+            window,
+            cx,
+        ) {
+            self.composer_content_left.set(left);
+        }
         self.composer_available_height
             .set((f32::from(window.viewport_size().height) - 180.).max(80.));
         div()
@@ -304,7 +312,8 @@ impl Workspace {
                     .items_center()
                     .gap_1()
                     .mx_3()
-                    .px(gpui_kit::component::Size::Medium.input_px())
+                    .pl(self.composer_content_left.get())
+                    .pr(gpui_kit::component::Size::Medium.input_px())
                     .when(cfg!(target_os = "macos"), |header| {
                         header.pl(px(MACOS_WINDOW_CONTROLS_WIDTH))
                     })
