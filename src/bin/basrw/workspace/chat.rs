@@ -7,8 +7,12 @@ use std::sync::Arc;
 use super::*;
 
 pub(super) const CONTENT_WIDTH: f32 = 840.;
+pub(super) const COMPOSER_SIDE_PADDING: f32 = 4.;
 pub(super) const COMPOSER_TOOLBAR_HEIGHT: f32 = 24.;
 pub(super) const COMPOSER_BOTTOM_PADDING: f32 = 2.;
+pub(super) const COMPOSER_CONTROL_INSET: f32 = 4.;
+const COMPOSER_CONTROL_GAP: f32 = 4.;
+const INITIALIZATION_MESSAGES_MAX_HEIGHT: f32 = 160.;
 const APPROVAL_PANEL_HEIGHT: f32 = 240.;
 // The pinned editor reserves 10px each for its gutter and caret at the right edge.
 const EDITOR_WRAP_INSET: f32 = 20.;
@@ -18,6 +22,22 @@ pub(super) fn content_panel() -> Div {
 }
 
 impl Workspace {
+    pub(super) fn composer_fills_thread(&self) -> bool {
+        !self.compact
+            && self.composer_expanded
+            && !self.thread_has_user_prompt()
+            && !self.working()
+            && self.approvals.is_empty()
+            && self.authentication_panel.is_none()
+            && self.elicitation_panels.is_empty()
+            && self.active.is_none_or(|id| {
+                !self
+                    .outboxes
+                    .get(&id)
+                    .is_some_and(outbox::SessionOutbox::pending)
+            })
+    }
+
     pub(super) fn measure_composer(&mut self, cx: &mut Context<Self>) {
         let input = self.composer.read(cx);
         let width = input
@@ -78,44 +98,76 @@ impl Workspace {
 
     pub(super) fn render_chat(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
+            .id("thread-body")
+            .test_support()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
             .w_full()
-            .child(self.render_timeline(cx))
+            .when(!self.composer_fills_thread(), |area| {
+                area.child(self.render_timeline(cx))
+            })
+            .when(self.composer_fills_thread(), |area| {
+                area.children(self.render_initialization_messages(cx))
+            })
             .child(
-                div().px_3().child(
-                    content_panel()
+                div().flex_shrink_0().px(px(COMPOSER_SIDE_PADDING)).child(
+                    div()
+                        .w_full()
                         .id("conversation-status")
                         .test_support()
                         .flex()
                         .items_center()
                         .gap_2()
                         .py_1()
+                        .child(self.agent_button(cx))
                         .child(self.connection_indicator("conversation-connection", cx))
                         .children(
                             self.activity_label()
                                 .map(|label| caption(label, cx).flex_1().min_w_0().truncate()),
                         )
                         .child(div().flex_1())
-                        .when(self.active.is_some(), |row| {
-                            row.child(
-                                Button::new("scroll-to-bottom")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::ArrowDown)
-                                    .tooltip("滚动到最新输出")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.list.set_follow_mode(FollowMode::Tail);
-                                        cx.notify();
-                                    })),
-                            )
-                        }),
+                        .when(
+                            self.active.is_some() && !self.composer_fills_thread(),
+                            |row| {
+                                row.child(
+                                    Button::new("scroll-to-bottom")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::ArrowDown)
+                                        .tooltip("滚动到最新输出")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.list.set_follow_mode(FollowMode::Tail);
+                                            cx.notify();
+                                        })),
+                                )
+                            },
+                        ),
                 ),
             )
             .child(self.render_composer(cx))
             .into_any_element()
+    }
+
+    fn render_initialization_messages(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let conversation = self
+            .conversation
+            .as_ref()
+            .filter(|state| !state.rows.is_empty())?;
+        Some(
+            div()
+                .id("agent-initialization-messages")
+                .test_support()
+                .flex_shrink_0()
+                .max_h(px(INITIALIZATION_MESSAGES_MAX_HEIGHT))
+                .overflow_y_scroll()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(caption("初始化信息", cx).px_3().pt_2())
+                .children((0..conversation.rows.len()).map(|index| self.render_item(index, cx)))
+                .into_any_element(),
+        )
     }
 
     pub(super) fn render_timeline(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -125,6 +177,8 @@ impl Workspace {
             .as_ref()
             .is_none_or(|conversation| conversation.items.is_empty());
         div()
+            .id("conversation-timeline")
+            .test_support()
             .flex()
             .flex_col()
             .flex_1()
@@ -166,8 +220,8 @@ impl Workspace {
             })
             .when(!empty, |area| {
                 area.child(
-                    list(self.list.clone(), move |index, window, cx| {
-                        view.update(cx, |this, cx| this.render_item(index, window, cx))
+                    list(self.list.clone(), move |index, _, cx| {
+                        view.update(cx, |this, cx| this.render_item(index, cx))
                     })
                     .w_full()
                     .flex_1()
@@ -272,6 +326,12 @@ impl Workspace {
     }
 
     pub(super) fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let fills_thread = self.composer_fills_thread();
+        let panel = div();
+        let line_height =
+            (f32::from(theme::content_font_size(cx)) * theme::content_line_height(cx)).ceil();
+        let expand_top = gpui_kit::component::Size::Medium.input_py()
+            + px((line_height - layout::ICON_BUTTON_SIZE) / 2.);
         let sending = self.active.is_some_and(|id| self.sending(id));
         let cancelling = self.active.is_some_and(|id| self.cancelling.contains(&id));
         let can_send = self.can_send(cx);
@@ -322,15 +382,25 @@ impl Workspace {
         div()
             .flex_shrink_0()
             .w_full()
-            .when(self.compact, |area| {
-                area.px_3().pb(px(COMPOSER_BOTTOM_PADDING))
+            .when(fills_thread, |area| {
+                area.flex_1().min_h_0().flex().flex_col()
             })
-            .when(!self.compact, |area| area.px_3().pb_3())
+            .when(self.compact, |area| {
+                area.px(px(COMPOSER_SIDE_PADDING))
+                    .pb(px(COMPOSER_BOTTOM_PADDING))
+            })
+            .when(!self.compact, |area| {
+                area.px(px(COMPOSER_SIDE_PADDING))
+                    .pb(px(COMPOSER_SIDE_PADDING))
+            })
             .child(
-                content_panel()
+                panel
                     .id("composer-panel")
                     .test_support()
                     .rounded_lg()
+                    .flex()
+                    .flex_col()
+                    .when(fills_thread, |panel| panel.flex_1().min_h_0())
                     .drag_over::<gpui_kit::ExternalPaths>(|style, _, _, cx| {
                         style.bg(cx.theme().primary.opacity(0.12))
                     })
@@ -346,6 +416,7 @@ impl Workspace {
                     .child(
                         div()
                             .id("composer-editor")
+                            .relative()
                             .key_context("BasrComposer")
                             .test_support()
                             .capture_action(cx.listener(
@@ -404,13 +475,28 @@ impl Workspace {
                             }))
                             .flex()
                             .items_start()
+                            .pr(px(COMPOSER_CONTROL_INSET
+                                + layout::ICON_BUTTON_SIZE
+                                + COMPOSER_CONTROL_GAP))
+                            .when(fills_thread, |editor| editor.flex_1().min_h_0())
                             .child(
                                 div()
                                     .relative()
+                                    .flex()
                                     .flex_1()
                                     .min_w_0()
+                                    .overflow_x_hidden()
+                                    .when(fills_thread, |editor| editor.h_full())
                                     .child(
                                         Editor::new(&self.composer)
+                                            .w_auto()
+                                            .flex_1()
+                                            .min_w_0()
+                                            // Trim the component's measured blank inset while
+                                            // retaining its editing, selection and overlay behavior.
+                                            .ml(-(self.composer_content_left.get()
+                                                - px(COMPOSER_CONTROL_INSET))
+                                            .max(px(0.)))
                                             .font_family(cx.theme().font_family.clone())
                                             .text_size(theme::content_font_size(cx))
                                             .line_height(gpui_kit::relative(
@@ -420,9 +506,19 @@ impl Workspace {
                                             .bordered(false)
                                             .readonly(sending || self.paste_pending)
                                             .aria_label("发送给 Agent 的消息")
-                                            .h(px(self.composer_height(cx))),
+                                            .when(fills_thread, |editor| editor.h_full())
+                                            .when(!fills_thread, |editor| {
+                                                editor.h(px(self.composer_height(cx)))
+                                            }),
                                     )
                                     .child(self.render_attachment_chips(cx)),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(expand_top.max(px(0.)))
+                                    .right(px(COMPOSER_CONTROL_INSET))
+                                    .child(self.composer_expansion_button(cx)),
                             ),
                     )
                     .child(
@@ -433,29 +529,15 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .pl(self.composer_content_left.get())
-                            .pr(gpui_kit::component::Size::Medium.input_px())
+                            .pl(px(COMPOSER_CONTROL_INSET))
+                            .pr(px(COMPOSER_CONTROL_INSET))
                             .h(px(COMPOSER_TOOLBAR_HEIGHT))
                             .flex_shrink_0()
-                            .child(self.attachment_button(cx))
-                            .child(self.agent_button(cx))
                             .child(
-                                Button::new("expand-message-editor")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(if self.composer_expanded {
-                                        IconName::Minimize2
-                                    } else {
-                                        IconName::Maximize2
-                                    })
-                                    .tooltip(if self.composer_expanded {
-                                        "收起消息编辑器 · Alt Shift Escape"
-                                    } else {
-                                        "展开消息编辑器 · Alt Shift Escape"
-                                    })
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.toggle_composer_expansion(window, cx)
-                                    })),
+                                self.attachment_button(cx)
+                                    .w(px(layout::ICON_BUTTON_SIZE))
+                                    .h(px(layout::ICON_BUTTON_SIZE))
+                                    .p_0(),
                             )
                             .child(
                                 div()
@@ -491,7 +573,12 @@ impl Workspace {
                             )
                             .child(crate::tooltip::bounded(
                                 "submit-hint",
-                                submit.xsmall().flex_shrink_0(),
+                                submit
+                                    .xsmall()
+                                    .w(px(layout::ICON_BUTTON_SIZE))
+                                    .h(px(layout::ICON_BUTTON_SIZE))
+                                    .p_0()
+                                    .flex_shrink_0(),
                                 submit_hint,
                             )),
                     ),
@@ -499,7 +586,7 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn render_item(&self, index: usize, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_item(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(conversation) = self.conversation.as_ref() else {
             return div().into_any_element();
         };
@@ -526,7 +613,16 @@ impl Workspace {
             .py_1()
             .w_full()
             .text_size(theme::content_font_size(cx))
-            .child(content_panel().child(content))
+            .child(
+                content_panel().child(content).children(
+                    self.render_message_actions(
+                        items
+                            .last()
+                            .expect("timeline rows contain at least one item"),
+                        cx,
+                    ),
+                ),
+            )
             .into_any_element()
     }
 
@@ -560,6 +656,19 @@ impl Workspace {
                             .border_color(cx.theme().border)
                             .bg(cx.theme().muted.opacity(0.35))
                     })
+                    .when(!user, |message| {
+                        message.child(
+                            caption(
+                                self.current()
+                                    .map(|session| session.agent.to_string())
+                                    .unwrap_or_else(|| "Agent".into()),
+                                cx,
+                            )
+                            .id(SharedString::from(format!("message-source-{id}")))
+                            .test_support()
+                            .font_weight(FontWeight::SEMIBOLD),
+                        )
+                    })
                     .children(
                         message
                             .content
@@ -569,26 +678,28 @@ impl Workspace {
                                 self.render_block(format!("{id}-{block_index}"), block, index, cx)
                             }),
                     )
-                    .child(
-                        div()
-                            .absolute()
-                            .top_1()
-                            .right_1()
-                            .invisible()
-                            .group_hover(group, |style| style.visible())
-                            .child(
-                                Button::new(SharedString::from(format!("copy-{id}")))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Copy)
-                                    .tooltip("复制消息")
-                                    .on_click(move |_, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            copy.clone(),
-                                        ))
-                                    }),
-                            ),
-                    )
+                    .when(user, |row| {
+                        row.child(
+                            div()
+                                .absolute()
+                                .top_1()
+                                .right_1()
+                                .invisible()
+                                .group_hover(group, |style| style.visible())
+                                .child(
+                                    Button::new(SharedString::from(format!("copy-{id}")))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Copy)
+                                        .tooltip("复制消息")
+                                        .on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                copy.clone(),
+                                            ))
+                                        }),
+                                ),
+                        )
+                    })
                     .into_any_element()
             }
             Item::Tool(tool) => self.render_tool(&id, tool, index, cx),

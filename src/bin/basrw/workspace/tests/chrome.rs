@@ -10,25 +10,27 @@ fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext
         let conversation = window.find("conversation-header-row").bounds();
         assert_eq!(sidebar.top(), conversation.top());
         assert_eq!(sidebar.size.height, conversation.size.height);
-        let settings = window.find("open-settings").bounds();
+        assert!(
+            window.find("thread-search").bounds().top() >= sidebar.bottom() + px(8.),
+            "thread search needs space below the toolbar"
+        );
+        let menu = window.find("app-menu").bounds();
+        assert!(window.try_find("open-settings").is_none());
         let workspace = window.find("add-workspace-button").bounds();
         let new_thread = window.find("new-session").bounds();
-        for button in [settings, workspace, new_thread] {
+        for button in [workspace, new_thread] {
             assert_eq!(
                 button.size,
                 size(px(layout::ICON_BUTTON_SIZE), px(layout::ICON_BUTTON_SIZE))
             );
-            assert_eq!(button.top(), settings.top());
+            assert_eq!(button.top(), menu.top());
+            assert_eq!(button.center().y, sidebar.center().y);
             assert!(button.top() >= sidebar.top() && button.bottom() <= sidebar.bottom());
         }
-        assert_eq!(
-            workspace.left() - settings.right(),
-            new_thread.left() - workspace.right()
-        );
-        assert_eq!(window.find("sidebar-toggle").bounds().top(), settings.top());
-        let menu = window.find("app-menu").bounds();
+        assert_eq!(window.find("sidebar-toggle").bounds().top(), menu.top());
         assert!(menu.top() >= sidebar.top() && menu.bottom() <= sidebar.bottom());
-        assert_eq!(menu.size, settings.size);
+        assert_eq!(menu.size, workspace.size);
+        assert_eq!(menu.center().y, sidebar.center().y);
         assert!(window.try_find("project-logo-slot").is_none());
         let controls = [
             "toggle-mode",
@@ -38,8 +40,9 @@ fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext
         ]
         .map(|id| window.find(id).bounds());
         for control in controls {
-            assert_eq!(control.size, settings.size);
-            assert_eq!(control.top(), settings.top());
+            assert_eq!(control.size, menu.size);
+            assert_eq!(control.top(), menu.top());
+            assert_eq!(control.center().y, conversation.center().y);
             assert!(control.right() <= conversation.right());
         }
         let control_gaps: Vec<_> = controls
@@ -47,6 +50,7 @@ fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext
             .map(|pair| pair[1].left() - pair[0].right())
             .collect();
         assert!(control_gaps.iter().all(|gap| *gap == control_gaps[0]));
+        assert_eq!(new_thread.left() - workspace.right(), control_gaps[0]);
         window.click("sidebar-toggle", cx);
         window.render_frame(cx);
         assert!(
@@ -66,16 +70,10 @@ fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext
         assert!(window.try_find("window-maximize").is_none());
         assert!(window.try_find("window-minimize").is_none());
         assert!(window.try_find("window-close").is_none());
-        let compact = [
-            "app-menu",
-            "open-settings",
-            "workspace-picker",
-            "new-session",
-            "toggle-mode",
-        ]
-        .map(|id| window.find(id).bounds());
+        let compact = ["app-menu", "workspace-picker", "new-session", "toggle-mode"]
+            .map(|id| window.find(id).bounds());
         for button in compact {
-            assert_eq!(button.size, settings.size);
+            assert_eq!(button.size, menu.size);
             assert_eq!(button.top(), compact[0].top());
         }
         let gaps: Vec<_> = compact
@@ -144,13 +142,13 @@ fn archive_filter_is_outside_search_and_row_actions_stay_icon_sized(cx: &mut Tes
         window.hover(format!("session-{}", active.id), cx);
         let action = window.find(format!("archive-{}", active.id)).bounds();
         assert_eq!(action.size.width, px(layout::ICON_BUTTON_SIZE));
-        assert_eq!(
+        assert!(
             window
-                .find(format!("header-archive-{}", active.id))
-                .bounds()
-                .size,
-            action.size
+                .try_find(format!("header-archive-{}", active.id))
+                .is_none()
         );
+        assert!(window.try_find("copy-session-id").is_none());
+        assert!(window.try_find("refresh").is_none());
         window.click("archived-list", cx);
         window.render_frame(cx);
         assert!(fixture.view.read(cx).archived_list);

@@ -16,6 +16,7 @@ fn registry_icons_are_embedded_and_render_visible_svg_pixels() {
         IconName::ExternalLink,
         IconName::Search,
         IconName::RefreshCw,
+        IconName::CornerLeftUp,
     ] {
         let path = icon.path();
         assert!(paths.contains(&path), "registered icon: {path}");

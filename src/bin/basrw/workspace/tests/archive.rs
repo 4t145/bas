@@ -1,7 +1,7 @@
 use super::*;
 
 #[gpui_kit::test]
-fn hidden_sidebar_can_archive_and_compact_mode_can_restore(cx: &mut TestAppContext) {
+fn sidebar_can_archive_and_compact_mode_can_restore(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let meta = session();
     attach(&fixture, meta.clone(), cx);
@@ -11,7 +11,15 @@ fn hidden_sidebar_can_archive_and_compact_mode_can_restore(cx: &mut TestAppConte
             view.toggle_sidebar(window, cx);
         });
         window.render_frame(cx);
-        window.click(format!("header-archive-{}", meta.id), cx);
+        assert!(
+            window
+                .try_find(format!("header-archive-{}", meta.id))
+                .is_none()
+        );
+        window.press("ctrl-b", cx);
+        window.render_frame(cx);
+        window.hover(format!("session-{}", meta.id), cx);
+        window.click(format!("archive-{}", meta.id), cx);
         fixture.view.update(cx, |view, cx| {
             view.update(
                 Update::Archived {
@@ -35,7 +43,7 @@ fn hidden_sidebar_can_archive_and_compact_mode_can_restore(cx: &mut TestAppConte
         window.click(format!("compact-restore-{}", meta.id), cx);
         assert_eq!(fixture.view.read(cx).active, Some(meta.id));
     })
-    .expect("archive navigation without a sidebar");
+    .expect("archive navigation through the sidebar");
     assert!(matches!(
         fixture.commands.try_recv(),
         Ok(Command::Archive { session, archived: true }) if session == meta.id

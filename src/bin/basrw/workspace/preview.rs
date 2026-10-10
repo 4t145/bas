@@ -35,6 +35,14 @@ impl Workspace {
         session.status = SessionStatus::Idle;
         session.title = Some("Markdown 排版".into());
         session.cwd = Some(PathBuf::from("/project"));
+        if fixture == "startup" {
+            session.agent = "pi".into();
+            session.title = None;
+        }
+        if fixture == "agent-menu" {
+            session.agent = "embedded".into();
+            session.title = None;
+        }
         session.acp = Some(
             acp::NewSessionResponse::new(session.id.to_string()).config_options(vec![
                 acp::SessionConfigOption::select(
@@ -80,6 +88,17 @@ impl Workspace {
             kind: "preview".into(),
             command: String::new(),
         }];
+        if fixture == "agent-menu" {
+            view.selected_agent = session.agent.to_string();
+            view.agents = ["codex", "codex-acp", "embedded", "pi"]
+                .into_iter()
+                .map(|id| pb::Agent {
+                    id: id.into(),
+                    kind: "preview".into(),
+                    command: String::new(),
+                })
+                .collect();
+        }
         if fixture == "menus" {
             view.agents.extend((0..24).map(|i| pb::Agent {
                 id: format!("Agent {i} · 中文后端"),
@@ -92,6 +111,15 @@ impl Workspace {
         view.stream = StreamState::Live;
         view.error = None;
         let mut conversation = Conversation::new(session.clone());
+        if fixture == "startup" {
+            conversation.apply(Event::new(
+                session.id,
+                Cursor::from_raw(1),
+                EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(
+                    acp::ContentChunk::new("**pi v0.87.1**\n\nAgent 已准备好。".into()),
+                )),
+            ));
+        }
         if fixture == "files" {
             let file = acp::TextResourceContents::new(
                 "# 全机 SSH 公钥清单 —— 注释保持原样\n# modules/nixos/ssh.nix\n{ atlas = \"ssh-ed25519 test\"; }",
@@ -209,6 +237,12 @@ impl Workspace {
         view.list.reset(conversation.items.len());
         view.list.set_follow_mode(FollowMode::Normal);
         view.list.scroll_to(gpui_kit::ListOffset::default());
+        view.composer_expanded = !compact && conversation.items.is_empty();
+        if matches!(fixture, "empty" | "startup" | "agent-menu") {
+            view.unstarted_sessions.insert(session.id);
+            view.composer_expanded = !compact;
+        }
+        view.sync_composer_mode(cx);
         view.conversation = Some(conversation);
         view.output_open = matches!(
             fixture,
@@ -243,16 +277,24 @@ impl Workspace {
         }
         let auto_open = match fixture {
             "menus" => Some("config-model"),
+            "agent-menu" => Some("agent-picker"),
             "picker" => Some("add-attachment"),
             _ => None,
         };
         if let Some(button) = auto_open {
+            let hover_menu = fixture == "agent-menu" && !compact;
             cx.spawn_in(window, async move |_, cx| {
                 use gpui_kit::test::TestWindowExt;
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(300))
                     .await;
-                let _ = cx.update(|window, cx| window.click(button, cx));
+                let _ = cx.update(|window, cx| {
+                    window.click(button, cx);
+                    if hover_menu {
+                        window.render_frame(cx);
+                        window.hover("popup-menu", cx);
+                    }
+                });
             })
             .detach();
         }

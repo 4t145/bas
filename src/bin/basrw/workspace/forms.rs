@@ -110,8 +110,7 @@ impl Workspace {
             .test_support()
             .flex()
             .flex_col()
-            .border_b_1()
-            .border_color(cx.theme().border)
+            .flex_shrink_0()
             .child(
                 div()
                     .id("conversation-header-row")
@@ -136,34 +135,9 @@ impl Workspace {
                                 cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)),
                             ),
                     )
-                    .when(!self.sidebar_visible, |row| {
-                        row.child(self.settings_button(cx))
-                    })
                     .child(self.workspace_button(cx))
                     .child(caption("/", cx))
                     .child(self.title_slot(cx))
-                    .when_some(current, |row, session| {
-                        row.child(
-                            layout::icon_button("copy-session-id", IconName::Copy)
-                                .tooltip(format!("复制 thread ID · {}", session.id))
-                                .on_click({
-                                    let id = session.id.to_string();
-                                    move |_, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            id.clone(),
-                                        ));
-                                    }
-                                }),
-                        )
-                        .when(!session.archived, |row| {
-                            row.child(self.archive_button(session, "header-archive", cx))
-                        })
-                    })
-                    .child(
-                        layout::icon_button("refresh", IconName::RefreshCw)
-                            .tooltip("刷新 · F5")
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-                    )
                     .child(self.mode_button(cx))
                     .when(client_controls && controls.minimize, |row| {
                         row.child(
@@ -241,6 +215,7 @@ impl Workspace {
         let button = Button::new("workspace-picker")
             .ghost()
             .xsmall()
+            .h(px(layout::ICON_BUTTON_SIZE))
             .icon(IconName::Folder)
             .when(self.compact, |button| {
                 button
@@ -291,6 +266,7 @@ impl Workspace {
     }
 
     pub(super) fn agent_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        const TOOLBAR_AGENT_ICON_SIZE: f32 = 12.;
         let agents: Vec<_> = self.agents.iter().map(|agent| agent.id.clone()).collect();
         let selected = self
             .current()
@@ -305,10 +281,18 @@ impl Workspace {
             format!("选择 Agent · {selected}")
         };
         let view = cx.entity().downgrade();
+        let metadata = self.agent_metadata.clone();
+        let server = self.server;
         let parent = self.window;
         let button = Button::new("agent-picker")
             .ghost()
             .xsmall()
+            .h(px(layout::ICON_BUTTON_SIZE))
+            .p_0()
+            .when(!self.waiting_for_agent_selection, |button| {
+                button.w(px(layout::ICON_BUTTON_SIZE))
+            })
+            .flex_shrink_0()
             .disabled(disabled)
             .accessibility_label(hint.clone())
             .when(self.waiting_for_agent_selection, |button| {
@@ -316,6 +300,7 @@ impl Workspace {
             })
             .child(
                 self.agent_icon("agent-picker-icon", &selected, cx)
+                    .size(px(TOOLBAR_AGENT_ICON_SIZE))
                     .text_color(if disabled {
                         cx.theme().muted_foreground
                     } else {
@@ -329,32 +314,69 @@ impl Workspace {
                 button,
                 agents.len() + 2,
                 false,
-                move |mut menu, _, _| {
+                move |menu, _, _| {
+                    let mut menu = menu.check_side(Side::Right);
                     for id in &agents {
                         let id = id.clone();
+                        let label = id.clone();
+                        let metadata = metadata.clone();
                         let view = view.clone();
                         menu = menu.item(
-                            PopupMenuItem::new(id.clone())
-                                .checked(id == selected)
-                                .on_click(move |_, window, cx| {
-                                    menus::in_parent(parent, window, cx, |window, cx| {
-                                        let _ = view.update(cx, |this, cx| {
-                                            this.select_agent(id.clone(), window, cx);
-                                        });
+                            PopupMenuItem::element(move |_, cx| {
+                                let artwork = metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.read(cx).icon(server, &label))
+                                    .unwrap_or_default();
+                                div()
+                                    .id(format!("agent-menu-label-{label}"))
+                                    .test_support()
+                                    .role(gpui_kit::Role::Label)
+                                    .aria_label(label.clone())
+                                    .flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        crate::agent_icon::AgentIcon::new(
+                                            format!("agent-menu-icon-{label}"),
+                                            artwork,
+                                        )
+                                        .size(px(AGENT_ICON_SIZE)),
+                                    )
+                                    .child(div().flex_1().truncate().child(label.clone()))
+                            })
+                            .checked(id == selected)
+                            .on_click(move |_, window, cx| {
+                                menus::in_parent(parent, window, cx, |window, cx| {
+                                    let _ = view.update(cx, |this, cx| {
+                                        this.select_agent(id.clone(), window, cx);
                                     });
-                                }),
+                                });
+                            }),
                         );
                     }
                     let view = view.clone();
                     menu.separator().item(
-                        PopupMenuItem::new("安装 Agent…")
-                            .icon(IconName::Plus)
-                            .on_click(move |_, window, cx| {
-                                menus::in_parent(parent, window, cx, |window, cx| {
-                                    let _ = view
-                                        .update(cx, |this, cx| this.open_agent_catalog(window, cx));
-                                });
-                            }),
+                        PopupMenuItem::element(|_, _| {
+                            div()
+                                .id("agent-menu-install-label")
+                                .test_support()
+                                .role(gpui_kit::Role::Label)
+                                .aria_label("安装 Agent…")
+                                .flex()
+                                .flex_1()
+                                .items_center()
+                                .gap_2()
+                                .child(Icon::new(IconName::Plus).size(px(AGENT_ICON_SIZE)))
+                                .child("安装 Agent…")
+                        })
+                        .on_click(move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |window, cx| {
+                                let _ =
+                                    view.update(cx, |this, cx| this.open_agent_catalog(window, cx));
+                            });
+                        }),
                     )
                 },
                 cx,

@@ -41,7 +41,6 @@ impl Workspace {
                             .items_center()
                             .child(self.application_button(cx)),
                     )
-                    .child(self.settings_button(cx))
                     .child(
                         layout::icon_button("add-workspace-button", IconName::FolderPlus)
                             .accessibility_label("添加 workspace")
@@ -64,6 +63,7 @@ impl Workspace {
                     .id("thread-search-row")
                     .test_support()
                     .px_3()
+                    .pt_2()
                     .pb_3()
                     .flex()
                     .items_center()

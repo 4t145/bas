@@ -16,6 +16,7 @@ mod composer_geometry;
 mod composer_queue;
 mod config;
 mod elicitation;
+mod message_actions;
 mod navigation;
 mod picker;
 mod rename;
@@ -531,7 +532,7 @@ fn selecting_an_agent_initializes_options_before_any_prompt(cx: &mut TestAppCont
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
         window.input("代码审查", cx);
-        window.press("enter", cx);
+        window.press("ctrl-enter", cx);
     })
     .expect("window");
     assert!(
@@ -599,7 +600,7 @@ fn selecting_an_agent_initializes_options_before_any_prompt(cx: &mut TestAppCont
                 cx,
             );
         });
-        window.press("enter", cx);
+        window.press("ctrl-enter", cx);
     })
     .expect("window");
     assert!(
@@ -1288,7 +1289,7 @@ fn composer_toolbar_keeps_options_attachments_and_send_on_one_row_in_both_modes(
                 window.find("add-attachment").bounds().left(),
                 "the text caret and first toolbar button share the left edge"
             );
-            for id in ["add-attachment", "config-thinking", "agent-picker"] {
+            for id in ["add-attachment", "config-thinking"] {
                 let control = window.find(id);
                 assert!(control.visible());
                 if id == "config-thinking" {
@@ -1303,6 +1304,17 @@ fn composer_toolbar_keeps_options_attachments_and_send_on_one_row_in_both_modes(
                 }
                 assert!(control.bounds().origin.y >= toolbar.origin.y);
             }
+            let agent = window.find("agent-picker").bounds();
+            let connection = window
+                .find(if compact {
+                    "compact-connection"
+                } else {
+                    "conversation-connection"
+                })
+                .bounds();
+            assert!(agent.right() <= connection.left());
+            assert!((agent.center().y - connection.center().y).abs() <= px(0.5));
+            assert!(agent.bottom() <= window.find("composer-panel").bounds().top());
             assert!(send.origin.x + send.size.width <= toolbar.origin.x + toolbar.size.width);
         }
     })
@@ -1541,8 +1553,15 @@ fn compact_output_precedes_input_and_full_status_shares_content_width(cx: &mut T
         let editor = window.find("composer-editor").bounds();
         assert!(
             editor.origin.y < px(40.),
-            "first row should follow the compact status bar"
+            "editor should follow the compact status bar without an extra row"
         );
+        let expand = window.find("expand-message-editor").bounds();
+        assert_eq!(
+            expand.center().x,
+            window.find("send-message").bounds().center().x
+        );
+        assert!(expand.top() >= editor.top());
+        assert!(expand.bottom() <= editor.bottom());
         assert!(window.find("compact-status").visible());
         assert!(window.try_find("agent-output").is_none());
         let bottom_gap =

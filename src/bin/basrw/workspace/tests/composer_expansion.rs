@@ -11,6 +11,276 @@ fn save_enter_behavior(mode: composer::Mode, window: &mut Window, cx: &mut App) 
 }
 
 #[gpui_kit::test]
+fn new_thread_editor_fills_the_content_area_until_the_first_prompt(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(fixture.view.read(cx).composer_fills_thread());
+        assert!(window.try_find("conversation-timeline").is_none());
+    })
+    .expect("initial new thread fills the window");
+    attach(&fixture, session(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.press("ctrl-n", cx);
+        window.input("new thread draft", cx);
+        for (width, height) in [(600., 400.), (1500., 1400.), (600., 400.)] {
+            window.resize(size(px(width), px(height)));
+            window.bounds_changed(cx);
+            window.render_frame(cx);
+            window.render_frame(cx);
+            let body = window.find("thread-body").bounds();
+            let panel = window.find("composer-panel").bounds();
+            let editor = window.find("composer-editor").bounds();
+            let toolbar = window.find("composer-toolbar").bounds();
+            let expand = window.find("expand-message-editor").bounds();
+            let send = window.find("send-message").bounds();
+            let margin = panel.left() - body.left();
+            assert_eq!(margin, px(chat::COMPOSER_SIDE_PADDING));
+            assert_eq!(body.right() - panel.right(), margin);
+            assert_eq!(body.bottom() - panel.bottom(), margin);
+            assert!(panel.size.height >= body.size.height - px(60.));
+            assert!(editor.size.height >= body.size.height - px(110.));
+            assert_eq!(editor.bottom(), toolbar.top());
+            assert!(toolbar.bottom() <= panel.bottom());
+            assert_eq!(expand.center().x, send.center().x);
+            assert!(expand.top() >= editor.top() && expand.bottom() <= editor.bottom());
+            assert!(window.try_find("composer-header").is_none());
+            assert!(window.try_find("conversation-timeline").is_none());
+            assert_eq!(
+                window.find("sidebar-header").bounds().bottom(),
+                window.find("thread-header").bounds().bottom(),
+            );
+        }
+        window.click("expand-message-editor", cx);
+        window.render_frame(cx);
+        assert!(window.find("conversation-timeline").visible());
+        assert_eq!(fixture.view.read(cx).composer.read(cx).value(), "new thread draft");
+        window.click("expand-message-editor", cx);
+        let meta = session();
+        fixture.view.update(cx, |view, cx| {
+            view.select_agent("embedded".into(), window, cx);
+            view.update(
+                Update::Created { epoch: view.epoch, result: Ok(meta.clone()) },
+                window,
+                cx,
+            );
+            view.update(
+                Update::Snapshot { epoch: view.epoch, session: meta, events: Vec::new() },
+                window,
+                cx,
+            );
+            view.stream = StreamState::Live;
+        });
+        window.render_frame(cx);
+        assert!(fixture.view.read(cx).composer_fills_thread());
+        assert!(fixture.view.read(cx).can_select_agent());
+        while fixture.commands.try_recv().is_ok() {}
+        window.press("ctrl-enter", cx);
+        window.render_frame(cx);
+        assert!(!fixture.view.read(cx).composer_expanded);
+        assert!(window.find("conversation-timeline").visible());
+        assert!(matches!(fixture.commands.try_recv(), Ok(Command::Prompt { text, .. }) if text == "new thread draft"));
+    })
+    .expect("new thread editor resize, collapse, initialization and first send");
+}
+
+#[gpui_kit::test]
+fn startup_information_keeps_the_new_thread_editor_expanded(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let mut meta = session();
+    meta.agent = "pi".into();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.update(
+                Update::Created {
+                    epoch: fixture.initial_create.epoch,
+                    result: Ok(meta.clone()),
+                },
+                window,
+                cx,
+            );
+            view.update(
+                Update::Snapshot {
+                    epoch: view.epoch,
+                    session: meta.clone(),
+                    events: vec![Event::new(
+                        meta.id,
+                        Cursor::from_raw(1),
+                        EventKind::Acp(basr::acp::SessionUpdate::AgentMessageChunk(
+                            basr::acp::ContentChunk::new("**pi v0.87.1**".into()),
+                        )),
+                    )],
+                },
+                window,
+                cx,
+            );
+            view.stream = StreamState::Live;
+        });
+        window.render_frame(cx);
+        assert!(fixture.view.read(cx).composer_fills_thread());
+        assert!(fixture.view.read(cx).can_select_agent());
+        assert!(window.try_find("conversation-timeline").is_none());
+        let information = window.find("agent-initialization-messages").bounds();
+        let editor = window.find("composer-editor").bounds();
+        assert!(information.size.height > px(0.) && information.size.height <= px(160.));
+        assert!(information.bottom() <= editor.top());
+        assert!(editor.size.height > window.viewport_size().height / 2.);
+        while fixture.commands.try_recv().is_ok() {}
+        window.input("检查项目", cx);
+        window.press("ctrl-enter", cx);
+        window.render_frame(cx);
+        assert!(!fixture.view.read(cx).composer_fills_thread());
+        assert!(!fixture.view.read(cx).can_select_agent());
+        assert!(window.try_find("agent-initialization-messages").is_none());
+        assert!(window.find("conversation-timeline").visible());
+        assert!(matches!(fixture.commands.try_recv(), Ok(Command::Prompt { text, .. }) if text == "检查项目"));
+    })
+    .expect("startup information and first prompt use separate layout regions");
+}
+
+#[gpui_kit::test]
+fn expanding_an_initialized_unused_compact_thread_fills_the_editor_until_first_send(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = fixture(cx);
+    let meta = session();
+    let directory = tempfile::tempdir().expect("draft attachment directory");
+    let path = directory.path().join("draft.txt");
+    std::fs::write(&path, "keep this attachment").expect("draft attachment");
+    let attachment = Attachment::load(&path).expect("load draft attachment");
+    let draft = format!("check the project {}", attachment.mention);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.compact = true;
+            view.composer_expanded = false;
+            view.sync_composer_mode(cx);
+            view.resize_window(window, cx);
+            view.attachments = vec![attachment.clone()];
+            view.composer.update(cx, |input, cx| {
+                input.set_value(draft.clone(), window, cx);
+                input.set_selected_range(1..5, cx);
+                input.focus(window, cx);
+            });
+            view.update(
+                Update::Created {
+                    epoch: fixture.initial_create.epoch,
+                    result: Ok(meta.clone()),
+                },
+                window,
+                cx,
+            );
+            view.update(
+                Update::Snapshot {
+                    epoch: view.epoch,
+                    session: meta.clone(),
+                    events: vec![Event::new(
+                        meta.id,
+                        Cursor::from_raw(1),
+                        EventKind::Acp(basr::acp::SessionUpdate::AgentMessageChunk(
+                            basr::acp::ContentChunk::new("**pi v0.87.1**".into()),
+                        )),
+                    )],
+                },
+                window,
+                cx,
+            );
+            view.stream = StreamState::Live;
+            assert_eq!(view.active, Some(meta.id));
+            assert!(!view.composer_expanded);
+            assert!(!view.thread_has_user_prompt());
+        });
+        window.bounds_changed(cx);
+        window.render_frame(cx);
+        window.click("toggle-mode", cx);
+        window.bounds_changed(cx);
+        window.render_frame(cx);
+        window.render_frame(cx);
+        let view = fixture.view.read(cx);
+        assert!(!view.compact);
+        assert!(view.composer_expanded);
+        assert!(view.composer_fills_thread());
+        assert_eq!(view.active, Some(meta.id));
+        assert_eq!(view.composer.read(cx).value(), draft);
+        assert_eq!(view.composer.read(cx).selected_range(), 1..5);
+        assert_eq!(view.attachments[0].id, attachment.id);
+        assert!(view.composer.read(cx).focus_handle(cx).is_focused(window));
+        assert!(window.try_find("conversation-timeline").is_none());
+        let information = window.find("agent-initialization-messages").bounds();
+        let editor = window.find("composer-editor").bounds();
+        let body = window.find("thread-body").bounds();
+        assert!(information.size.height > px(0.));
+        assert!(information.bottom() <= editor.top());
+        assert!(editor.size.height > body.size.height / 2.);
+        while fixture.commands.try_recv().is_ok() {}
+        window.click("send-message", cx);
+        assert!(
+            matches!(fixture.commands.try_recv(), Ok(Command::Prompt { session, text, attachments, .. })
+                if session == meta.id && text == draft && attachments[0].id == attachment.id)
+        );
+        fixture.view.update(cx, |view, cx| {
+            let accepted = receipt(2);
+            view.update(
+                Update::Sent {
+                    session: meta.id,
+                    text: draft.clone(),
+                    attachments: vec![attachment.clone()],
+                    result: Ok(accepted),
+                },
+                window,
+                cx,
+            );
+            for (cursor, kind) in [
+                (2, EventKind::TurnStarted { turn: accepted.turn }),
+                (
+                    3,
+                    EventKind::Acp(basr::acp::SessionUpdate::UserMessageChunk(
+                        basr::acp::ContentChunk::new(draft.clone().into()),
+                    )),
+                ),
+                (
+                    4,
+                    EventKind::TurnFinished {
+                        turn: accepted.turn,
+                        result: Ok(basr::acp::PromptResponse::new(basr::acp::StopReason::EndTurn)),
+                    },
+                ),
+            ] {
+                view.update(
+                    Update::Event {
+                        epoch: view.epoch,
+                        event: Event::new(meta.id, Cursor::from_raw(cursor), kind),
+                    },
+                    window,
+                    cx,
+                );
+            }
+            view.composer.update(cx, |input, cx| {
+                input.set_value("follow-up draft", window, cx);
+            });
+            assert!(view.thread_has_user_prompt());
+            assert!(!view.composer_expanded);
+        });
+        window.render_frame(cx);
+        window.click("toggle-mode", cx);
+        window.render_frame(cx);
+        assert!(fixture.view.read(cx).compact);
+        window.click("toggle-mode", cx);
+        window.bounds_changed(cx);
+        window.render_frame(cx);
+        let view = fixture.view.read(cx);
+        assert!(!view.compact);
+        assert!(!view.composer_expanded);
+        assert!(!view.composer_fills_thread());
+        assert_eq!(view.active, Some(meta.id));
+        assert_eq!(view.composer.read(cx).value(), "follow-up draft");
+        assert!(window.try_find("agent-initialization-messages").is_none());
+        assert!(window.find("conversation-timeline").visible());
+    })
+    .expect("window mode expands an initialized draft while preserving established conversations");
+}
+
+#[gpui_kit::test]
 fn leading_bang_stays_ordinary_agent_text_in_the_collapsed_composer(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let meta = session();
@@ -338,9 +608,24 @@ fn compact_expanded_composer_keeps_output_and_controls_inside_the_window(cx: &mu
 #[gpui_kit::test]
 fn expanded_composer_remeasures_for_short_and_tall_full_windows(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
-    attach(&fixture, session(), cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
+            view.update(
+                Update::Event {
+                    epoch: view.epoch,
+                    event: Event::new(
+                        meta.id,
+                        Cursor::from_raw(1),
+                        EventKind::Acp(basr::acp::SessionUpdate::UserMessageChunk(
+                            basr::acp::ContentChunk::new("existing conversation".into()),
+                        )),
+                    ),
+                },
+                window,
+                cx,
+            );
             view.composer.update(cx, |input, cx| {
                 input.set_value("line\n".repeat(50), window, cx);
             });

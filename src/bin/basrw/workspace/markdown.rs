@@ -21,7 +21,7 @@ impl Workspace {
     ) -> TextView {
         let mut documents = self.markdown.borrow_mut();
         let document = documents.entry(id).or_insert_with(|| {
-            let state = cx.new(|cx| TextViewState::markdown("", cx));
+            let state = cx.new(|cx| TextViewState::markdown(&text, cx));
             // Parsing can finish after the virtual list measured the row.
             let subscription = cx.observe(&state, move |this, _, cx| {
                 if this
@@ -35,7 +35,7 @@ impl Workspace {
             });
             Document {
                 state,
-                source: String::new(),
+                source: text.clone(),
                 _subscription: subscription,
             }
         });

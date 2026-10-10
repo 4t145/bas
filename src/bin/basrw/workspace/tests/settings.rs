@@ -101,17 +101,20 @@ fn settings_open_a_single_separate_window_without_replacing_the_workspace(cx: &m
         .update_window(fixture.window.into(), |_, window, cx| {
             window.render_frame(cx);
             window.input("未发送的草稿", cx);
-            let settings = window.find("open-settings").bounds();
+            let application_menu = window.find("app-menu").bounds();
             let workspace = window.find("add-workspace-button").bounds();
-            assert!(settings.right() <= workspace.left());
-            assert_eq!(settings.top(), workspace.top());
+            assert!(application_menu.right() <= workspace.left());
+            assert_eq!(application_menu.top(), workspace.top());
             assert!(window.find("archived-list").bounds().top() >= workspace.bottom());
-            assert!(window.find("app-menu").bounds().size.width > px(0.));
+            assert!(application_menu.size.width > px(0.));
+            assert!(window.try_find("open-settings").is_none());
             assert!(window.try_find("project-logo-slot").is_none());
             assert!(window.try_find("sidebar-connection").is_none());
             assert!(window.try_find("connection-details").is_none());
             let original_size = window.bounds().size;
-            window.click("open-settings", cx);
+            window.click("app-menu", cx);
+            window.render_frame(cx);
+            window.within("popup-menu").click(3usize, cx);
             window.render_frame(cx);
             assert!(window.try_find("settings-page-host").is_none());
             assert!(window.try_find("conversation-connection").is_some());
@@ -169,9 +172,11 @@ fn settings_do_not_resize_compact_or_hidden_sidebar_workspaces(cx: &mut TestAppC
                 });
                 window.render_frame(cx);
                 assert!(window.try_find("project-logo-slot").is_none());
-                let settings = window.find("open-settings").bounds();
+                let application_menu = window.find("app-menu").bounds();
                 let workspace = window.find("workspace-picker").bounds();
-                assert!(settings.right() <= workspace.left());
+                assert!(application_menu.right() <= workspace.left());
+                assert_eq!(application_menu.center().y, workspace.center().y);
+                assert!(window.try_find("open-settings").is_none());
                 let original = window.bounds().size;
                 window.press("ctrl-,", cx);
                 original

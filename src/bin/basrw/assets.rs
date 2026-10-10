@@ -56,7 +56,8 @@ gpui_kit::assets::icon_assets!(
         MessageCircle,
         CircleCheck,
         CircleAlert,
-        CircleStop
+        CircleStop,
+        CornerLeftUp
     ]
 );
 

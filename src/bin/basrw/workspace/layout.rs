@@ -121,6 +121,10 @@ impl Workspace {
         self.compact = !self.compact;
         if !self.compact {
             self.sidebar_visible = true;
+            if !self.thread_has_user_prompt() {
+                self.composer_expanded = true;
+                self.sync_composer_mode(cx);
+            }
         }
         self.editing_workspace = false;
         self.editing_title = false;
@@ -311,9 +315,9 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .mx_3()
-                    .pl(self.composer_content_left.get())
-                    .pr(gpui_kit::component::Size::Medium.input_px())
+                    .mx(px(chat::COMPOSER_SIDE_PADDING))
+                    .pl(px(chat::COMPOSER_CONTROL_INSET))
+                    .pr(px(chat::COMPOSER_CONTROL_INSET))
                     .when(cfg!(target_os = "macos"), |header| {
                         header.pl(px(MACOS_WINDOW_CONTROLS_WIDTH))
                     })
@@ -333,6 +337,7 @@ impl Workspace {
                             cx.listener(|this, _, window, cx| this.toggle_output(window, cx)),
                         ),
                     )
+                    .child(self.agent_button(cx))
                     .child(
                         div()
                             .id("compact-status")
@@ -369,7 +374,6 @@ impl Workspace {
                         row.child(self.authentication_button(cx))
                     })
                     .child(self.application_button(cx))
-                    .child(self.settings_button(cx))
                     .child(self.workspace_button(cx))
                     .child(
                         icon_button("new-session", IconName::Plus)

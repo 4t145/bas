@@ -12,7 +12,7 @@ use futures::{
 };
 use gpui_kit::{
     App, Context, FontWeight, Global, Hsla, IntoElement, ParentElement, Styled, Task,
-    TestSupportExt, div, prelude::*, px, rgb,
+    TestSupportExt, div, prelude::*, px,
 };
 use gpui_kit::{
     assets::IconName,
@@ -26,12 +26,6 @@ use super::Agents;
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(45);
 const REGISTRY_URL: &str = "https://github.com/agentclientprotocol/registry";
 const ICON_SIZE: f32 = 22.;
-const DARK_BACKGROUND: u32 = 0x101014;
-const DARK_CARD: u32 = 0x191a1e;
-const DARK_BORDER: u32 = 0x35363e;
-const DARK_ACCENT: u32 = 0x999ccc;
-const DARK_ACTION_FILL: u32 = 0x44476a;
-const DARK_ACTION_FOREGROUND: u32 = 0xedeefb;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum Filter {
@@ -66,26 +60,14 @@ pub(super) struct Palette {
 
 impl Palette {
     pub(super) fn current(cx: &App) -> Self {
-        if cx.theme().is_dark() {
-            Self {
-                background: rgb(DARK_BACKGROUND).into(),
-                card: rgb(DARK_CARD).into(),
-                border: rgb(DARK_BORDER).into(),
-                accent: rgb(DARK_ACCENT).into(),
-                action_fill: rgb(DARK_ACTION_FILL).into(),
-                action_foreground: rgb(DARK_ACTION_FOREGROUND).into(),
-                muted: cx.theme().muted_foreground,
-            }
-        } else {
-            Self {
-                background: cx.theme().background,
-                card: cx.theme().muted,
-                border: cx.theme().border,
-                accent: cx.theme().primary,
-                action_fill: cx.theme().primary,
-                action_foreground: cx.theme().primary_foreground,
-                muted: cx.theme().muted_foreground,
-            }
+        Self {
+            background: cx.theme().background,
+            card: cx.theme().muted,
+            border: cx.theme().border,
+            accent: cx.theme().primary,
+            action_fill: cx.theme().primary,
+            action_foreground: cx.theme().primary_foreground,
+            muted: cx.theme().muted_foreground,
         }
     }
 }

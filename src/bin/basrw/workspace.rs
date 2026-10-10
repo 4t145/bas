@@ -10,6 +10,7 @@ mod input_layout;
 mod layout;
 mod markdown;
 mod menus;
+mod message_actions;
 mod navigation;
 mod outbox;
 #[cfg(feature = "gui-tests")]
@@ -148,6 +149,8 @@ pub(super) struct Workspace {
     cwd: Entity<InputState>,
     rename: Entity<InputState>,
     selected_agent: String,
+    unstarted_sessions: HashSet<SessionId>,
+    prompted_sessions: HashSet<SessionId>,
     drafts: HashMap<SessionId, Draft>,
     attachments: Vec<Attachment>,
     loading_attachments: HashSet<SessionId>,
@@ -225,7 +228,11 @@ impl Workspace {
         let selected_directory = Some(groups::normalize(&cwd));
         let directories = vec![groups::normalize(&cwd)];
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 threads…"));
-        let composer_mode = cx.global::<theme::Appearance>().composer_enter_behavior;
+        let composer_mode = if compact {
+            cx.global::<theme::Appearance>().composer_enter_behavior
+        } else {
+            composer::Mode::Newline
+        };
         let composer = cx.new(|cx| {
             EditorState::new(window, cx)
                 .placeholder("描述你想完成的任务…")
@@ -391,7 +398,7 @@ impl Workspace {
             elicitation_panels: std::collections::BTreeMap::new(),
             search,
             composer,
-            composer_expanded: false,
+            composer_expanded: !compact,
             composer_available_height: Cell::new(620.),
             composer_mode,
             approvals: crate::approval::Panel::default(),
@@ -408,6 +415,8 @@ impl Workspace {
             cwd,
             rename,
             selected_agent: String::new(),
+            unstarted_sessions: HashSet::new(),
+            prompted_sessions: HashSet::new(),
             drafts: HashMap::new(),
             attachments: Vec::new(),
             loading_attachments: HashSet::new(),
@@ -641,6 +650,8 @@ impl Workspace {
         self.list.reset(0);
         self.list.set_follow_mode(FollowMode::Tail);
         if restore_draft {
+            self.composer_expanded = false;
+            self.sync_composer_mode(cx);
             self.composer_generation += 1;
             let draft = self.drafts.get(&id).cloned().unwrap_or_default();
             self.attachments = draft.attachments;
@@ -661,6 +672,28 @@ impl Workspace {
     }
 
     fn new_thread(
+        &mut self,
+        directory: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.detach_thread(directory, window, cx);
+        let draft = self
+            .new_drafts
+            .get(&self.selected_directory)
+            .cloned()
+            .unwrap_or_default();
+        self.composer_expanded = !self.compact;
+        self.sync_composer_mode(cx);
+        self.attachments = draft.attachments;
+        self.composer.update(cx, |input, cx| {
+            input.set_value(draft.text, window, cx);
+        });
+        self.focus_input(window, cx);
+        cx.notify();
+    }
+
+    fn detach_thread(
         &mut self,
         directory: Option<PathBuf>,
         window: &mut Window,
@@ -697,18 +730,7 @@ impl Workspace {
             self.directories.push(directory.clone());
         }
         self.collapsed_workspaces.remove(&self.selected_directory);
-        let draft = self
-            .new_drafts
-            .get(&self.selected_directory)
-            .cloned()
-            .unwrap_or_default();
         self.command(Command::Detach);
-        self.attachments = draft.attachments;
-        self.composer.update(cx, |input, cx| {
-            input.set_value(draft.text, window, cx);
-        });
-        self.focus_input(window, cx);
-        cx.notify();
     }
 
     fn current(&self) -> Option<&SessionMeta> {
@@ -800,7 +822,56 @@ impl Workspace {
     }
 
     fn can_select_agent(&self) -> bool {
-        self.active.is_none() && self.current().is_none() && !self.creating
+        if self.creating || self.paste_pending || self.archived_list {
+            return false;
+        }
+        let Some(id) = self.active else {
+            return self.current().is_none();
+        };
+        !self.thread_has_user_prompt()
+            && self.connection_status() == status::ConnectionStatus::Connected
+            && self.current().is_some_and(|session| {
+                session.status == SessionStatus::Idle && session.active_turn.is_none()
+            })
+            && self.conversation.as_ref().is_some_and(|conversation| {
+                conversation.cursor >= conversation.session.revision.raw()
+            })
+            && !self.archive_blocked(id)
+            && !self.delete_pending.contains(&id)
+            && !self.configuring.contains(&id)
+            && !self.cancelling.contains(&id)
+            && !self.loading_attachments.contains(&id)
+            && !self
+                .outboxes
+                .get(&id)
+                .is_some_and(outbox::SessionOutbox::pending)
+            && self.approvals.is_empty()
+            && self.elicitation_panels.is_empty()
+    }
+
+    pub(super) fn thread_has_user_prompt(&self) -> bool {
+        // Unknown history is treated as started until a complete replay proves otherwise.
+        self.active
+            .is_some_and(|id| !self.unstarted_sessions.contains(&id))
+    }
+
+    fn record_user_prompt(&mut self, session: SessionId) {
+        self.prompted_sessions.insert(session);
+        self.unstarted_sessions.remove(&session);
+    }
+
+    fn observe_user_prompt(&mut self, event: &basr::model::Event) {
+        if matches!(
+            event.kind,
+            basr::model::EventKind::TurnStarted { .. }
+                | basr::model::EventKind::TurnFinished { .. }
+                | basr::model::EventKind::StatusChanged {
+                    status: SessionStatus::Working
+                }
+                | basr::model::EventKind::Acp(basr::acp::SessionUpdate::UserMessageChunk(_))
+        ) {
+            self.record_user_prompt(event.session);
+        }
     }
 
     fn start_agent_chat(&mut self, agent: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -814,15 +885,16 @@ impl Workspace {
         if !self.can_select_agent() {
             return;
         }
-        let draft = self.composer.read(cx).value().to_string();
-        let attachments = self.attachments.clone();
+        if self.active.is_some() && self.selected_agent == agent {
+            self.focus_input(window, cx);
+            return;
+        }
+        self.detach_thread(self.selected_directory.clone(), window, cx);
         self.selected_agent = agent;
-        self.new_thread(self.selected_directory.clone(), window, cx);
-        self.attachments = attachments;
-        self.composer
-            .update(cx, |input, cx| input.set_value(draft, window, cx));
         self.waiting_for_agent_selection = false;
         self.prepare_session(cx);
+        self.focus_input(window, cx);
+        cx.notify();
     }
 
     fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -843,6 +915,10 @@ impl Workspace {
             return;
         }
         self.error = None;
+        if self.composer_fills_thread() {
+            self.composer_expanded = false;
+            self.sync_composer_mode(cx);
+        }
         self.commands_dismissed = true;
         self.list.set_follow_mode(FollowMode::Tail);
         let outbox::Action::Send(draft) = self.outboxes.entry(session).or_default().start(
@@ -927,6 +1003,8 @@ impl Workspace {
                     for removed in self.catalog_ids.difference(&catalog_ids) {
                         self.drafts.remove(removed);
                         self.outboxes.remove(removed);
+                        self.unstarted_sessions.remove(removed);
+                        self.prompted_sessions.remove(removed);
                         self.removed_sessions.insert(*removed);
                     }
                     self.catalog_ids = catalog_ids;
@@ -939,6 +1017,9 @@ impl Workspace {
                             && conversation.session.id == meta.id
                         {
                             crate::conversation::merge_meta(meta, &conversation.session);
+                        }
+                        if meta.status == SessionStatus::Working || meta.active_turn.is_some() {
+                            self.record_user_prompt(meta.id);
                         }
                     }
                     catalog
@@ -993,6 +1074,17 @@ impl Workspace {
                     }
                     Ok(session) => {
                         let id = session.id;
+                        if current
+                            && session.status != SessionStatus::Working
+                            && session.active_turn.is_none()
+                            && !self.prompted_sessions.contains(&id)
+                        {
+                            self.unstarted_sessions.insert(id);
+                        }
+                        if session.status == SessionStatus::Working || session.active_turn.is_some()
+                        {
+                            self.record_user_prompt(id);
+                        }
                         if let Some(meta) = self.sessions.iter_mut().find(|meta| meta.id == id) {
                             crate::conversation::merge_meta(meta, &session);
                         } else {
@@ -1096,6 +1188,8 @@ impl Workspace {
                         }
                         self.drafts.remove(&session);
                         self.outboxes.remove(&session);
+                        self.unstarted_sessions.remove(&session);
+                        self.prompted_sessions.remove(&session);
                         self.seen_replies.remove(&session);
                         if self.pinned.contains(&session) {
                             self.toggle_pinned(session, cx);
@@ -1116,6 +1210,9 @@ impl Workspace {
                 attachments,
                 result,
             } => {
+                if result.is_ok() {
+                    self.record_user_prompt(session);
+                }
                 let action = self
                     .outboxes
                     .get_mut(&session)
@@ -1177,7 +1274,26 @@ impl Workspace {
                 {
                     conversation.merge_meta(&old.session);
                 }
+                let incomplete_history = events.iter().enumerate().any(|(index, event)| {
+                    event.session != session.id || event.cursor.raw() != index as u64 + 1
+                });
+                if incomplete_history {
+                    self.unstarted_sessions.remove(&session.id);
+                } else if !events.is_empty()
+                    && events
+                        .last()
+                        .is_some_and(|event| event.cursor >= conversation.session.revision)
+                    && !self.prompted_sessions.contains(&session.id)
+                {
+                    self.unstarted_sessions.insert(session.id);
+                }
+                if conversation.session.status == SessionStatus::Working
+                    || conversation.session.active_turn.is_some()
+                {
+                    self.record_user_prompt(session.id);
+                }
                 for event in events {
+                    self.observe_user_prompt(&event);
                     if let Some(outbox) = self.outboxes.get_mut(&event.session) {
                         outbox.observe(&event);
                     }
@@ -1191,6 +1307,7 @@ impl Workspace {
                 self.conversation = Some(conversation);
             }
             Update::Event { epoch, event } if epoch == self.epoch => {
+                self.observe_user_prompt(&event);
                 if let Some(meta) = self
                     .sessions
                     .iter_mut()

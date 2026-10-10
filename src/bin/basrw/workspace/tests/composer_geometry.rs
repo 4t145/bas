@@ -30,6 +30,17 @@ fn composer_controls_stay_aligned_after_resize_font_change_and_cursor_movement(
         cx.update_window(fixture.window.into(), |_, window, cx| {
             window.render_frame(cx);
             let left = window.find("add-attachment").bounds().left();
+            let panel = window.find("composer-panel").bounds();
+            let editor_bounds = window.find("composer-editor").bounds();
+            let expand = window.find("expand-message-editor").bounds();
+            let send = window.find("send-message").bounds();
+            assert_eq!(expand.center().x, send.center().x);
+            assert!(
+                expand.top() >= editor_bounds.top() && expand.bottom() <= editor_bounds.bottom()
+            );
+            assert!(panel.right() - send.right() <= px(6.));
+            assert_eq!(left - panel.left(), px(chat::COMPOSER_CONTROL_INSET + 1.));
+            assert!(window.try_find("composer-header").is_none());
             let composer = fixture.view.read(cx).composer.clone();
             assert_eq!(
                 composer
