@@ -101,12 +101,12 @@ $ ./target/release/basrctl session create --title demo
 Linux / NixOS 在仓库根目录运行：
 
 ```sh
-./scripts/install-basrd --service
+make install-basrd-service
 basrctl agents
 ```
 
 只安装 `basrd`、`basrctl` 并启用 systemd 用户服务；不创建或修改用户配置。
-只安装可执行程序可省略 `--service`。Codex、OpenCode、Pi 等外部后端可在 GUI 的 Agent 目录或 `basrctl agent install` 中按需安装，
+只安装可执行程序可使用 `make install-basrd`。Codex、OpenCode、Pi 等外部后端可在 GUI 的 Agent 目录或 `basrctl agent install` 中按需安装，
 也可沿用用户独立安装的程序和原生登录状态。
 旧 `--with-codex` 已移除，已有捆绑包和配置不会被自动删除或改写。
 官方安装链接、路径配置、迁移及服务管理见 [安装与后端配置](docs/install.md)。
@@ -165,11 +165,12 @@ JSON 支持完整参数数组，示例见 [contrib/settings.json](contrib/settin
 图形客户端与 `basrctl` 共用服务接口，`w` 表示 window。Linux / NixOS 安装：
 
 ```sh
-./scripts/install-basrw
+make install-basrw
 basrw --server 127.0.0.1:7337
 ```
 
-安装包包含图形运行库与桌面入口，basrd 服务单独运行。源码均加入 Git 后也可使用
+安装包包含图形运行库与桌面入口，basrd 服务单独运行。`make install` 同时安装 daemon、CLI 和 GUI；
+启用用户服务使用 `make install-basrd-service`。`make help` 列出安装目标与传递 Nix 参数的方式。源码均加入 Git 后也可使用
 `nix profile install .#basrw`；开发运行使用 `nix develop .#gui -c cargo run --features gui --bin basrw`。
 支持会话创建、搜索、切换、重命名、可恢复归档、流式对话与停止回合。默认构建不启用图形依赖。
 默认打开最小输入弹窗，Ctrl+Shift+M 展开 workspace / thread 窗口，并自动跟随 DMS 的 Zed 主题。

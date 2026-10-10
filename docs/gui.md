@@ -104,17 +104,17 @@ Wayland 下不显示合成器未提供的最小化、最大化操作，小窗切
 Linux / NixOS 可在仓库根目录安装到当前用户的 Nix profile：
 
 ```sh
-./scripts/install-basrw
+make install-basrw
 basrw --server 127.0.0.1:7337 --cwd /path/to/project
 # 完整窗口
 basrw --window
 ```
 
-安装脚本构建 release 版本，包含尚未加入 Git 的源码，并排除 `.env`、
+安装目标构建 release 版本，包含尚未加入 Git 的源码，并排除 `.env`、
 测试目录和构建输出。安装包包含运行时图形库的启动包装与 `BASR` 桌面菜单入口，
 日常启动不需要 `nix develop`。桌面标识仍为 `org.basr.Gui`，现有窗口规则可继续使用。
-安装不启动 basrd；服务可用 `./scripts/install-basrd --service` 安装，见 [安装与后端配置](install.md)。
-卸载使用 `nix profile remove basrw`；安装新的本地版本直接重跑 `./scripts/install-basrw`，
+安装不启动 basrd；服务可用 `make install-basrd-service` 安装，见 [安装与后端配置](install.md)。
+卸载使用 `nix profile remove basrw`；安装新的本地版本直接重跑 `make install-basrw`，
 脚本会替换同名的旧 profile 条目。
 
 源码均已加入 Git 后，也可以直接使用 flake 输出：

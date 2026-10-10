@@ -5,22 +5,30 @@
 在仓库根目录执行，Nix 需启用 flakes：
 
 ```sh
-./scripts/install-basrd --service
-./scripts/install-basrw
+make install-basrd-service
+make install-basrw
 basrctl agents
 basrw
 ```
 
-`install-basrd` 只安装 release 版 `basrd` 和 `basrctl`，不安装、更新或卸载任何外部
+`make install-basrd` 只安装 release 版 `basrd` 和 `basrctl`，不安装、更新或卸载任何外部
 ACP 适配器及其 CLI，也不创建或修改用户配置。外部后端可通过运行中的 daemon 按需从 ACP Registry 安装，或由用户按官方文档独立管理。
 未配置后端时只提供 `embedded` echo 后端。
-`--service` 链接并启用 systemd **用户服务**，立即启动；无需 root，服务使用当前用户的目录与登录状态。
-脚本包含尚未加入 Git 的源码，排除 `.env`、测试输出和构建目录。
+`make install-basrd-service` 还会链接并启用 systemd **用户服务**，立即启动；无需 root，服务使用当前用户的目录与登录状态。
+Makefile 复用 `scripts/install-basrd` 与 `scripts/install-basrw`，包含尚未加入 Git 的源码，排除 `.env`、测试输出和构建目录。
+
+`make install` 同时安装 daemon、CLI 和 GUI，不启用用户服务；即使使用 `make -j`，
+安装目标也会顺序执行，避免同时修改同一个 Nix profile。`make help` 列出所有目标。
+额外的 `nix profile install` 参数通过 `NIX_PROFILE_OPTIONS` 传递，例如：
+
+```sh
+make install NIX_PROFILE_OPTIONS='--profile /path/to/profile -L'
+```
 
 仅安装守护进程、不启用服务：
 
 ```sh
-./scripts/install-basrd
+make install-basrd
 basrd
 ```
 
@@ -171,7 +179,7 @@ BASR 不锁定、注入或覆盖 CLI 路径。需要自定义 CLI 时遵循上�
 ### 从旧版捆绑安装迁移
 
 `--with-codex` 已移除，使用它会在任何安装动作前报错并指向本文；改用
-`./scripts/install-basrd --service`。更新 BASR 不会卸载旧适配器，也不会修改已有配置。
+`make install-basrd-service`。更新 BASR 不会卸载旧适配器，也不会修改已有配置。
 以前安装的 `~/.nix-profile/bin/codex-acp` 可能仍然存在，已有配置也可能继续指向它。
 请按官方文档独立安装适配器，检查 `command -v codex-acp` 的结果和服务实际使用的路径，
 再自行把后端命令改为所选安装路径。旧 profile 条目由用户决定是否保留；
@@ -231,12 +239,12 @@ BASRD_HISTORY=8192
 服务的 PATH 包含 `~/.local/bin`、`~/.nix-profile/bin` 和系统软件路径；
 其他位置的 ACP 程序应在 `settings.json` 的 `daemon.agents` 中使用绝对路径。此运行时环境文件不进入 Nix 安装包。
 
-更新本地安装时重新运行安装脚本即可：脚本会替换同名的旧 profile 条目，`--service` 还会重启
+更新本地安装时重新运行安装目标即可：脚本会替换同名的旧 profile 条目，`install-basrd-service` 还会重启
 用户服务，让新可执行文件立即生效；后端配置保留。
 
 ```sh
-./scripts/install-basrd --service
-./scripts/install-basrw
+make install-basrd-service
+make install-basrw
 ```
 
 新安装的 daemon 默认将会话元数据和历史持久化于用户状态目录；不需要持久化时可在环境文件中设置
