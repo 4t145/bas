@@ -1,5 +1,7 @@
 use basr::acp::{ContentChunk, SessionUpdate, ToolCall, ToolCallStatus};
 use basr::model::{StopReason, TurnId};
+use gpui_kit::InputEvent as _;
+use std::rc::Rc;
 
 use super::*;
 
@@ -61,6 +63,100 @@ fn deliver(
             .map(Item::id)
             .collect()
     })
+}
+
+fn assert_global_navigation_group(window: &Window, compact: bool) {
+    let host = window
+        .find(if compact {
+            "compact-header"
+        } else {
+            "conversation-status"
+        })
+        .bounds();
+    let group = window.find("conversation-navigation").bounds();
+    let top = window.find("scroll-to-top").bounds();
+    let bottom = window.find("scroll-to-bottom").bounds();
+    assert!(top.right() <= bottom.left());
+    assert!(bottom.left() - top.right() <= px(8.));
+    assert_eq!(top.top(), bottom.top());
+    assert_eq!(top.bottom(), bottom.bottom());
+    assert!(group.left() <= top.left() && bottom.right() <= group.right());
+    assert!(host.left() <= group.left() && group.right() <= host.right());
+    assert!(host.top() <= group.top() && group.bottom() <= host.bottom());
+    if !compact {
+        assert_eq!(group.right(), host.right());
+    }
+}
+
+struct ActionStyleProbe {
+    color: Rc<Cell<Option<gpui_kit::Hsla>>>,
+}
+
+impl Render for ActionStyleProbe {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let color = self.color.clone();
+        div().p_4().child(
+            crate::workspace::message_actions::action_button(
+                "secondary-action",
+                IconName::Copy,
+                cx,
+            )
+            .on_click(|_, _, _| {})
+            .child(
+                gpui_kit::canvas(
+                    move |_, window, _| color.set(Some(window.text_style().color)),
+                    |_, _, _, _| {},
+                )
+                .size(px(1.)),
+            ),
+        )
+    }
+}
+
+#[gpui_kit::test]
+fn secondary_action_icons_keep_their_muted_foreground_when_hovered(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::init_default(cx);
+    });
+    let color = Rc::new(Cell::new(None));
+    let observed = color.clone();
+    let window = cx.open_window(size(px(320.), px(180.)), |window, cx| {
+        let probe = cx.new(|_| ActionStyleProbe { color: observed });
+        Root::new(probe, window, cx)
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            Theme::change(mode, Some(window), cx);
+            window.dispatch_event(
+                gpui_kit::MouseMoveEvent {
+                    position: gpui_kit::point(px(300.), px(160.)),
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+            let idle = color
+                .get()
+                .expect("the rendered action's inherited foreground");
+            let muted = cx.theme().muted_foreground;
+            assert_eq!((idle.h, idle.s, idle.l), (muted.h, muted.s, muted.l));
+            assert!(
+                idle.a < muted.a,
+                "actions have lower emphasis than auxiliary text"
+            );
+            assert_ne!(idle, cx.theme().foreground);
+            window.hover("secondary-action", cx);
+            assert_eq!(
+                color.get(),
+                Some(idle),
+                "native hover retains the muted icon color instead of restoring bright foreground"
+            );
+        }
+    })
+    .expect("action colors in both themes");
 }
 
 #[gpui_kit::test]
@@ -138,7 +234,12 @@ fn completed_response_actions_copy_markdown_and_navigate_grouped_timeline_rows(
             fixture.view.read(cx).list.set_follow_mode(FollowMode::Tail);
             window.render_frame(cx);
             assert!(window.find(format!("message-actions-{}", ids[9])).visible());
-            assert!(window.find(format!("scroll-to-top-{}", ids[9])).visible());
+            assert!(
+                window
+                    .try_find(format!("scroll-to-top-{}", ids[9]))
+                    .is_none()
+            );
+            assert_global_navigation_group(window, compact);
             let list = &fixture.view.read(cx).list;
             assert!(
                 window.find(ids[9].clone()).bounds().size.height
@@ -162,7 +263,7 @@ fn completed_response_actions_copy_markdown_and_navigate_grouped_timeline_rows(
             );
 
             fixture.view.read(cx).list.set_follow_mode(FollowMode::Tail);
-            window.click(format!("scroll-to-top-{}", ids[9]), cx);
+            window.click("scroll-to-top", cx);
             let top = fixture.view.read(cx).list.logical_scroll_top();
             assert_eq!(top.item_ix, 0);
             assert_eq!(top.offset_in_item, px(0.));
@@ -170,6 +271,8 @@ fn completed_response_actions_copy_markdown_and_navigate_grouped_timeline_rows(
             let top = fixture.view.read(cx).list.logical_scroll_top();
             assert_eq!(top.item_ix, 0);
             assert_eq!(top.offset_in_item, px(0.));
+            window.click("scroll-to-bottom", cx);
+            assert!(fixture.view.read(cx).list.is_following_tail());
         }
     })
     .expect("response actions in both window modes");
@@ -341,6 +444,12 @@ fn tool_and_thought_tail_actions_stay_outside_collapsed_activity_and_target_the_
                 let row = window.find(row_id.clone()).bounds();
                 let actions = window.find(format!("message-actions-{tail_id}"));
                 assert!(actions.visible());
+                assert!(
+                    window
+                        .try_find(format!("scroll-to-top-{tail_id}"))
+                        .is_none()
+                );
+                assert_global_navigation_group(window, compact);
                 let actions = actions.bounds();
                 let disclosure = window
                     .find(if grouped {
@@ -377,7 +486,7 @@ fn tool_and_thought_tail_actions_stay_outside_collapsed_activity_and_target_the_
                 );
                 fixture.view.read(cx).list.set_follow_mode(FollowMode::Tail);
                 window.render_frame(cx);
-                window.click(format!("scroll-to-top-{tail_id}"), cx);
+                window.click("scroll-to-top", cx);
                 assert_eq!(fixture.view.read(cx).list.logical_scroll_top().item_ix, 0);
             }
 
@@ -463,6 +572,7 @@ fn startup_response_copies_in_initialization_and_navigates_safely_in_the_timelin
                 .try_find(format!("scroll-to-top-{startup}"))
                 .is_none()
         );
+        assert!(window.try_find("conversation-navigation").is_none());
         window.click(format!("copy-response-{startup}"), cx);
         assert_eq!(
             cx.read_from_clipboard().expect("startup copy").text(),
@@ -477,7 +587,13 @@ fn startup_response_copies_in_initialization_and_navigates_safely_in_the_timelin
                 view.resize_window(window, cx);
             });
             window.render_frame(cx);
-            window.click(format!("scroll-to-top-{startup}"), cx);
+            assert!(
+                window
+                    .try_find(format!("scroll-to-top-{startup}"))
+                    .is_none()
+            );
+            assert_global_navigation_group(window, compact);
+            window.click("scroll-to-top", cx);
             window.click(format!("scroll-to-user-{startup}"), cx);
             assert!(fixture.view.read(cx).list.is_following_tail());
         }

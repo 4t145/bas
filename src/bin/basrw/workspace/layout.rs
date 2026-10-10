@@ -312,6 +312,8 @@ impl Workspace {
             })
             .child(
                 div()
+                    .id("compact-header")
+                    .test_support()
                     .flex()
                     .items_center()
                     .gap_1()
@@ -364,6 +366,9 @@ impl Workspace {
                                 window.start_window_move()
                             }),
                     )
+                    .when(self.active.is_some() && self.output_open, |header| {
+                        header.child(self.render_conversation_navigation(cx))
+                    })
                     .when_some(
                         self.current().filter(|session| session.archived),
                         |row, session| {

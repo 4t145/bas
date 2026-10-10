@@ -3,7 +3,28 @@ use gpui_kit::ListOffset;
 
 use super::*;
 
-const ACTIONS_OPACITY: f32 = 0.4;
+const ACTION_FOREGROUND_OPACITY: f32 = 0.5;
+const ACTION_HOVER_OPACITY: f32 = 0.35;
+const ACTION_ACTIVE_OPACITY: f32 = 0.55;
+
+pub(super) fn action_button(
+    id: impl Into<gpui_kit::ElementId>,
+    icon: IconName,
+    cx: &App,
+) -> Button {
+    let color = cx
+        .theme()
+        .muted_foreground
+        .opacity(ACTION_FOREGROUND_OPACITY);
+    layout::icon_button(id, icon)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .foreground(color)
+                .hover(cx.theme().muted.opacity(ACTION_HOVER_OPACITY))
+                .active(cx.theme().muted.opacity(ACTION_ACTIVE_OPACITY)),
+        )
+        .text_color(color)
+}
 
 struct Response {
     text: String,
@@ -107,13 +128,12 @@ impl Workspace {
                 .justify_end()
                 .gap_1()
                 .pt_1()
-                .opacity(ACTIONS_OPACITY)
-                .hover(|style| style.opacity(1.))
                 .when(!context.text.is_empty(), |actions| {
                     actions.child(
-                        layout::icon_button(
+                        action_button(
                             SharedString::from(format!("copy-response-{id}")),
                             IconName::Copy,
+                            cx,
                         )
                         .accessibility_label("复制本轮回复")
                         .tooltip("复制本轮回复")
@@ -123,36 +143,18 @@ impl Workspace {
                     )
                 })
                 .when(navigation, |actions| {
-                    actions
-                        .child(
-                            layout::icon_button(
-                                SharedString::from(format!("scroll-to-user-{id}")),
-                                IconName::CornerLeftUp,
-                            )
-                            .accessibility_label("返回用户消息")
-                            .tooltip("返回用户消息")
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.scroll_to_response_user(user_item, cx);
-                                },
-                            )),
+                    actions.child(
+                        action_button(
+                            SharedString::from(format!("scroll-to-user-{id}")),
+                            IconName::CornerLeftUp,
+                            cx,
                         )
-                        .when(context.latest, |actions| {
-                            actions.child(
-                                layout::icon_button(
-                                    SharedString::from(format!("scroll-to-top-{id}")),
-                                    IconName::ArrowUp,
-                                )
-                                .accessibility_label("回到对话顶部")
-                                .tooltip("回到对话顶部")
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.list.scroll_to(ListOffset::default());
-                                        cx.notify();
-                                    },
-                                )),
-                            )
-                        })
+                        .accessibility_label("返回用户消息")
+                        .tooltip("返回用户消息")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.scroll_to_response_user(user_item, cx);
+                        })),
+                    )
                 })
                 .into_any_element(),
         )

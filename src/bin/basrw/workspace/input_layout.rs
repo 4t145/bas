@@ -4,6 +4,7 @@ use gpui_kit::{
 };
 
 const COMPACT_MAX_ROWS: usize = 4;
+const WINDOW_MIN_ROWS: usize = 4;
 const WINDOW_MAX_ROWS: usize = 10;
 const EXPANDED_MIN_ROWS: usize = 12;
 const EXPANDED_MAX_ROWS: usize = 20;
@@ -16,15 +17,10 @@ pub(super) fn visible_rows(
 ) -> usize {
     let (minimum, maximum) = if expanded {
         (EXPANDED_MIN_ROWS, EXPANDED_MAX_ROWS)
+    } else if compact {
+        (1, COMPACT_MAX_ROWS)
     } else {
-        (
-            1,
-            if compact {
-                COMPACT_MAX_ROWS
-            } else {
-                WINDOW_MAX_ROWS
-            },
-        )
+        (WINDOW_MIN_ROWS, WINDOW_MAX_ROWS)
     };
     measured_rows.max(logical_rows).clamp(minimum, maximum)
 }

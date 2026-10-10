@@ -28,13 +28,14 @@ pub(super) fn bind_keys(cx: &mut App) {
 
 impl Workspace {
     pub(super) fn composer_expansion_button(&self, cx: &mut Context<Self>) -> Button {
-        layout::icon_button(
+        message_actions::action_button(
             "expand-message-editor",
             if self.composer_expanded {
                 IconName::Minimize2
             } else {
                 IconName::Maximize2
             },
+            cx,
         )
         .tooltip(if self.composer_expanded {
             "收起消息编辑器 · Alt Shift Escape"

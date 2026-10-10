@@ -1286,8 +1286,9 @@ fn composer_toolbar_keeps_options_attachments_and_send_on_one_row_in_both_modes(
                     .expect("caret layout")
                     .0
                     .left(),
-                window.find("add-attachment").bounds().left(),
-                "the text caret and first toolbar button share the left edge"
+                window.find("add-attachment").bounds().center().x
+                    - px(forms::TOOLBAR_AGENT_ICON_SIZE / 2.),
+                "the text caret aligns with the first toolbar icon"
             );
             for id in ["add-attachment", "config-thinking"] {
                 let control = window.find(id);
@@ -1327,7 +1328,7 @@ fn explicit_line_break_at_end_increases_the_editor_height(cx: &mut TestAppContex
     attach(&fixture, session(), cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
-        window.input("line", cx);
+        window.input("line\nline\nline\nline", cx);
         window.render_frame(cx);
         let initial_height = window.find("composer-editor").bounds().size.height;
         window.press("shift-enter", cx);

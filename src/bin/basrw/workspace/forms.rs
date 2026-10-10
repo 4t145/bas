@@ -2,6 +2,8 @@ use super::*;
 use gpui_kit::KeyDownEvent;
 use gpui_kit::component::menu::PopupMenuItem;
 
+pub(super) const TOOLBAR_AGENT_ICON_SIZE: f32 = 12.;
+
 impl Workspace {
     pub(super) fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editing_title || self.renaming || self.current().is_none() {
@@ -266,7 +268,6 @@ impl Workspace {
     }
 
     pub(super) fn agent_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        const TOOLBAR_AGENT_ICON_SIZE: f32 = 12.;
         let agents: Vec<_> = self.agents.iter().map(|agent| agent.id.clone()).collect();
         let selected = self
             .current()

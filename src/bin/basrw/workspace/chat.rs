@@ -11,6 +11,8 @@ pub(super) const COMPOSER_SIDE_PADDING: f32 = 4.;
 pub(super) const COMPOSER_TOOLBAR_HEIGHT: f32 = 24.;
 pub(super) const COMPOSER_BOTTOM_PADDING: f32 = 2.;
 pub(super) const COMPOSER_CONTROL_INSET: f32 = 4.;
+const COMPOSER_TEXT_INSET: f32 =
+    COMPOSER_CONTROL_INSET + (layout::ICON_BUTTON_SIZE - forms::TOOLBAR_AGENT_ICON_SIZE) / 2.;
 const COMPOSER_CONTROL_GAP: f32 = 4.;
 const INITIALIZATION_MESSAGES_MAX_HEIGHT: f32 = 160.;
 const APPROVAL_PANEL_HEIGHT: f32 = 240.;
@@ -120,6 +122,7 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap_2()
+                        .pl(px(COMPOSER_CONTROL_INSET + 1.))
                         .py_1()
                         .child(self.agent_button(cx))
                         .child(self.connection_indicator("conversation-connection", cx))
@@ -130,23 +133,39 @@ impl Workspace {
                         .child(div().flex_1())
                         .when(
                             self.active.is_some() && !self.composer_fills_thread(),
-                            |row| {
-                                row.child(
-                                    Button::new("scroll-to-bottom")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::ArrowDown)
-                                        .tooltip("滚动到最新输出")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.list.set_follow_mode(FollowMode::Tail);
-                                            cx.notify();
-                                        })),
-                                )
-                            },
+                            |row| row.child(self.render_conversation_navigation(cx)),
                         ),
                 ),
             )
             .child(self.render_composer(cx))
+            .into_any_element()
+    }
+
+    pub(super) fn render_conversation_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("conversation-navigation")
+            .test_support()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                message_actions::action_button("scroll-to-top", IconName::ArrowUp, cx)
+                    .accessibility_label("滚动到对话顶部")
+                    .tooltip("滚动到对话顶部")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.list.scroll_to(gpui_kit::ListOffset::default());
+                        cx.notify();
+                    })),
+            )
+            .child(
+                message_actions::action_button("scroll-to-bottom", IconName::ArrowDown, cx)
+                    .accessibility_label("滚动到最新输出")
+                    .tooltip("滚动到最新输出")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.list.set_follow_mode(FollowMode::Tail);
+                        cx.notify();
+                    })),
+            )
             .into_any_element()
     }
 
@@ -495,7 +514,7 @@ impl Workspace {
                                             // Trim the component's measured blank inset while
                                             // retaining its editing, selection and overlay behavior.
                                             .ml(-(self.composer_content_left.get()
-                                                - px(COMPOSER_CONTROL_INSET))
+                                                - px(COMPOSER_TEXT_INSET))
                                             .max(px(0.)))
                                             .font_family(cx.theme().font_family.clone())
                                             .text_size(theme::content_font_size(cx))
