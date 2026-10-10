@@ -21,13 +21,32 @@ fn enter_preference_saved_in_settings_updates_workspace_without_taking_focus(
     let fixture = fixture(cx);
     attach(&fixture, session(), cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.activate_window();
         fixture.view.update(cx, |view, cx| {
             view.composer.update(cx, |input, cx| {
                 input.set_value("尚未发送的草稿", window, cx)
             });
             view.begin_rename(window, cx);
-            view.open_settings(window, cx);
         });
+        window.render_frame(cx);
+    })
+    .expect("show the title editor before opening settings");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.is_window_active());
+        assert!(
+            fixture
+                .view
+                .read(cx)
+                .rename
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        );
+        fixture
+            .view
+            .update(cx, |view, cx| view.open_settings(window, cx));
     })
     .expect("open independent settings window");
     let settings = settings_window(cx);
@@ -45,10 +64,17 @@ fn enter_preference_saved_in_settings_updates_workspace_without_taking_focus(
     cx.executor().run_until_parked();
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
+        assert!(!window.is_window_active());
+    })
+    .expect("draw the inactive workspace to dispatch title Blur");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
         let view = fixture.view.read(cx);
         assert_eq!(view.composer_mode, composer::Mode::Newline);
         assert_eq!(view.composer.read(cx).value(), "尚未发送的草稿");
-        assert!(view.rename.read(cx).focus_handle(cx).is_focused(window));
+        assert!(view.title_edit.is_none());
+        assert!(!view.composer.read(cx).focus_handle(cx).is_focused(window));
         assert!(!window.is_window_active());
     })
     .expect("workspace updates without becoming active");
@@ -215,6 +241,9 @@ fn settings_focus_keeps_background_replies_unread_and_late_updates_do_not_activa
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
             view.begin_rename(window, cx);
+            view.rename.update(cx, |input, cx| {
+                input.set_value("title saved before settings", window, cx);
+            });
             view.save_title(cx);
             view.open_settings(window, cx);
         });

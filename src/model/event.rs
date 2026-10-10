@@ -85,6 +85,12 @@ pub struct Event {
 }
 
 impl Event {
+    /// Live notices have no replay cursor and never enter session history.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        matches!(&self.kind, EventKind::Acp(acp::SessionUpdate::Notice(_)))
+    }
+
     #[must_use]
     pub fn new(session: SessionId, cursor: Cursor, kind: EventKind) -> Self {
         Self {

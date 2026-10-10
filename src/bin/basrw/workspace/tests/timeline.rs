@@ -29,6 +29,11 @@ fn startup_agent_message_stays_formatted_and_separate_from_the_first_turn(cx: &m
             startup_id = view.conversation.as_ref().expect("conversation").items[0].id();
         });
         window.render_frame(cx);
+        assert!(
+            window
+                .try_find(format!("message-source-{startup_id}"))
+                .is_none()
+        );
         let document = fixture.view.read(cx).markdown.borrow()[&format!("{startup_id}-0")]
             .state
             .clone();
@@ -83,6 +88,9 @@ fn startup_agent_message_stays_formatted_and_separate_from_the_first_turn(cx: &m
             view.composer_expanded = false;
         });
         window.render_frame(cx);
+        for id in &ids {
+            assert!(window.try_find(format!("message-source-{id}")).is_none());
+        }
         let startup = window.find(ids[0].clone()).bounds();
         let user = window.find(ids[1].clone()).bounds();
         let reply = window.find(ids[2].clone()).bounds();

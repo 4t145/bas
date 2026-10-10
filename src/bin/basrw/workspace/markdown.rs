@@ -18,9 +18,10 @@ impl Workspace {
         text: String,
         index: usize,
         cx: &mut Context<Self>,
-    ) -> TextView {
+    ) -> AnyElement {
+        let images = self.content_images(&id, index, cx);
         let mut documents = self.markdown.borrow_mut();
-        let document = documents.entry(id).or_insert_with(|| {
+        let document = documents.entry(id.clone()).or_insert_with(|| {
             let state = cx.new(|cx| TextViewState::markdown(&text, cx));
             // Parsing can finish after the virtual list measured the row.
             let subscription = cx.observe(&state, move |this, _, cx| {
@@ -49,7 +50,12 @@ impl Workspace {
             });
             document.source = text;
         }
-        view(&document.state, cx)
+        images::wrap(
+            &id,
+            &images,
+            view(&document.state, cx).into_any_element(),
+            cx,
+        )
     }
 }
 

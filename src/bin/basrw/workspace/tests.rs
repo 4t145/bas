@@ -19,12 +19,16 @@ mod elicitation;
 mod message_actions;
 mod navigation;
 mod picker;
+mod protocol_elements;
 mod rename;
 mod rows;
 mod settings;
 mod thread_actions;
 mod timeline;
+mod tool_content;
 mod tooltips;
+mod usage;
+mod workspaces;
 
 fn receipt(cursor: u64) -> basr::model::TurnReceipt {
     basr::model::TurnReceipt {
@@ -926,50 +930,53 @@ fn streamed_markdown_keeps_its_entity_and_renders_user_formatting(cx: &mut TestA
     let fixture = fixture(cx);
     let session = session();
     attach(&fixture, session.clone(), cx);
-    cx.update_window(fixture.window.into(), |_, window, cx| {
-        fixture.view.update(cx, |view, cx| {
+    let document_id = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            let mut first_document = None;
             for (cursor, text) in [(1, "**粗"), (2, "体** 与 [链接](https://example.com)")] {
-                view.update(
-                    Update::Event {
-                        epoch: view.epoch,
-                        event: Event::new(
-                            session.id,
-                            Cursor::from_raw(cursor),
-                            EventKind::Acp(basr::acp::SessionUpdate::UserMessageChunk(
-                                basr::acp::ContentChunk::new(text.into()),
-                            )),
-                        ),
-                    },
-                    window,
-                    cx,
-                );
+                fixture.view.update(cx, |view, cx| {
+                    view.update(
+                        Update::Event {
+                            epoch: view.epoch,
+                            event: Event::new(
+                                session.id,
+                                Cursor::from_raw(cursor),
+                                EventKind::Acp(basr::acp::SessionUpdate::UserMessageChunk(
+                                    basr::acp::ContentChunk::new(text.into()),
+                                )),
+                            ),
+                        },
+                        window,
+                        cx,
+                    );
+                });
+                window.render_frame(cx);
+                let view = fixture.view.read(cx);
+                let item = &view.conversation.as_ref().expect("conversation").items[0];
+                let id = format!("{}-0", item.id());
+                let entity = view.markdown.borrow()[&id].state.entity_id();
+                if let Some((first_id, first_entity)) = &first_document {
+                    assert_eq!(&id, first_id);
+                    assert_eq!(entity, *first_entity);
+                } else {
+                    first_document = Some((id, entity));
+                }
             }
-            let first = view.markdown("probe".into(), "**粗".into(), 0, cx);
-            drop(first);
-            let entity = view.markdown.borrow()["probe"].state.entity_id();
-            drop(view.markdown(
-                "probe".into(),
-                "**粗体** 与 [链接](https://example.com)".into(),
-                0,
-                cx,
-            ));
-            assert_eq!(view.markdown.borrow()["probe"].state.entity_id(), entity);
-        });
-        window.render_frame(cx);
-        window.press("ctrl-shift-m", cx);
-        window.press("ctrl-o", cx);
-        window.render_frame(cx);
-        let view = fixture.view.read(cx);
-        let id = view.conversation.as_ref().expect("conversation").items[0].id();
-        assert!(
-            window.find(SharedString::from(id)).visible(),
-            "compact mode also shows user messages"
-        );
-    })
-    .expect("window");
+            window.press("ctrl-shift-m", cx);
+            window.press("ctrl-o", cx);
+            window.render_frame(cx);
+            let view = fixture.view.read(cx);
+            let id = view.conversation.as_ref().expect("conversation").items[0].id();
+            assert!(
+                window.find(SharedString::from(id)).visible(),
+                "compact mode also shows user messages"
+            );
+            first_document.expect("first streamed document").0
+        })
+        .expect("window");
     cx.run_until_parked();
     cx.update(|cx| {
-        let document = fixture.view.read(cx).markdown.borrow()["probe"]
+        let document = fixture.view.read(cx).markdown.borrow()[&document_id]
             .state
             .clone();
         document.update(cx, |state, cx| {
@@ -1236,16 +1243,69 @@ fn compact_menu_actions_use_the_parent_window(cx: &mut TestAppContext) {
         window.within("popup-menu").click(add_index, cx);
     })
     .expect("workspace popup");
+    cx.run_until_parked();
+    let add_popup = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let view = fixture.view.read(cx);
+            assert!(view.compact);
+            assert_eq!(view.composer.read(cx).value(), "保留草稿");
+            assert!(!cx.windows().contains(&popup));
+            view.menu
+                .as_ref()
+                .expect("workspace source menu")
+                .window
+                .expect("native source popup")
+        })
+        .expect("parent preserves compact draft while choosing workspace source");
+    cx.update_window(add_popup, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("popup-menu").click(1usize, cx);
+        assert!(fixture.view.read(cx).menu.is_some());
+        assert!(fixture.commands.try_recv().is_err());
+    })
+    .expect("unavailable remote source leaves its menu open");
+    assert!(!cx.did_prompt_for_paths());
+    cx.update_window(add_popup, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("popup-menu").click(0usize, cx);
+    })
+    .expect("local workspace source opens directory chooser");
+    cx.run_until_parked();
+    assert!(!cx.did_prompt_for_paths());
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.simulate_next_frame(cx);
+    })
+    .expect("deliver activation frame before the native chooser");
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_paths());
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
         let view = fixture.view.read(cx);
         assert!(view.menu.is_none());
-        assert!(!view.compact);
-        assert!(view.editing_workspace);
-        assert!(view.cwd.read(cx).focus_handle(cx).is_focused(window));
-        assert!(!cx.windows().contains(&popup));
+        assert!(view.compact);
+        assert_eq!(view.composer.read(cx).value(), "保留草稿");
+        assert!(!cx.windows().contains(&add_popup));
+        assert!(fixture.commands.try_recv().is_err());
     })
-    .expect("parent window");
+    .expect("native chooser leaves the compact parent intact");
+    cx.simulate_path_prompt_response(|options| {
+        assert!(!options.files);
+        assert!(options.directories);
+        assert!(!options.multiple);
+        None
+    });
+    cx.run_until_parked();
+    assert!(!cx.did_prompt_for_paths());
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let view = fixture.view.read(cx);
+        assert!(view.compact);
+        assert_eq!(view.composer.read(cx).value(), "保留草稿");
+        assert!(view.composer.read(cx).focus_handle(cx).is_focused(window));
+        assert!(fixture.commands.try_recv().is_err());
+    })
+    .expect("cancelled folder selection keeps draft and sends no create request");
 }
 
 #[gpui_kit::test]

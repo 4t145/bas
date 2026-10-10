@@ -114,6 +114,7 @@ impl Attachment {
             }
             let events = self.events.as_mut().ok_or(AttachError::Closed)?;
             match events.recv().await {
+                Ok(event) if event.is_transient() => return Ok(event),
                 Ok(event) if event.cursor <= self.cursor => {}
                 Ok(event) if self.persistent.is_some() && event.cursor > self.cursor.next() => {
                     if let Some((_, _, snapshot)) = &mut self.persistent {

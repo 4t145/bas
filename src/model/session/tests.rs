@@ -5,6 +5,42 @@ fn metadata() -> SessionMeta {
 }
 
 #[test]
+fn agent_timestamp_survives_event_clock_updates_and_explicit_clear() {
+    let mut meta = metadata();
+    let update: crate::acp::SessionUpdate = serde_json::from_value(serde_json::json!({
+        "sessionUpdate": "session_info_update",
+        "title": "Agent title",
+        "updatedAt": "2026-10-10T08:00:00+08:00"
+    }))
+    .expect("session info update");
+    assert!(meta.apply_event(&Event::new(
+        meta.id,
+        Cursor::from_raw(1),
+        EventKind::Acp(update)
+    )));
+    let reported = meta.agent_updated_at.expect("valid agent timestamp");
+    assert_eq!(reported.millis(), 1_791_590_400_000);
+    assert!(meta.apply_event(&Event::new(
+        meta.id,
+        Cursor::from_raw(2),
+        EventKind::ArchiveChanged { archived: true }
+    )));
+    assert_eq!(meta.agent_updated_at, Some(reported));
+    let invalid: crate::acp::SessionUpdate = serde_json::from_value(serde_json::json!({
+        "sessionUpdate": "session_info_update", "updatedAt": "invalid"
+    }))
+    .expect("invalid timestamp remains an SDK string");
+    meta.apply_acp(&invalid);
+    assert_eq!(meta.agent_updated_at, Some(reported));
+    let clear: crate::acp::SessionUpdate = serde_json::from_value(serde_json::json!({
+        "sessionUpdate": "session_info_update", "updatedAt": null
+    }))
+    .expect("explicit clear");
+    meta.apply_acp(&clear);
+    assert_eq!(meta.agent_updated_at, None);
+}
+
+#[test]
 fn stale_or_foreign_events_cannot_overwrite_a_newer_snapshot() {
     let mut meta = metadata();
     let active = TurnId::new();

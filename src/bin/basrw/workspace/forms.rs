@@ -1,43 +1,9 @@
 use super::*;
-use gpui_kit::KeyDownEvent;
 use gpui_kit::component::menu::PopupMenuItem;
 
 pub(super) const TOOLBAR_AGENT_ICON_SIZE: f32 = 12.;
 
 impl Workspace {
-    pub(super) fn begin_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editing_title || self.renaming || self.current().is_none() {
-            return;
-        }
-        let text = self.current().map(title).unwrap_or_default();
-        self.editing_title = true;
-        self.rename.update(cx, |input, cx| {
-            input.set_value(text, window, cx);
-            input.focus(window, cx);
-        });
-        cx.notify();
-    }
-
-    pub(super) fn save_title(&mut self, cx: &mut Context<Self>) {
-        if !self.editing_title || self.renaming {
-            return;
-        }
-        let title = self.rename.read(cx).value().trim().to_owned();
-        let Some(session) = self.active.filter(|_| !title.is_empty()) else {
-            return;
-        };
-        self.renaming = true;
-        self.error = None;
-        self.command(Command::Rename { session, title });
-        cx.notify();
-    }
-
-    pub(super) fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.editing_title = false;
-        self.focus_input(window, cx);
-        cx.notify();
-    }
-
     fn title_slot(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("thread-title-slot")
@@ -47,39 +13,11 @@ impl Workspace {
             .h_8()
             .flex()
             .items_center()
-            .gap_2()
-            .when(self.editing_title, |slot| {
-                slot.on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    if event.keystroke.key == "escape" {
-                        this.cancel_rename(window, cx);
-                        cx.stop_propagation();
-                    }
-                }))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(Input::new(&self.rename).small().disabled(self.renaming)),
-                )
-                .child(
-                    Button::new("save-title")
-                        .primary()
-                        .small()
-                        .label("保存")
-                        .disabled(self.renaming || self.rename.read(cx).value().trim().is_empty())
-                        .on_click(cx.listener(|this, _, _, cx| this.save_title(cx))),
-                )
-                .child(
-                    Button::new("cancel-rename")
-                        .ghost()
-                        .small()
-                        .label("取消")
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.cancel_rename(window, cx)),
-                        ),
-                )
+            .gap_1()
+            .when(self.renaming_header(), |slot| {
+                slot.child(self.render_title_editor(cx))
             })
-            .when(!self.editing_title, |slot| {
+            .when(!self.renaming_header(), |slot| {
                 slot.child(
                     div()
                         .id("rename-session")
@@ -92,7 +30,7 @@ impl Workspace {
                         .child(
                             self.current()
                                 .map(title)
-                                .unwrap_or_else(|| "新 thread".into()),
+                                .unwrap_or_else(|| self.draft_title()),
                         )
                         .on_click(cx.listener(|this, _, window, cx| this.begin_rename(window, cx))),
                 )
@@ -211,6 +149,7 @@ impl Workspace {
         let groups = self.grouped_threads(&sessions, "");
         let directories: Vec<_> = groups.into_iter().map(|group| group.directory).collect();
         let selected = self.selected_directory.clone();
+        let name = groups::name(selected.as_deref());
         let hint = groups::path_label(selected.as_deref());
         let view = cx.entity().downgrade();
         let parent = self.window;
@@ -219,6 +158,7 @@ impl Workspace {
             .xsmall()
             .h(px(layout::ICON_BUTTON_SIZE))
             .icon(IconName::Folder)
+            .accessibility_label(name.clone())
             .when(self.compact, |button| {
                 button
                     .w(px(layout::ICON_BUTTON_SIZE))
@@ -226,7 +166,18 @@ impl Workspace {
                     .p_0()
             })
             .when(!self.compact, |button| {
-                button.label(groups::name(selected.as_deref()))
+                button.child(
+                    div()
+                        .id("workspace-picker-label")
+                        .test_support()
+                        .role(gpui_kit::Role::Label)
+                        .aria_label(name.clone())
+                        .min_w_0()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_sm()
+                        .child(name),
+                )
             });
         let menu = self.menu_button(
             button,
@@ -255,8 +206,9 @@ impl Workspace {
                             let view = view.clone();
                             move |_, window, cx| {
                                 menus::in_parent(parent, window, cx, |window, cx| {
-                                    let _ =
-                                        view.update(cx, |this, cx| this.edit_workspace(window, cx));
+                                    let _ = view.update(cx, |this, cx| {
+                                        this.open_workspace_add_menu(window, cx)
+                                    });
                                 });
                             }
                         }),
@@ -384,66 +336,6 @@ impl Workspace {
             )
         };
         crate::tooltip::bounded("agent-picker-hint", menu, hint)
-    }
-
-    pub(super) fn edit_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.compact {
-            self.toggle_mode(window, cx);
-        }
-        self.editing_workspace = true;
-        let path = self
-            .selected_directory
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.cwd.update(cx, |input, cx| {
-            input.set_value(path, window, cx);
-            input.focus(window, cx);
-        });
-        cx.notify();
-    }
-
-    pub(super) fn render_workspace_editor(&self, cx: &mut Context<Self>) -> Div {
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_3()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(caption("Workspace · basrd 所在机器上的绝对目录路径", cx))
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(Input::new(&self.cwd).id("workspace-directory"))
-                    .child(
-                        Button::new("add-workspace")
-                            .primary()
-                            .small()
-                            .label("打开")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let path = PathBuf::from(this.cwd.read(cx).value().trim());
-                                if !path.is_absolute() {
-                                    this.error = Some("请输入绝对目录路径。".into());
-                                    cx.notify();
-                                    return;
-                                }
-                                this.new_thread(Some(groups::normalize(&path)), window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("cancel-workspace")
-                            .ghost()
-                            .small()
-                            .label("取消")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.editing_workspace = false;
-                                this.focus_input(window, cx);
-                                cx.notify();
-                            })),
-                    ),
-            )
     }
 }
 

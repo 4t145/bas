@@ -33,6 +33,7 @@ pub(super) struct ReplyPreview {
     message: Message,
     key: PreviewKey,
     documents: Vec<Option<Entity<gpui_kit::component::text::TextViewState>>>,
+    images: Vec<Entity<images::Cache>>,
     _changed: Vec<Subscription>,
 }
 
@@ -286,6 +287,10 @@ impl Workspace {
         );
         let owner = cx.entity();
         let parent = window.window_handle();
+        let directory = self
+            .current()
+            .and_then(|session| session.cwd.as_deref().map(groups::normalize))
+            .or_else(|| self.selected_directory.clone());
         let content = cx.new(|cx| {
             let documents: Vec<_> = message
                 .content
@@ -296,17 +301,28 @@ impl Workspace {
                     })
                 })
                 .collect();
-            let changed = documents
+            let images: Vec<_> = message
+                .content
+                .iter()
+                .map(|_| images::Cache::new(directory.clone(), cx))
+                .collect();
+            let mut changed: Vec<_> = documents
                 .iter()
                 .flatten()
                 .map(|state| cx.observe(state, |_, _, cx| cx.notify()))
                 .collect();
+            changed.extend(
+                images
+                    .iter()
+                    .map(|cache| cx.observe(cache, |_, _, cx| cx.notify())),
+            );
             ReplyPreview {
                 owner: owner.downgrade(),
                 parent,
                 message,
                 key,
                 documents,
+                images,
                 _changed: changed,
             }
         });
@@ -378,9 +394,10 @@ impl Render for ReplyPreview {
             .message
             .content
             .iter()
-            .zip(&self.documents)
+            .zip(self.documents.iter().zip(&self.images))
             .enumerate()
-            .map(|(index, (block, document))| {
+            .map(|(index, (block, (document, images)))| {
+                let id = format!("preview-{}-{index}", self.message.id);
                 if matches!(self.key, PreviewKey::Attachment(_))
                     && let basr::acp::ContentBlock::Image(image) = block
                 {
@@ -390,17 +407,21 @@ impl Render for ReplyPreview {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .children(chat::decode_image(image).map(|image| {
-                            gpui_kit::img(image)
-                                .size_full()
-                                .object_fit(gpui_kit::ObjectFit::Contain)
-                        }))
+                        .child(images::acp_image(&id, image, images, true, cx))
                         .into_any_element();
                 }
                 chat::render_content(
-                    format!("preview-{}-{index}", self.message.id),
+                    id.clone(),
                     block,
-                    document.as_ref().map(|state| markdown::view(state, cx)),
+                    document.as_ref().map(|state| {
+                        images::wrap(
+                            &id,
+                            images,
+                            markdown::view(state, cx).into_any_element(),
+                            cx,
+                        )
+                    }),
+                    images,
                     cx,
                 )
             })

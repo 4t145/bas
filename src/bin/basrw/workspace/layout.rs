@@ -32,6 +32,7 @@ pub(crate) fn initial_size(compact: bool) -> Size<Pixels> {
 
 impl Workspace {
     pub(super) fn prepare_to_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_title(cx);
         self.remember_thread();
         self.close_reply_preview(window, cx);
         self.close_menu(window, cx);
@@ -109,8 +110,10 @@ impl Workspace {
     }
 
     pub(super) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_title(cx);
         self.close_reply_preview(window, cx);
         self.close_menu(window, cx);
+        self.usage_details_open = None;
         if !self.compact {
             if window.is_maximized() {
                 window.zoom_window();
@@ -126,8 +129,6 @@ impl Workspace {
                 self.sync_composer_mode(cx);
             }
         }
-        self.editing_workspace = false;
-        self.editing_title = false;
         self.resize_window(window, cx);
         self.list.remeasure_items(
             0..self
@@ -165,11 +166,8 @@ impl Workspace {
                 self.resize_window(window, cx);
             }
             cx.notify();
-        } else if self.editing_title || self.editing_workspace {
-            self.editing_title = false;
-            self.editing_workspace = false;
-            self.focus_input(window, cx);
-            cx.notify();
+        } else if self.title_edit.is_some() {
+            self.cancel_rename(window, cx);
         } else if !self.compact {
             self.toggle_mode(window, cx);
         } else if self.output_open {
@@ -410,9 +408,6 @@ impl Workspace {
                     .h_full()
                     .bg(theme::content_background(cx))
                     .child(self.render_header(window, cx))
-                    .when(self.editing_workspace, |column| {
-                        column.child(self.render_workspace_editor(cx))
-                    })
                     .child(self.render_chat(cx)),
             )
             .into_any_element()

@@ -90,39 +90,73 @@ fn assert_global_navigation_group(window: &Window, compact: bool) {
 
 struct ActionStyleProbe {
     color: Rc<Cell<Option<gpui_kit::Hsla>>>,
+    disabled_color: Rc<Cell<Option<gpui_kit::Hsla>>>,
+    disabled_clicks: Rc<Cell<usize>>,
 }
 
 impl Render for ActionStyleProbe {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let color = self.color.clone();
-        div().p_4().child(
-            crate::workspace::message_actions::action_button(
-                "secondary-action",
-                IconName::Copy,
-                cx,
-            )
-            .on_click(|_, _, _| {})
+        let disabled_color = self.disabled_color.clone();
+        let disabled_clicks = self.disabled_clicks.clone();
+        div()
+            .p_4()
+            .flex()
+            .gap_2()
             .child(
-                gpui_kit::canvas(
-                    move |_, window, _| color.set(Some(window.text_style().color)),
-                    |_, _, _, _| {},
+                crate::workspace::message_actions::action_button(
+                    "secondary-action",
+                    IconName::Copy,
+                    cx,
                 )
-                .size(px(1.)),
-            ),
-        )
+                .on_click(|_, _, _| {})
+                .child(
+                    gpui_kit::canvas(
+                        move |_, window, _| color.set(Some(window.text_style().color)),
+                        |_, _, _, _| {},
+                    )
+                    .size(px(1.)),
+                ),
+            )
+            .child(
+                crate::workspace::message_actions::action_button(
+                    "disabled-secondary-action",
+                    IconName::ArrowUp,
+                    cx,
+                )
+                .disabled(true)
+                .on_click(move |_, _, _| disabled_clicks.set(disabled_clicks.get() + 1))
+                .child(
+                    gpui_kit::canvas(
+                        move |_, window, _| {
+                            disabled_color.set(Some(window.text_style().color));
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .size(px(1.)),
+                ),
+            )
     }
 }
 
 #[gpui_kit::test]
-fn secondary_action_icons_keep_their_muted_foreground_when_hovered(cx: &mut TestAppContext) {
+fn secondary_action_icons_brighten_on_hover_only_when_enabled(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::theme::init_default(cx);
     });
     let color = Rc::new(Cell::new(None));
+    let disabled_color = Rc::new(Cell::new(None));
+    let disabled_clicks = Rc::new(Cell::new(0));
     let observed = color.clone();
+    let disabled_observed = disabled_color.clone();
+    let disabled_clicks_observed = disabled_clicks.clone();
     let window = cx.open_window(size(px(320.), px(180.)), |window, cx| {
-        let probe = cx.new(|_| ActionStyleProbe { color: observed });
+        let probe = cx.new(|_| ActionStyleProbe {
+            color: observed,
+            disabled_color: disabled_observed,
+            disabled_clicks: disabled_clicks_observed,
+        });
         Root::new(probe, window, cx)
     });
     cx.update_window(window.into(), |_, window, cx| {
@@ -148,11 +182,32 @@ fn secondary_action_icons_keep_their_muted_foreground_when_hovered(cx: &mut Test
                 "actions have lower emphasis than auxiliary text"
             );
             assert_ne!(idle, cx.theme().foreground);
+            let disabled_idle = disabled_color
+                .get()
+                .expect("the disabled action's inherited foreground");
+            assert_eq!(disabled_idle, muted.opacity(0.5));
             window.hover("secondary-action", cx);
             assert_eq!(
                 color.get(),
+                Some(cx.theme().foreground),
+                "hover restores the bright icon foreground"
+            );
+            window.hover("disabled-secondary-action", cx);
+            assert_eq!(
+                color.get(),
                 Some(idle),
-                "native hover retains the muted icon color instead of restoring bright foreground"
+                "leaving an action restores its muted color"
+            );
+            assert_eq!(
+                disabled_color.get(),
+                Some(disabled_idle),
+                "disabled icons remain muted on hover"
+            );
+            window.click("disabled-secondary-action", cx);
+            assert_eq!(
+                disabled_clicks.get(),
+                0,
+                "disabled actions ignore activation"
             );
         }
     })

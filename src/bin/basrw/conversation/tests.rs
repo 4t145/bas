@@ -1,5 +1,7 @@
 use super::*;
 
+mod protocol;
+
 #[test]
 fn old_history_builds_content_without_rolling_back_newer_metadata() {
     let mut meta = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());

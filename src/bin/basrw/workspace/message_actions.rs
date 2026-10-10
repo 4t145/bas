@@ -19,7 +19,7 @@ pub(super) fn action_button(
     layout::icon_button(id, icon)
         .custom(
             ButtonCustomVariant::new(cx)
-                .foreground(color)
+                .foreground(cx.theme().foreground)
                 .hover(cx.theme().muted.opacity(ACTION_HOVER_OPACITY))
                 .active(cx.theme().muted.opacity(ACTION_ACTIVE_OPACITY)),
         )

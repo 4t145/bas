@@ -1,12 +1,10 @@
-use base64::Engine;
 use basr::acp;
 use basr::model::{ContentBlock, Role, ToolCall, ToolCallStatus};
-use gpui_kit::{Image, ImageFormat, img};
-use std::sync::Arc;
 
 use super::*;
 
 pub(super) const CONTENT_WIDTH: f32 = 840.;
+pub(super) const THREAD_BODY_PADDING: f32 = 12.;
 pub(super) const COMPOSER_SIDE_PADDING: f32 = 4.;
 pub(super) const COMPOSER_TOOLBAR_HEIGHT: f32 = 24.;
 pub(super) const COMPOSER_BOTTOM_PADDING: f32 = 2.;
@@ -73,6 +71,12 @@ impl Workspace {
 
     fn work_status(&self) -> String {
         if let Some(conversation) = &self.conversation {
+            if matches!(
+                conversation.foreground_state,
+                Some(basr::acp_v2::StateUpdate::RequiresAction(_))
+            ) {
+                return "等待 Agent 确认…".into();
+            }
             for item in conversation.items.iter().rev() {
                 match item {
                     Item::Message {
@@ -107,6 +111,9 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .w_full()
+            .when(!self.compact, |area| area.px(px(THREAD_BODY_PADDING)))
+            .children(self.render_plan(cx))
+            .children(self.render_notices(cx))
             .when(!self.composer_fills_thread(), |area| {
                 area.child(self.render_timeline(cx))
             })
@@ -114,28 +121,31 @@ impl Workspace {
                 area.children(self.render_initialization_messages(cx))
             })
             .child(
-                div().flex_shrink_0().px(px(COMPOSER_SIDE_PADDING)).child(
-                    div()
-                        .w_full()
-                        .id("conversation-status")
-                        .test_support()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .pl(px(COMPOSER_CONTROL_INSET + 1.))
-                        .py_1()
-                        .child(self.agent_button(cx))
-                        .child(self.connection_indicator("conversation-connection", cx))
-                        .children(
-                            self.activity_label()
-                                .map(|label| caption(label, cx).flex_1().min_w_0().truncate()),
-                        )
-                        .child(div().flex_1())
-                        .when(
-                            self.active.is_some() && !self.composer_fills_thread(),
-                            |row| row.child(self.render_conversation_navigation(cx)),
-                        ),
-                ),
+                div()
+                    .flex_shrink_0()
+                    .when(self.compact, |area| area.px(px(COMPOSER_SIDE_PADDING)))
+                    .child(
+                        div()
+                            .w_full()
+                            .id("conversation-status")
+                            .test_support()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .pl(px(COMPOSER_CONTROL_INSET + 1.))
+                            .py_1()
+                            .child(self.agent_button(cx))
+                            .child(self.connection_indicator("conversation-connection", cx))
+                            .children(
+                                self.activity_label()
+                                    .map(|label| caption(label, cx).flex_1().min_w_0().truncate()),
+                            )
+                            .child(div().flex_1())
+                            .when(
+                                self.active.is_some() && !self.composer_fills_thread(),
+                                |row| row.child(self.render_conversation_navigation(cx)),
+                            ),
+                    ),
             )
             .child(self.render_composer(cx))
             .into_any_element()
@@ -252,7 +262,7 @@ impl Workspace {
                     div()
                         .id("approval-panel")
                         .test_support()
-                        .px_3()
+                        .when(self.compact, |area| area.px_3())
                         .py_2()
                         .flex_shrink_0()
                         .max_h(px(APPROVAL_PANEL_HEIGHT))
@@ -279,7 +289,7 @@ impl Workspace {
                     div()
                         .id("thread-authentication")
                         .test_support()
-                        .px_3()
+                        .when(self.compact, |area| area.px_3())
                         .py_2()
                         .max_h(px(360.))
                         .overflow_y_scroll()
@@ -291,7 +301,7 @@ impl Workspace {
                     div()
                         .id("thread-elicitations")
                         .test_support()
-                        .px_3()
+                        .when(self.compact, |area| area.px_3())
                         .py_2()
                         .max_h(px(360.))
                         .overflow_y_scroll()
@@ -408,10 +418,7 @@ impl Workspace {
                 area.px(px(COMPOSER_SIDE_PADDING))
                     .pb(px(COMPOSER_BOTTOM_PADDING))
             })
-            .when(!self.compact, |area| {
-                area.px(px(COMPOSER_SIDE_PADDING))
-                    .pb(px(COMPOSER_SIDE_PADDING))
-            })
+            .when(!self.compact, |area| area.pb(px(COMPOSER_SIDE_PADDING)))
             .child(
                 panel
                     .id("composer-panel")
@@ -552,6 +559,7 @@ impl Workspace {
                             .pr(px(COMPOSER_CONTROL_INSET))
                             .h(px(COMPOSER_TOOLBAR_HEIGHT))
                             .flex_shrink_0()
+                            .children(self.render_usage(cx))
                             .child(
                                 self.attachment_button(cx)
                                     .w(px(layout::ICON_BUTTON_SIZE))
@@ -625,22 +633,27 @@ impl Workspace {
         } else {
             self.render_entry(item, index, cx)
         };
+        let panel_id = SharedString::from(format!("message-content-{id}"));
         div()
             .id(SharedString::from(id))
             .test_support()
-            .px_3()
+            .when(self.compact, |row| row.px_3())
             .py_1()
             .w_full()
             .text_size(theme::content_font_size(cx))
             .child(
-                content_panel().child(content).children(
-                    self.render_message_actions(
-                        items
-                            .last()
-                            .expect("timeline rows contain at least one item"),
-                        cx,
+                content_panel()
+                    .id(panel_id)
+                    .test_support()
+                    .child(content)
+                    .children(
+                        self.render_message_actions(
+                            items
+                                .last()
+                                .expect("timeline rows contain at least one item"),
+                            cx,
+                        ),
                     ),
-                ),
             )
             .into_any_element()
     }
@@ -674,19 +687,6 @@ impl Workspace {
                             .border_1()
                             .border_color(cx.theme().border)
                             .bg(cx.theme().muted.opacity(0.35))
-                    })
-                    .when(!user, |message| {
-                        message.child(
-                            caption(
-                                self.current()
-                                    .map(|session| session.agent.to_string())
-                                    .unwrap_or_else(|| "Agent".into()),
-                                cx,
-                            )
-                            .id(SharedString::from(format!("message-source-{id}")))
-                            .test_support()
-                            .font_weight(FontWeight::SEMIBOLD),
-                        )
                     })
                     .children(
                         message
@@ -722,6 +722,7 @@ impl Workspace {
                     .into_any_element()
             }
             Item::Tool(tool) => self.render_tool(&id, tool, index, cx),
+            Item::Compaction(compaction) => self.render_compaction(&id, compaction, index, cx),
             Item::Notice { text, .. } => div()
                 .px_4()
                 .py_2()
@@ -738,7 +739,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let markdown = block_source(block).map(|text| self.markdown(id.clone(), text, index, cx));
-        render_content(id, block, markdown, cx)
+        let images = self.content_images(&id, index, cx);
+        render_content(id, block, markdown, &images, cx)
     }
 
     fn disclosure(
@@ -777,6 +779,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let expanded = self.expanded.contains(id);
+        let title = if tool.title.trim().is_empty() {
+            tool.name.as_deref().unwrap_or("工具调用")
+        } else {
+            &tool.title
+        };
         let (label, status_icon, color) = match tool.status {
             ToolCallStatus::Pending => ("等待中", IconName::Clock, cx.theme().muted_foreground),
             ToolCallStatus::InProgress => ("执行中", IconName::Loader, cx.theme().primary),
@@ -808,18 +815,14 @@ impl Workspace {
                                 .child(
                                     self.disclosure(
                                         id,
-                                        &tool
-                                            .title
-                                            .split_whitespace()
-                                            .collect::<Vec<_>>()
-                                            .join(" "),
+                                        &title.split_whitespace().collect::<Vec<_>>().join(" "),
                                         expanded,
                                         index,
                                         cx,
                                     )
                                     .w_full(),
                                 ),
-                            tool.title.clone(),
+                            title.to_owned(),
                         )
                         .flex_1()
                         .min_w_0(),
@@ -841,6 +844,14 @@ impl Workspace {
                         .flex_col()
                         .gap_3()
                         .p_4()
+                        .when_some(tool.name.as_ref(), |body, name| {
+                            body.child(
+                                div()
+                                    .id(SharedString::from(format!("tool-name-{id}")))
+                                    .test_support()
+                                    .child(caption(format!("工具：{name}"), cx)),
+                            )
+                        })
                         .when(tool.title.contains(['\r', '\n']), |body| {
                             body.child(self.markdown(
                                 format!("{id}-command"),
@@ -894,11 +905,7 @@ impl Workspace {
                                 acp::ToolCallContent::Diff(diff) => self
                                     .markdown(
                                         format!("{id}-diff-{part}"),
-                                        format!(
-                                            "{}\n\n\x60\x60\x60diff\n{}\n\x60\x60\x60",
-                                            diff.path.display(),
-                                            diff.new_text
-                                        ),
+                                        tool_content::legacy_diff(diff),
                                         index,
                                         cx,
                                     )
@@ -937,28 +944,86 @@ impl Workspace {
             .conversation
             .as_ref()
             .and_then(|c| c.terminals.get(reference.terminal_id.0.as_ref()));
-        if let Some(terminal) = terminal.filter(|terminal| !terminal.output.is_empty()) {
+        if let Some(terminal) = terminal {
             div()
                 .id(SharedString::from(format!(
                     "terminal-{}",
                     reference.terminal_id
                 )))
                 .test_support()
-                .child(self.markdown(
-                    format!("{id}-terminal-{}", reference.terminal_id),
-                    code_block("text", &terminal.output),
-                    index,
-                    cx,
-                ))
-                .when_some(terminal.exit.as_ref(), |body, exit| {
-                    body.child(caption(
-                        exit.exit_code
-                            .map(|code| format!("退出码 {code}"))
-                            .or_else(|| exit.signal.as_ref().map(|signal| format!("信号 {signal}")))
-                            .unwrap_or_default(),
+                .flex()
+                .flex_col()
+                .gap_2()
+                .when_some(terminal.label.as_ref(), |body, label| {
+                    body.child(self.markdown(
+                        format!("{id}-terminal-command-{}", reference.terminal_id),
+                        code_block("sh", label),
+                        index,
                         cx,
                     ))
                 })
+                .when_some(terminal.cwd.as_ref(), |body, cwd| {
+                    body.child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "terminal-cwd-{}",
+                                reference.terminal_id
+                            )))
+                            .test_support()
+                            .child(caption(format!("工作目录：{}", cwd.display()), cx)),
+                    )
+                })
+                .when(!terminal.output.is_empty(), |body| {
+                    body.child(self.markdown(
+                        format!("{id}-terminal-{}", reference.terminal_id),
+                        code_block("text", &terminal.output),
+                        index,
+                        cx,
+                    ))
+                })
+                .when_some(terminal.exit.as_ref(), |body, exit| {
+                    let mut status = Vec::new();
+                    if let Some(code) = exit.exit_code {
+                        status.push(format!("退出码 {code}"));
+                    }
+                    if let Some(signal) = &exit.signal {
+                        status.push(format!("信号 {signal}"));
+                    }
+                    body.child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "terminal-exit-{}",
+                                reference.terminal_id
+                            )))
+                            .test_support()
+                            .child(caption(
+                                if status.is_empty() {
+                                    "已退出".to_owned()
+                                } else {
+                                    status.join(" · ")
+                                },
+                                cx,
+                            )),
+                    )
+                })
+                .when(
+                    terminal.output.is_empty()
+                        && terminal.exit.is_none()
+                        && tool.raw_output.is_none(),
+                    |body| {
+                        body.child(caption(
+                            if matches!(
+                                tool.status,
+                                ToolCallStatus::Completed | ToolCallStatus::Failed
+                            ) {
+                                "此调用未提供可读取的终端输出"
+                            } else {
+                                "等待终端输出…"
+                            },
+                            cx,
+                        ))
+                    },
+                )
                 .into_any_element()
         } else if tool.raw_output.is_some() {
             div().into_any_element()
@@ -1001,24 +1066,6 @@ fn code_block(language: &str, text: &str) -> String {
     format!("{fence}{language}\n{text}\n{fence}")
 }
 
-pub(super) fn decode_image(image: &acp::ImageContent) -> Option<Arc<Image>> {
-    let format = match image.mime_type.as_str() {
-        "image/png" => ImageFormat::Png,
-        "image/jpeg" => ImageFormat::Jpeg,
-        "image/webp" => ImageFormat::Webp,
-        "image/gif" => ImageFormat::Gif,
-        "image/svg+xml" => ImageFormat::Svg,
-        "image/bmp" => ImageFormat::Bmp,
-        "image/tiff" => ImageFormat::Tiff,
-        "image/x-icon" | "image/vnd.microsoft.icon" => ImageFormat::Ico,
-        _ => return None,
-    };
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&image.data)
-        .ok()?;
-    Some(Arc::new(Image::from_bytes(format, bytes)))
-}
-
 pub(super) fn block_source(block: &ContentBlock) -> Option<String> {
     match block {
         ContentBlock::Text(text) => Some(text.text.clone()),
@@ -1035,7 +1082,8 @@ pub(super) fn block_source(block: &ContentBlock) -> Option<String> {
 pub(super) fn render_content(
     id: String,
     block: &ContentBlock,
-    markdown: Option<TextView>,
+    markdown: Option<AnyElement>,
+    images: &Entity<images::Cache>,
     cx: &App,
 ) -> AnyElement {
     match block {
@@ -1075,7 +1123,7 @@ pub(super) fn render_content(
             .flex_col()
             .gap_2()
             .child(caption(format!("图片 · {}", image.mime_type), cx))
-            .children(decode_image(image).map(|image| img(image).max_w_full()))
+            .child(images::acp_image(&id, image, images, false, cx))
             .into_any_element(),
         ContentBlock::Resource(resource) => match &resource.resource {
             acp::EmbeddedResourceResource::TextResourceContents(text) => div()

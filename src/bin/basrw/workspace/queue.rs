@@ -254,7 +254,7 @@ impl Workspace {
                 .id("pending-messages-panel")
                 .test_support()
                 .flex_shrink_0()
-                .px_3()
+                .when(self.compact, |panel| panel.px_3())
                 .pb_2()
                 .child(
                     chat::content_panel()

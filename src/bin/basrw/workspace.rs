@@ -4,8 +4,10 @@ mod attachments;
 mod chat;
 mod commands;
 mod composer;
+mod draft_row;
 mod forms;
 mod groups;
+mod images;
 mod input_layout;
 mod layout;
 mod markdown;
@@ -15,7 +17,9 @@ mod navigation;
 mod outbox;
 #[cfg(feature = "gui-tests")]
 mod preview;
+mod protocol_elements;
 mod queue;
+mod rename;
 mod reply;
 mod restore;
 mod settings;
@@ -24,6 +28,9 @@ mod status;
 mod thought;
 mod thread_actions;
 mod thread_row;
+mod tool_content;
+mod usage;
+mod workspaces;
 
 use std::{
     cell::{Cell, RefCell},
@@ -60,6 +67,7 @@ const EVENT_BATCH: usize = 64;
 const LIST_OVERDRAW: f32 = 800.;
 const SIDEBAR_WIDTH: f32 = 252.;
 const AGENT_ICON_SIZE: f32 = 16.;
+const SIDEBAR_TIME_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
 
 use crate::application::OpenSettings;
 pub(super) use layout::initial_size;
@@ -107,6 +115,7 @@ pub(super) fn bind_keys(cx: &mut App) {
 pub(super) struct Workspace {
     window: gpui_kit::AnyWindowHandle,
     menu: Option<menus::OpenMenu>,
+    usage_details_open: Option<SessionId>,
     reply_preview: Option<reply::Preview>,
     reply_hover: Option<Task<()>>,
     seen_replies: HashMap<SessionId, u64>,
@@ -146,7 +155,6 @@ pub(super) struct Workspace {
     mention_decorations: TextDecorationCollection,
     decorated_mentions: Vec<TextDecoration>,
     mention_selection: std::ops::Range<usize>,
-    cwd: Entity<InputState>,
     rename: Entity<InputState>,
     selected_agent: String,
     unstarted_sessions: HashSet<SessionId>,
@@ -157,33 +165,39 @@ pub(super) struct Workspace {
     paste_pending: bool,
     composer_generation: u64,
     new_drafts: HashMap<Option<PathBuf>, Draft>,
+    new_draft_metadata: HashMap<Option<PathBuf>, draft_row::Metadata>,
     directories: Vec<PathBuf>,
     selected_directory: Option<PathBuf>,
     collapsed_workspaces: HashSet<Option<PathBuf>>,
     command_selection: usize,
     commands_dismissed: bool,
     markdown: RefCell<HashMap<String, markdown::Document>>,
+    images: RefCell<HashMap<String, images::Entry>>,
     outboxes: HashMap<SessionId, outbox::SessionOutbox>,
     configuring: HashSet<SessionId>,
     cancelling: HashSet<SessionId>,
     creating: bool,
     waiting_for_agent_selection: bool,
-    editing_title: bool,
-    renaming: bool,
+    title_edit: Option<rename::Edit>,
+    pending_renames: HashMap<SessionId, String>,
+    rename_retries: HashMap<SessionId, String>,
     archived_list: bool,
     archive_pending: HashSet<SessionId>,
     delete_pending: HashSet<SessionId>,
     sidebar_visible: bool,
     compact: bool,
     output_open: bool,
-    editing_workspace: bool,
+    workspace_picker_pending: bool,
+    workspace_picker_waiting_activation: bool,
     window_size: Size<Pixels>,
     popup_size: Option<Size<Pixels>>,
     placement: Option<desktop::Placement>,
     expanded: HashSet<String>,
     list: ListState,
     _subscriptions: Vec<Subscription>,
+    _rename_subscriptions: Vec<Subscription>,
     _events: Task<()>,
+    _sidebar_clock: Option<Task<()>>,
 }
 
 impl Workspace {
@@ -206,6 +220,21 @@ impl Workspace {
         view.restore_on_connect = true;
         view.placement = Some(desktop::Placement::new(runtime));
         view.resize_window(window, cx);
+        view._sidebar_clock = Some(cx.spawn_in(window, async move |view, cx| {
+            loop {
+                cx.background_executor().timer(SIDEBAR_TIME_REFRESH).await;
+                if view
+                    .update_in(cx, |this, _, cx| {
+                        if this.sidebar_visible && !this.compact {
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
         view
     }
 
@@ -249,11 +278,6 @@ impl Workspace {
         let mention_decorations = composer.update(cx, |input, cx| {
             input.create_decorations_collection(Vec::new(), cx)
         });
-        let cwd = cx.new(|cx| {
-            let mut input = InputState::new(window, cx).placeholder("Agent 的工作目录");
-            input.set_value(cwd.to_string_lossy().to_string(), window, cx);
-            input
-        });
         let rename = cx.new(|cx| InputState::new(window, cx).placeholder("会话标题"));
         if cx.try_global::<crate::settings::AgentChanges>().is_none() {
             cx.set_global(crate::settings::AgentChanges::default());
@@ -285,6 +309,7 @@ impl Workspace {
             }),
             cx.observe_window_activation(window, |this, window, cx| {
                 this.sync_foreground(window);
+                this.resume_workspace_picker(window, cx);
                 if !window.is_window_active() {
                     this.close_reply_preview(window, cx);
                 }
@@ -319,12 +344,6 @@ impl Workspace {
                 this.sync_mentions(cx);
                 cx.notify();
             }),
-            cx.observe(&rename, |_, _, cx| cx.notify()),
-            cx.subscribe_in(&rename, window, |this, _, event, _, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    this.save_title(cx);
-                }
-            }),
             cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
                 if this.composer_mode == composer::Mode::Send
                     && matches!(event, InputEvent::PressEnter { shift: false, .. })
@@ -333,6 +352,12 @@ impl Workspace {
                     this.send_prompt(window, cx);
                 }
                 if matches!(event, InputEvent::Change) {
+                    if this.active.is_none() {
+                        this.new_draft_metadata
+                            .entry(this.selected_directory.clone())
+                            .or_default()
+                            .updated_at = basr::model::Timestamp::now();
+                    }
                     this.error = None;
                     this.command_selection = 0;
                     this.commands_dismissed = false;
@@ -412,7 +437,6 @@ impl Workspace {
             mention_decorations,
             decorated_mentions: Vec::new(),
             mention_selection: 0..0,
-            cwd,
             rename,
             selected_agent: String::new(),
             unstarted_sessions: HashSet::new(),
@@ -423,24 +447,28 @@ impl Workspace {
             paste_pending: false,
             composer_generation: 0,
             new_drafts: HashMap::new(),
+            new_draft_metadata: HashMap::new(),
             selected_directory,
             directories,
             collapsed_workspaces: HashSet::new(),
             command_selection: 0,
             commands_dismissed: false,
             markdown: RefCell::new(HashMap::new()),
+            images: RefCell::new(HashMap::new()),
             outboxes: HashMap::new(),
             configuring: HashSet::new(),
             cancelling: HashSet::new(),
             creating: false,
             waiting_for_agent_selection: false,
-            editing_title: false,
-            renaming: false,
+            title_edit: None,
+            pending_renames: HashMap::new(),
+            rename_retries: HashMap::new(),
             archived_list: false,
             archive_pending: HashSet::new(),
             delete_pending: HashSet::new(),
             window: window.window_handle(),
             menu: None,
+            usage_details_open: None,
             reply_preview: None,
             reply_hover: None,
             seen_replies: HashMap::new(),
@@ -449,14 +477,17 @@ impl Workspace {
             sidebar_visible: !compact,
             compact,
             output_open: false,
-            editing_workspace: false,
+            workspace_picker_pending: false,
+            workspace_picker_waiting_activation: false,
             window_size: initial_size(false),
             popup_size: None,
             placement: None,
             expanded: HashSet::new(),
             list,
             _subscriptions: subscriptions,
+            _rename_subscriptions: Vec::new(),
             _events: event_task,
+            _sidebar_clock: None,
         }
     }
 
@@ -620,8 +651,10 @@ impl Workspace {
         if self.active == Some(id) {
             return;
         }
+        self.save_title(cx);
         self.save_draft(cx);
         self.close_reply_preview(window, cx);
+        self.usage_details_open = None;
         self.active = Some(id);
         self.waiting_for_agent_selection = false;
         self.restore_on_connect = false;
@@ -632,6 +665,7 @@ impl Workspace {
         self.authentication_load = None;
         self.elicitation_panels.clear();
         self.markdown.borrow_mut().clear();
+        self.images.borrow_mut().clear();
         self.commands_dismissed = false;
         if let Some(session) = self.sessions.iter().find(|session| session.id == id) {
             self.selected_agent = session.agent.to_string();
@@ -644,8 +678,6 @@ impl Workspace {
         self.epoch += 1;
         self.stream = StreamState::Loading;
         self.error = None;
-        self.editing_title = false;
-        self.editing_workspace = false;
         self.expanded.clear();
         self.list.reset(0);
         self.list.set_follow_mode(FollowMode::Tail);
@@ -678,6 +710,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.detach_thread(directory, window, cx);
+        self.new_draft_metadata
+            .entry(self.selected_directory.clone())
+            .or_default();
         let draft = self
             .new_drafts
             .get(&self.selected_directory)
@@ -699,6 +734,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.save_title(cx);
         self.archived_list = false;
         self.save_draft(cx);
         self.close_reply_preview(window, cx);
@@ -716,12 +752,11 @@ impl Workspace {
         self.authentication_load = None;
         self.elicitation_panels.clear();
         self.markdown.borrow_mut().clear();
+        self.images.borrow_mut().clear();
         self.commands_dismissed = false;
         self.expanded.clear();
         self.list.reset(0);
         self.epoch += 1;
-        self.editing_title = false;
-        self.editing_workspace = false;
         self.error = None;
         self.selected_directory = directory;
         if let Some(directory) = &self.selected_directory
@@ -811,11 +846,16 @@ impl Workspace {
             }
             Ok(path) => path.unwrap_or_default().to_owned(),
         };
+        self.save_title(cx);
         self.creating = true;
         self.command(Command::Create(connection::CreateSession {
             epoch: self.epoch,
             agent: self.selected_agent.clone(),
-            title: String::new(),
+            title: self
+                .new_draft_metadata
+                .get(&self.selected_directory)
+                .and_then(|draft| draft.title.clone())
+                .unwrap_or_default(),
             cwd,
         }));
         cx.notify();
@@ -1006,6 +1046,15 @@ impl Workspace {
                         self.unstarted_sessions.remove(removed);
                         self.prompted_sessions.remove(removed);
                         self.removed_sessions.insert(*removed);
+                        self.pending_renames.remove(removed);
+                        self.rename_retries.remove(removed);
+                        if self
+                            .title_edit
+                            .as_ref()
+                            .is_some_and(|edit| edit.target == rename::Target::Thread(*removed))
+                        {
+                            self.title_edit = None;
+                        }
                     }
                     self.catalog_ids = catalog_ids;
                     for meta in &mut catalog.sessions {
@@ -1102,6 +1151,7 @@ impl Workspace {
                             let directory = self.selected_directory.clone();
                             self.activate(id, false, window, cx);
                             self.new_drafts.remove(&directory);
+                            self.new_draft_metadata.remove(&directory);
                         }
                     }
                     Err(error) if current => {
@@ -1120,21 +1170,7 @@ impl Workspace {
                 }
             }
             Update::Renamed { session, result } => {
-                self.renaming = false;
-                match result {
-                    Ok(()) => {
-                        if self.active == Some(session) && self.editing_title {
-                            self.editing_title = false;
-                            self.focus_input(window, cx);
-                        }
-                        // The ordered event or catalog carries the title's revision.
-                    }
-                    Err(error) if self.active == Some(session) && self.editing_title => {
-                        self.error = Some(format!("重命名失败：{error}"));
-                        self.rename.update(cx, |input, cx| input.focus(window, cx));
-                    }
-                    Err(_) => {}
-                }
+                self.rename_completed(session, result);
             }
             Update::Archived { session, result } => {
                 self.archive_pending.remove(&session);
@@ -1172,6 +1208,15 @@ impl Workspace {
                 match result {
                     Ok(()) => {
                         self.removed_sessions.insert(session);
+                        self.pending_renames.remove(&session);
+                        self.rename_retries.remove(&session);
+                        if self
+                            .title_edit
+                            .as_ref()
+                            .is_some_and(|edit| edit.target == rename::Target::Thread(session))
+                        {
+                            self.title_edit = None;
+                        }
                         self.sessions.retain(|meta| meta.id != session);
                         self.catalog_ids.remove(&session);
                         if self.active == Some(session) {
@@ -1262,6 +1307,7 @@ impl Workspace {
                 events,
             } if epoch == self.epoch && self.active == Some(session.id) => {
                 self.markdown.borrow_mut().clear();
+                self.images.borrow_mut().clear();
                 let known = self
                     .sessions
                     .iter()

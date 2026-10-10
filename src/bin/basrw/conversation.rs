@@ -1,11 +1,15 @@
-use basr::{acp, model::*};
+use basr::{acp, acp_v2 as acp2, model::*};
 use std::{collections::HashMap, ops::Range};
+mod protocol;
 mod terminal;
+
+pub(super) use protocol::{Compaction, ProtocolNotice, plan_id};
 
 pub(super) enum Item {
     Message { message: Message, streaming: bool },
     Tool(Box<ToolCall>),
     Notice { id: u64, text: String },
+    Compaction(Compaction),
 }
 
 impl Item {
@@ -14,6 +18,7 @@ impl Item {
             Self::Message { message, .. } => format!("message-{}", message.id),
             Self::Tool(tool) => format!("tool-{}", tool.tool_call_id),
             Self::Notice { id, .. } => format!("notice-{id}"),
+            Self::Compaction(compaction) => format!("compaction-{}", compaction.id),
         }
     }
 
@@ -36,10 +41,14 @@ pub(super) struct Conversation {
     pub cursor: u64,
     pub commands: Vec<acp::AvailableCommand>,
     pub plan: Option<acp::Plan>,
-    pub usage: Option<acp::UsageUpdate>,
+    pub plans: Vec<acp2::PlanUpdate>,
+    pub usage: Option<acp2::UsageUpdate>,
+    pub notices: Vec<ProtocolNotice>,
+    pub foreground_state: Option<acp2::StateUpdate>,
     pub completed_reply: Option<ReplyPosition>,
     pub last_reply: Option<ReplyPosition>,
     turn_start: usize,
+    next_notice: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -73,10 +82,14 @@ impl Conversation {
             terminals: HashMap::new(),
             cursor: 0,
             plan: None,
+            plans: Vec::new(),
             usage: None,
+            notices: Vec::new(),
+            foreground_state: None,
             completed_reply: None,
             last_reply: None,
             turn_start: 0,
+            next_notice: 0,
         }
     }
 
@@ -115,7 +128,19 @@ impl Conversation {
     }
 
     fn apply_event(&mut self, event: Event) -> Option<usize> {
-        if event.session != self.session.id || event.cursor.raw() <= self.cursor {
+        if event.session != self.session.id {
+            return None;
+        }
+        if let EventKind::Acp(acp::SessionUpdate::Notice(notice)) = &event.kind {
+            if event.cursor == Cursor::START {
+                match serde_json::to_value(notice).and_then(serde_json::from_value) {
+                    Ok(notice) => self.push_notice(notice),
+                    Err(error) => tracing::warn!(%error, "could not normalize ACP notice"),
+                }
+            }
+            return None;
+        }
+        if event.cursor.raw() <= self.cursor {
             return None;
         }
         self.cursor = event.cursor.raw();
@@ -161,21 +186,26 @@ impl Conversation {
                     None
                 }
                 acp::SessionUpdate::Plan(plan) => {
+                    self.apply_legacy_plan(&plan);
                     self.plan = Some(plan);
                     None
                 }
-                acp::SessionUpdate::UsageUpdate(usage) => {
-                    self.usage = Some(usage);
-                    None
-                }
+                update @ (acp::SessionUpdate::PlanUpdate(_)
+                | acp::SessionUpdate::PlanRemoved(_)
+                | acp::SessionUpdate::UsageUpdate(_)
+                | acp::SessionUpdate::CompactionUpdate(_)
+                | acp::SessionUpdate::CompactionSummaryChunk(_)) => self.apply_v1_protocol(update),
                 _ => None,
             },
             EventKind::TurnStarted { .. } => {
+                self.foreground_state =
+                    Some(acp2::StateUpdate::Running(acp2::RunningStateUpdate::new()));
                 self.turn_start = self.items.len();
                 self.completed_reply = None;
                 self.seal()
             }
             EventKind::TurnFinished { result, .. } => {
+                self.foreground_state = Some(acp2::StateUpdate::Idle(acp2::IdleStateUpdate::new()));
                 let changed = self.seal();
                 self.completed_reply = self
                     .last_reply
@@ -196,6 +226,7 @@ impl Conversation {
             | EventKind::ArchiveChanged { .. }
             | EventKind::StatusChanged { .. } => None,
             EventKind::Failed { message } => {
+                self.foreground_state = Some(acp2::StateUpdate::Idle(acp2::IdleStateUpdate::new()));
                 let changed = self.seal();
                 let notice = self.notice(format!("Agent 已断开：{message}"));
                 changed.or(notice)

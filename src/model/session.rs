@@ -74,6 +74,9 @@ pub struct SessionMeta {
     pub cwd: Option<PathBuf>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Agent-reported timestamp, separate from the daemon's event clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_updated_at: Option<Timestamp>,
     pub status: SessionStatus,
     /// Hidden from the ordinary list without stopping the backend or discarding history.
     #[serde(default)]
@@ -111,6 +114,7 @@ impl SessionMeta {
             cwd: None,
             created_at: now,
             updated_at: now,
+            agent_updated_at: None,
             status: SessionStatus::Starting,
             archived: false,
             last_reply: Cursor::START,
@@ -134,7 +138,7 @@ impl SessionMeta {
 
     /// Applies only events newer than this snapshot. Content replay has its own cursor.
     pub fn apply_event(&mut self, event: &Event) -> bool {
-        if event.session != self.id || event.cursor <= self.revision {
+        if event.is_transient() || event.session != self.id || event.cursor <= self.revision {
             return false;
         }
         match &event.kind {
@@ -182,6 +186,21 @@ impl SessionMeta {
             SessionUpdate::SessionInfoUpdate(info) => {
                 if !info.title.is_undefined() {
                     self.title = info.title.clone().take();
+                }
+                if !info.updated_at.is_undefined() {
+                    match info.updated_at.value() {
+                        Some(value) => {
+                            if let Ok(parsed) = time::OffsetDateTime::parse(
+                                value,
+                                &time::format_description::well_known::Rfc3339,
+                            ) && let Ok(millis) =
+                                u64::try_from(parsed.unix_timestamp_nanos() / 1_000_000)
+                            {
+                                self.agent_updated_at = Some(Timestamp::from_millis(millis));
+                            }
+                        }
+                        None => self.agent_updated_at = None,
+                    }
                 }
             }
             SessionUpdate::ConfigOptionUpdate(update) => {

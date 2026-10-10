@@ -733,10 +733,16 @@ impl Session {
             let state = self.lock();
             let mut events = Vec::new();
             for kind in kinds {
-                let cursor = events
+                let mut event = Event::new(meta.id, Cursor::START, kind);
+                if event.is_transient() {
+                    if let Some(sender) = &state.events {
+                        let _ = sender.send(event);
+                    }
+                    continue;
+                }
+                event.cursor = events
                     .last()
                     .map_or(state.cursor.next(), |event: &Event| event.cursor.next());
-                let event = Event::new(meta.id, cursor, kind);
                 meta.apply_event(&event);
                 events.push(event);
             }

@@ -36,9 +36,9 @@ fn new_thread_editor_fills_the_content_area_until_the_first_prompt(cx: &mut Test
             let expand = window.find("expand-message-editor").bounds();
             let send = window.find("send-message").bounds();
             let margin = panel.left() - body.left();
-            assert_eq!(margin, px(chat::COMPOSER_SIDE_PADDING));
+            assert_eq!(margin, px(chat::THREAD_BODY_PADDING));
             assert_eq!(body.right() - panel.right(), margin);
-            assert_eq!(body.bottom() - panel.bottom(), margin);
+            assert_eq!(body.bottom() - panel.bottom(), px(chat::COMPOSER_SIDE_PADDING));
             assert!(panel.size.height >= body.size.height - px(60.));
             assert!(editor.size.height >= body.size.height - px(110.));
             assert_eq!(editor.bottom(), toolbar.top());
@@ -460,9 +460,7 @@ fn expanded_composer_defers_new_enter_preferences_until_collapsed(cx: &mut TestA
                     "d\nt\nmore"
                 );
             }
-            fixture
-                .view
-                .update(cx, |view, _| view.editing_title = false);
+            fixture.view.update(cx, |view, cx| view.save_title(cx));
         })
         .expect("collapse uses the latest setting");
         cx.run_until_parked();
@@ -495,7 +493,7 @@ fn composer_expansion_shortcut_does_not_expand_while_renaming(cx: &mut TestAppCo
         let view = fixture.view.read(cx);
         assert!(!view.composer_expanded);
         assert_eq!(view.composer.read(cx).value(), "retained draft");
-        assert!(!view.editing_title);
+        assert!(view.title_edit.is_none());
         assert!(view.composer.read(cx).focus_handle(cx).is_focused(window));
     })
     .expect("expansion shortcut belongs to the message editor");

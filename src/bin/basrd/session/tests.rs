@@ -1,5 +1,6 @@
 use basr::acp;
 mod archive;
+mod notices;
 mod recovery;
 
 use std::{

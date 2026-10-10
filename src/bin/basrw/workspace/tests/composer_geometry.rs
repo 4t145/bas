@@ -32,6 +32,12 @@ fn composer_controls_stay_aligned_after_resize_font_change_and_cursor_movement(
             let attachment = window.find("add-attachment").bounds();
             let left = window.find("agent-picker-icon").bounds().left();
             let panel = window.find("composer-panel").bounds();
+            let body = window.find("thread-body").bounds();
+            let status = window.find("conversation-status").bounds();
+            assert_eq!(panel.left() - body.left(), px(chat::THREAD_BODY_PADDING));
+            assert_eq!(body.right() - panel.right(), px(chat::THREAD_BODY_PADDING));
+            assert_eq!(status.left(), panel.left());
+            assert_eq!(status.right(), panel.right());
             let editor_bounds = window.find("composer-editor").bounds();
             let expand = window.find("expand-message-editor").bounds();
             let send = window.find("send-message").bounds();
@@ -96,6 +102,104 @@ fn composer_controls_stay_aligned_after_resize_font_change_and_cursor_movement(
         );
     })
     .expect("compact icon alignment");
+}
+
+#[gpui_kit::test]
+fn full_body_uses_shared_padding_for_initialization_history_and_composer(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let meta = session();
+    let message_id = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            fixture.view.update(cx, |view, cx| {
+                view.update(
+                    Update::Created {
+                        epoch: fixture.initial_create.epoch,
+                        result: Ok(meta.clone()),
+                    },
+                    window,
+                    cx,
+                );
+                view.update(
+                    Update::Snapshot {
+                        epoch: view.epoch,
+                        session: meta.clone(),
+                        events: vec![Event::new(
+                            meta.id,
+                            Cursor::from_raw(1),
+                            EventKind::Acp(basr::acp::SessionUpdate::AgentMessageChunk(
+                                basr::acp::ContentChunk::new("Agent initialization output".into()),
+                            )),
+                        )],
+                    },
+                    window,
+                    cx,
+                );
+                view.stream = StreamState::Live;
+                view.conversation
+                    .as_ref()
+                    .expect("initialized conversation")
+                    .items[0]
+                    .id()
+            })
+        })
+        .expect("prepare initialization output");
+    for started in [false, true] {
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            if started {
+                fixture.view.update(cx, |view, cx| {
+                    view.update(
+                        Update::Event {
+                            epoch: view.epoch,
+                            event: Event::new(
+                                meta.id,
+                                Cursor::from_raw(2),
+                                EventKind::Acp(basr::acp::SessionUpdate::UserMessageChunk(
+                                    basr::acp::ContentChunk::new("first user prompt".into()),
+                                )),
+                            ),
+                        },
+                        window,
+                        cx,
+                    );
+                    view.composer_expanded = false;
+                });
+            }
+            for width in [600., 1500.] {
+                window.resize(size(px(width), px(800.)));
+                window.bounds_changed(cx);
+                window.render_frame(cx);
+                window.render_frame(cx);
+                let body = window.find("thread-body").bounds();
+                let left = body.left() + px(chat::THREAD_BODY_PADDING);
+                let right = body.right() - px(chat::THREAD_BODY_PADDING);
+                let region = if started {
+                    "conversation-timeline"
+                } else {
+                    "agent-initialization-messages"
+                };
+                for id in [
+                    "conversation-status",
+                    "composer-panel",
+                    region,
+                    message_id.as_str(),
+                ] {
+                    let bounds = window.find(id.to_owned()).bounds();
+                    assert_eq!(bounds.left(), left, "left edge of {id}");
+                    assert_eq!(bounds.right(), right, "right edge of {id}");
+                }
+                let content = window
+                    .find(format!("message-content-{message_id}"))
+                    .bounds();
+                assert_eq!(content.center().x, body.center().x);
+                assert_eq!(
+                    content.size.width,
+                    px(chat::CONTENT_WIDTH).min(right - left),
+                    "message content keeps its width cap within the shared padding"
+                );
+            }
+        })
+        .expect("consistent full-window content edges across initialization and history");
+    }
 }
 
 #[gpui_kit::test]

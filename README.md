@@ -78,7 +78,7 @@ journald、D-Bus 通知、CLI 和 ACP 进程。首次运行需要下载构建依
   +--🦀src/bin/basrw/             GPUI Kit 图形客户端（gui feature）
 ```
 
-公共库导出 `basr::acp`（agent-client-protocol 2.x 的 schema）、`basr::model` 与 `basr::service`。后端驱动、会话运行时、通知和
+公共库导出 `basr::acp`（agent-client-protocol 3.3.0 的 v1 schema）、`basr::acp_v2`（展示模型）、`basr::model` 与 `basr::service`。后端驱动、会话运行时、通知和
 守护进程配置由 `basrd` 的私有模块管理；客户端通过 gRPC 使用它们。
 
 ## 构建与运行
@@ -219,6 +219,8 @@ daemon 内存中，受现有历史容量限制；归档不提供跨 daemon 重�
 gRPC 用 `AcpPayload` 承载 SDK 的 JSON；BASR 只定义会话管理、回合接收确认和游标信封。
 外部 ACP 驱动直接转发更新，内置 echo 后端也产生同样的 ACP 更新。
 GUI 使用 Agent 返回的 `configOptions` 构建选项控件，并展示图片、嵌入文件和工具结果。
+计划、上下文用量、累计费用、通知和上下文压缩也有对应界面，
+逐项支持范围见 [ACP 展示元素](docs/gui.md#acp-展示元素)。
 类型映射、客户端示例和兼容性说明见 [RPC 接口](docs/rpc.md)。
 
 ### 会话、attach 与游标
@@ -231,6 +233,7 @@ GUI 使用 Agent 返回的 `configOptions` 构建选项控件，并展示图片�
   即可续传。`Cursor::START`（0）表示“第一条之前”。
 - ACP 内容块、工具局部更新和配置更新都写入历史；直播与回放消费相同的事件。
   客户端按游标去重、按 ACP 语义累积内容，不再依赖独立的 Delta / Message 协议。
+- 标准 ACP `Notice` 仅实时广播，游标为 0；不写历史，也不改变最后可回放游标。
 - 客户端落后超过广播容量时收到 `DATA_LOSS`，可以按最后游标重新 attach。该游标之后
   的历史若已淘汰，续传仍返回 `DATA_LOSS`；省略游标可重新读取当前保留窗口。
 - 同一会话只允许一个活跃回合；忙碌时提交返回 `FAILED_PRECONDITION`。后端故障产生
@@ -264,8 +267,9 @@ GUI 使用 Agent 返回的 `configOptions` 构建选项控件，并展示图片�
 - **嵌入式 agent**：`src/bin/basrd/agent/embedded.rs` 目前是 echo 占位实现，用于在真实 agent 落地前
   打通全链路；替换 `Echo` 即可，会话层无需改动。
 - **ACP 后端**：已实现初始化、创建会话、prompt、cancel、配置选项和模式设置，
-  文件读写及权限回调直接复用 ACP 类型。内容、工具、plan、commands、mode、usage 等
-  更新通过 RPC 与历史完整传输；`terminal/*` 尚未实现。GUI 可展示图片与文件内容，
+  文件读写及权限回调直接复用 ACP 类型。内容、工具、plan、commands、mode、usage、
+  compaction 等更新通过 RPC 与历史传输，Notice 仅实时广播。
+  GUI 展示 Zed 终端扩展；客户端托管的 `terminal/*` 执行回调尚未实现。
   支持内嵌文件附件、剪贴板图片与标准 ACP 交互审批。
 - **权限**：默认拒绝工具权限申请；`--permissions allow` 可开启自动批准。该策略不隔离
   后端进程的文件访问。GUI 连接审批订阅后由用户选择原生允许／拒绝选项；没有审批客户端

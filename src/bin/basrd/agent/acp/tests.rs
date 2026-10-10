@@ -1104,6 +1104,24 @@ async fn native_acp_requests_options_and_rich_updates_cross_the_service_and_repl
     let service = crate::service::Service::new(registry.clone());
     let id = session.id().to_string();
     let meta = session.meta();
+    let initialize: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.path().join("pid.initialize"))
+            .expect("recorded initialization"),
+    )
+    .expect("initialization JSON");
+    assert_eq!(initialize["params"]["protocolVersion"], 1);
+    assert_eq!(
+        initialize["params"]["clientCapabilities"]["plan"],
+        json!({})
+    );
+    assert_eq!(
+        initialize["params"]["clientCapabilities"]["session"]["compaction"],
+        json!({})
+    );
+    assert_eq!(
+        initialize["params"]["clientCapabilities"]["session"]["notices"],
+        json!({})
+    );
     assert!(
         meta.initialization
             .expect("capabilities")
@@ -1221,6 +1239,29 @@ async fn native_acp_requests_options_and_rich_updates_cross_the_service_and_repl
     assert_eq!(received.meta, prompt.meta);
     assert!(events.iter().any(|event| matches!(&event.kind, EventKind::Acp(v1::SessionUpdate::AgentMessageChunk(chunk)) if matches!(&chunk.content, ContentBlock::Image(image) if image.meta.is_some()))));
     assert!(events.iter().any(|event| matches!(&event.kind, EventKind::Acp(v1::SessionUpdate::ToolCall(tool)) if tool.locations[0].line == Some(7) && !tool.content.is_empty())));
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        EventKind::Acp(v1::SessionUpdate::PlanUpdate(update))
+            if update.meta.as_ref().expect("plan metadata")["fixture"] == "plan"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        EventKind::Acp(v1::SessionUpdate::CompactionSummaryChunk(chunk))
+            if chunk.compaction_id.to_string() == "fixture-compaction"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        EventKind::Acp(v1::SessionUpdate::CompactionUpdate(update))
+            if update.error.is_null()
+                && update.meta.value().expect("compaction metadata")["fixture"] == "compaction"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        EventKind::Acp(v1::SessionUpdate::Notice(notice))
+            if event.cursor == basr::model::Cursor::START
+                && notice.severity == v1::NoticeSeverity::Warning
+                && notice.title == "Provider retry"
+    )));
     assert!(
         matches!(&events.last().expect("finish").kind, EventKind::TurnFinished { result: Ok(response), .. } if response.meta.as_ref().expect("response meta")["fixture"] == "response")
     );
@@ -1237,7 +1278,16 @@ async fn native_acp_requests_options_and_rich_updates_cross_the_service_and_repl
         .into_iter()
         .map(|event| event.try_into().expect("event"))
         .collect();
-    assert_eq!(replay, events);
+    let ordered: Vec<_> = events
+        .into_iter()
+        .filter(|event| !event.is_transient())
+        .collect();
+    assert!(
+        ordered
+            .windows(2)
+            .all(|pair| pair[0].cursor.next() == pair[1].cursor)
+    );
+    assert_eq!(replay, ordered);
     registry.shutdown().await;
     wait_for_exit(&directory).await;
 }

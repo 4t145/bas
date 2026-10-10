@@ -663,7 +663,9 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                             return;
                         }
                     };
-                    cursor = Some(event.cursor.raw());
+                    if !event.is_transient() {
+                        cursor = Some(event.cursor.raw());
+                    }
                     if updates.send(Update::Event { epoch, event }).await.is_err() {
                         return;
                     }

@@ -1,6 +1,7 @@
 //! Deterministic desktop fixtures; available only in the GUI testing build.
 
 use super::*;
+use base64::Engine as _;
 use basr::{
     acp,
     model::{Cursor, Event, EventKind, Owner, StopReason, TurnId},
@@ -42,6 +43,9 @@ impl Workspace {
         if fixture == "agent-menu" {
             session.agent = "embedded".into();
             session.title = None;
+        }
+        if fixture == "images" {
+            session.title = Some("图片显示".into());
         }
         session.acp = Some(
             acp::NewSessionResponse::new(session.id.to_string()).config_options(vec![
@@ -111,6 +115,15 @@ impl Workspace {
         view.stream = StreamState::Live;
         view.error = None;
         let mut conversation = Conversation::new(session.clone());
+        if matches!(fixture, "usage" | "usage-details" | "usage-hover") {
+            conversation.apply(Event::new(
+                session.id,
+                Cursor::from_raw(1),
+                EventKind::Acp(acp::SessionUpdate::UsageUpdate(
+                    acp::UsageUpdate::new(109_000, 258_000).cost(acp::Cost::new(0.035, "USD")),
+                )),
+            ));
+        }
         if fixture == "startup" {
             conversation.apply(Event::new(
                 session.id,
@@ -148,6 +161,15 @@ impl Workspace {
             view.composer.update(cx, |input, cx| {
                 input.set_value("输入文字与下方按钮对齐", window, cx)
             });
+        }
+        if fixture == "images" {
+            for (index, kind) in image_events().into_iter().enumerate() {
+                conversation.apply(Event::new(
+                    session.id,
+                    Cursor::from_raw(index as u64 + 1),
+                    kind,
+                ));
+            }
         }
         if matches!(fixture, "sample" | "layout") {
             let updates = if fixture == "layout" {
@@ -246,7 +268,7 @@ impl Workspace {
         view.conversation = Some(conversation);
         view.output_open = matches!(
             fixture,
-            "sample" | "layout" | "files" | "thoughts" | "multiline" | "multiline-hover"
+            "sample" | "layout" | "files" | "images" | "thoughts" | "multiline" | "multiline-hover"
         );
         if matches!(fixture, "connecting" | "disconnected") {
             view.connected = false;
@@ -279,6 +301,7 @@ impl Workspace {
             "menus" => Some("config-model"),
             "agent-menu" => Some("agent-picker"),
             "picker" => Some("add-attachment"),
+            "usage-details" => Some("session-usage"),
             _ => None,
         };
         if let Some(button) = auto_open {
@@ -302,6 +325,7 @@ impl Workspace {
             "reply-preview" => Some("completed-reply".to_owned()),
             "attachment-preview" => hover_attachment,
             "multiline-hover" => Some("tool-command-tool-multiline".to_owned()),
+            "usage-hover" => Some("session-usage".to_owned()),
             _ => None,
         };
         if let Some(hover) = hover {
@@ -316,4 +340,53 @@ impl Workspace {
         }
         view
     }
+}
+
+fn image_events() -> Vec<EventKind> {
+    let image_path = std::env::var_os("BASR_PREVIEW_IMAGE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("src/bin/basrw/workspace/assets/attachment-preview.svg")
+        });
+    let sections = [
+        vec![acp::ContentBlock::from(
+            "这里分别展示 Markdown 本地图片与 ACP 图片。含空格的本地路径使用尖括号包住图片目标。\n\n连续回复段落共用线程中的 Agent 信息，末尾操作按钮悬停时应变亮。",
+        )],
+        vec![acp::ContentBlock::from(format!(
+            "### Markdown 本地图片\n\n![本地图片](<{}>)",
+            image_path.display()
+        ))],
+        vec![
+            acp::ContentBlock::from("### ACP 图片\n\n下面是直接传入的 SVG 图片内容。\n\n"),
+            acp::ContentBlock::Image(acp::ImageContent::new(
+                base64::engine::general_purpose::STANDARD
+                    .encode(include_bytes!("assets/attachment-preview.svg")),
+                "image/svg+xml",
+            )),
+            acp::ContentBlock::from(
+                "\n\n可以滚动查看两种图片，悬停复制回复与返回用户消息按钮，检查图标高亮效果。",
+            ),
+        ],
+    ];
+    let mut events = Vec::new();
+    for (index, section) in sections.into_iter().enumerate() {
+        let turn = TurnId::new();
+        events.push(EventKind::TurnStarted { turn });
+        if index == 0 {
+            events.push(EventKind::Acp(acp::SessionUpdate::UserMessageChunk(
+                acp::ContentChunk::new("请展示本地 Markdown 图片和 ACP 图片。".into()),
+            )));
+        }
+        events.extend(section.into_iter().map(|content| {
+            EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(
+                acp::ContentChunk::new(content),
+            ))
+        }));
+        events.push(EventKind::TurnFinished {
+            turn,
+            result: Ok(acp::PromptResponse::new(StopReason::EndTurn)),
+        });
+    }
+    events
 }

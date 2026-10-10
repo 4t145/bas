@@ -1,6 +1,56 @@
 use super::*;
 
 impl Workspace {
+    pub(super) fn session_is_draft(&self, session: SessionId) -> bool {
+        self.unstarted_sessions.contains(&session) && !self.prompted_sessions.contains(&session)
+    }
+
+    pub(super) fn discard_session_draft(
+        &mut self,
+        session: SessionId,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.session_is_draft(session)
+            || self.archive_pending.contains(&session)
+            || self.configuring.contains(&session)
+            || self.loading_attachments.contains(&session)
+            || (self.active == Some(session) && self.paste_pending)
+            || self
+                .outboxes
+                .get(&session)
+                .is_some_and(outbox::SessionOutbox::pending)
+            || self.sessions.iter().any(|meta| {
+                meta.id == session
+                    && (meta.archived
+                        || meta.status == SessionStatus::Working
+                        || meta.active_turn.is_some())
+            })
+        {
+            return;
+        }
+        self.delete_thread(session, cx);
+    }
+
+    fn delete_thread(&mut self, session: SessionId, cx: &mut Context<Self>) {
+        if !self.connected
+            || !self.sessions.iter().any(|meta| meta.id == session)
+            || !self.delete_pending.insert(session)
+        {
+            return;
+        }
+        if !self.connection.send(Command::Delete(session)) {
+            self.delete_pending.remove(&session);
+            self.connected = false;
+            self.operation_error(
+                "删除失败",
+                "连接任务已停止；请重新打开 BASR 后重试。会话、草稿和队列未删除。".into(),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
     pub(super) fn mark_thread_read(&mut self, session: SessionId, cx: &mut Context<Self>) {
         let cursor = self
             .sessions
@@ -82,21 +132,7 @@ impl Workspace {
             confirmation,
             move |cx| {
                 let _ = view.update(cx, |this, cx| {
-                    if this.sessions.iter().any(|meta| meta.id == session)
-                        && this.delete_pending.insert(session)
-                    {
-                        if !this.connection.send(Command::Delete(session)) {
-                            this.delete_pending.remove(&session);
-                            this.connected = false;
-                            this.operation_error(
-                                "删除失败",
-                                "连接任务已停止；请重新打开 BASR 后重试。会话、草稿和队列未删除。"
-                                    .into(),
-                                cx,
-                            );
-                        }
-                        cx.notify();
-                    }
+                    this.delete_thread(session, cx);
                 });
             },
             cx,

@@ -15,5 +15,8 @@ pub mod management;
 pub mod model;
 pub mod service;
 
-/// ACP schema supplied by agent-client-protocol 2.x (the negotiated v1 protocol).
+/// ACP wire schema used by external agents and persisted session events.
 pub use agent_client_protocol::schema::v1 as acp;
+
+/// ACP v2 presentation types; external-agent connections still negotiate v1.
+pub use agent_client_protocol::schema::v2 as acp_v2;

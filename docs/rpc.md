@@ -1,8 +1,11 @@
 # RPC 与 ACP 类型
 
-BASR 的会话交互复用 `agent-client-protocol` 2.x 提供的 schema。
-当前后端协商的是 ACP v1，Rust 客户端统一通过 `basr::acp` 使用该 schema；
-SDK 的主版本与线上协议版本是两个概念。
+BASR 的会话交互复用 `agent-client-protocol` 3.3.0 提供的 schema，
+与 2026-10-10 核对的 [Zed 基线](upstream-ui.md#acp-展示协议基线2026-10-10)一致。
+外部 Agent 连接仍协商 ACP v1，RPC 与历史使用 `basr::acp`；
+`basr::acp_v2` 用于新版计划、用量、通知、压缩等展示模型。
+SDK 启用 `process`、`schemars`、`unstable`、`unstable_protocol_v2`；
+编译实验类型不改变握手版本，也不自动声明未实现的客户端能力。
 
 gRPC 保留会话管理与后台运行所需的信封。`AcpPayload.json` 是 UTF-8 JSON bytes，
 直接由 ACP SDK 的 Serde 实现编解码，不在 protobuf 中再定义一套 ContentBlock、
@@ -21,6 +24,7 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | Session.available_commands | 最新 `AvailableCommandsUpdate`，不受事件历史裁剪影响 |
 | Session.revision、active_turn | 快照包含的最后事件游标，以及当前正在执行的回合 |
 | Session.last_reply | 最近一条 Agent 回复块的游标；用于未读判断，改名/归档等元数据操作不会推进 |
+| Session.agent_updated_at | Agent 的 `session_info_update.updatedAt`，与 daemon 的事件更新时间分别保存 |
 | Session.archived、SetArchived、ArchiveChanged | 可恢复的列表可见性，不改变 Agent 生命周期 |
 | Prompt 请求 | `PromptRequest`，完整 prompt 内容与 `_meta` |
 | Prompt 返回 | `TurnAccepted`，包含 turn ID 和对应 `TurnStarted` 的 cursor |
@@ -29,7 +33,7 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | Cancel 请求 | `CancelNotification` |
 | SetConfigOption | `SetSessionConfigOptionRequest` / `SetSessionConfigOptionResponse` |
 | SetMode | `SetSessionModeRequest` / `SetSessionModeResponse` |
-| Event.acp_update | `SessionUpdate`，包含内容块、工具局部更新、计划、命令、选项、用量和标题更新 |
+| Event.acp_update | v1 `SessionUpdate`，包含内容块、工具局部更新、计划、命令、选项、用量、会话信息、通知和压缩更新 |
 | Attach、LoadHistory | 带游标的有界历史与实时订阅 |
 | SetForeground | 双向流报告前台会话，逐条确认；流断开自动释放状态 |
 | SetTitle | BASR 本地会话标题 |
@@ -42,7 +46,10 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 [Zed 的展示用终端扩展](https://github.com/zed-industries/zed/blob/main/crates/agent_servers/src/acp.rs)。
 工具更新的 `_meta.terminal_info`、`terminal_output`、`terminal_exit` 原样进入历史，
 GUI 按终端 ID 累积输出并渲染，`rawOutput` 作为没有可展示内容时的兜底。
-此能力在初始化时协商，更新 daemon 后应新建 session。这不是一个代理全部 ACP 方法的通用网关。
+终端目录与退出信息也保留，空输出的退出事件仍可展示。
+初始化还声明 `plan`、`session.compaction` 和 `session.notices`；
+这些 v1 实验事件经 RPC 到达 GUI 后转为 v2 展示类型。
+这些能力在初始化时协商，更新 daemon 后应新建 session。这不是一个代理全部 ACP 方法的通用网关。
 
 Rust 客户端示例：
 
@@ -198,7 +205,10 @@ GUI 在归档时保留草稿和未发队列并暂停派发，恢复本身不自�
 
 ### 回放与输入边界
 
-所有 ACP 更新都进入历史，包括流式内容块。客户端按 cursor 去重后，以相同逻辑
+可回放的 ACP 更新进入历史，包括流式内容块、计划、用量与压缩。
+标准 `Notice` 只向当前 Attach 订阅广播，使用 `cursor = 0`，不写入历史、
+不改变会话 revision、更新时间或客户端续传游标。它可能在断线时丢失，回放不会重新弹出。
+客户端先处理这种实时通知，再对可回放事件按正数 cursor 去重，以相同逻辑
 处理直播和回放；文本、思考分别累积，工具更新使用 ACP 的 `ToolCall::update`。
 内存历史游标过期仍返回 `DATA_LOSS`；该容量按所有更新计数，淘汰可能发生在一条消息中间。
 `localdb` 通过持久事件分页恢复历史；`LoadHistory` 不承诺返回已淘汰的内存内容。

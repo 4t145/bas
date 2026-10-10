@@ -3,6 +3,15 @@ use crate::{acp, model::*};
 
 mod permissions;
 
+#[test]
+fn agent_reported_timestamp_survives_session_snapshot_transport() {
+    let mut meta = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    meta.agent_updated_at = Some(Timestamp::from_millis(1234));
+    let snapshot = pb::Session::try_from(&meta).expect("session snapshot");
+    assert_eq!(snapshot.agent_updated_at, Some(1234));
+    assert_eq!(SessionMeta::try_from(snapshot).expect("metadata"), meta);
+}
+
 fn event(kind: EventKind) -> Event {
     Event::new(SessionId::new(), Cursor::from_raw(17), kind)
 }

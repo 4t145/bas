@@ -1,6 +1,70 @@
 use super::*;
 
 #[gpui_kit::test]
+fn discarding_drafts_rechecks_started_state_and_pending_work(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let draft = session();
+    attach(&fixture, draft.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            assert!(!view.session_is_draft(draft.id));
+            view.unstarted_sessions.insert(draft.id);
+            assert!(view.session_is_draft(draft.id));
+            view.outboxes.entry(draft.id).or_default().enqueue(Draft {
+                text: "pending prompt".into(),
+                attachments: Vec::new(),
+            });
+            view.discard_session_draft(draft.id, window, cx);
+            assert!(!view.delete_pending.contains(&draft.id));
+            assert!(fixture.commands.try_recv().is_err());
+
+            view.outboxes.remove(&draft.id);
+            view.record_user_prompt(draft.id);
+            view.discard_session_draft(draft.id, window, cx);
+            assert!(!view.delete_pending.contains(&draft.id));
+            assert!(fixture.commands.try_recv().is_err());
+        });
+    })
+    .expect("a stale discard action cannot delete a started or pending thread");
+}
+
+#[gpui_kit::test]
+fn failed_draft_discard_retains_text_until_delete_succeeds(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let draft = session();
+    attach(&fixture, draft.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.unstarted_sessions.insert(draft.id);
+            view.composer.update(cx, |input, cx| {
+                input.set_value("retained draft", window, cx);
+            });
+            view.discard_session_draft(draft.id, window, cx);
+            view.discard_session_draft(draft.id, window, cx);
+            assert!(view.delete_pending.contains(&draft.id));
+            assert_eq!(view.composer.read(cx).value(), "retained draft");
+            assert!(
+                matches!(fixture.commands.try_recv(), Ok(Command::Delete(id)) if id == draft.id)
+            );
+            assert!(fixture.commands.try_recv().is_err());
+            view.update(
+                Update::Deleted {
+                    session: draft.id,
+                    result: Err("unavailable".into()),
+                },
+                window,
+                cx,
+            );
+            assert!(!view.delete_pending.contains(&draft.id));
+            assert!(view.sessions.iter().any(|meta| meta.id == draft.id));
+            assert_eq!(view.composer.read(cx).value(), "retained draft");
+        });
+    })
+    .expect("failed deletion leaves the draft available for retry");
+}
+#[gpui_kit::test]
 fn closed_connection_does_not_leave_deletion_pending(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let meta = session();

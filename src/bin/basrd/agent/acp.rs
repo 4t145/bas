@@ -364,15 +364,19 @@ impl Connection {
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false)
+            .plan(v1::PlanCapabilities::new())
             .meta(v1::Meta::from_iter([(
                 "terminal_output".into(),
                 true.into(),
             )]))
             .session(
-                v1::ClientSessionCapabilities::new().config_options(
-                    v1::SessionConfigOptionsCapabilities::new()
-                        .boolean(v1::BooleanConfigOptionCapabilities::new()),
-                ),
+                v1::ClientSessionCapabilities::new()
+                    .config_options(
+                        v1::SessionConfigOptionsCapabilities::new()
+                            .boolean(v1::BooleanConfigOptionCapabilities::new()),
+                    )
+                    .compaction(v1::CompactionCapabilities::new())
+                    .notices(v1::NoticeCapabilities::new()),
             )
     }
 }
@@ -585,7 +589,7 @@ impl AgentTrait for Session {
 }
 
 /// The SDK's ordered callback barrier includes the session commit, not the caller's polling.
-/// See <https://docs.rs/agent-client-protocol/2.1.0/agent_client_protocol/struct.SentRequest.html#method.on_receiving_result>.
+/// See <https://docs.rs/agent-client-protocol/3.3.0/agent_client_protocol/struct.SentRequest.html#method.on_receiving_result>.
 ///
 /// # Errors
 /// Returns an error if the session stops before accepting this state mutation.

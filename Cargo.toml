@@ -36,11 +36,12 @@ gui = [
     "dep:wl-clipboard-rs",
     "dep:arboard",
     "dep:png",
+    "dep:similar",
 ]
 gui-tests = ["gui", "gpui-kit/test-support"]
 
 [dependencies]
-agent-client-protocol = "2"
+agent-client-protocol = { version = "=3.3.0", features = ["process", "schemars", "unstable", "unstable_protocol_v2"] }
 anyhow = "1"
 async-trait = "0.1"
 base64 = { version = "0.22", optional = true }
@@ -77,6 +78,7 @@ toasty-driver-sqlite = "=0.11.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_json_lenient = { version = "0.2", optional = true }
+similar = { version = "2", optional = true }
 strum = { version = "0.28", features = ["derive"] }
 thiserror = { version = "2" }
 time = { version = "0.3", features = ["parsing", "macros"] }

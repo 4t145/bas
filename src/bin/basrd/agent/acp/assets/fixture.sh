@@ -8,6 +8,9 @@ while IFS= read -r request; do
     id=$(printf '%s' "$request" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
     case "$request" in
         *'"method":"initialize"'*)
+            if [ "$BASR_FIXTURE_MODE" = rich ]; then
+                printf '%s\n' "$request" > "$BASR_FIXTURE_PID.initialize"
+            fi
             if [ "${BASR_FIXTURE_MODE#agent_auth}" != "$BASR_FIXTURE_MODE" ]; then
                 printf '%s\n' "$request" > "$BASR_FIXTURE_PID.initialize"
                 if [ "$BASR_FIXTURE_MODE" = agent_auth_rpc_initialize_reject ]; then
@@ -206,6 +209,10 @@ while IFS= read -r request; do
                     printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"resource","resource":{"uri":"file:///report.txt","text":"file contents","mimeType":"text/plain"}}}}}'
                     printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"tool_call","toolCallId":"read","title":"read file","kind":"read","locations":[{"path":"/tmp/report.txt","line":7}],"content":[{"type":"content","content":{"type":"text","text":"tool output"}}]}}}'
                     printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"tool_call_update","toolCallId":"read","status":"completed"}}}'
+                    printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"fixture-plan","entries":[{"content":"Inspect output","priority":"high","status":"in_progress"}]},"_meta":{"fixture":"plan"}}}}'
+                    printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"compaction_summary_chunk","compactionId":"fixture-compaction","content":{"type":"text","text":"Retained context"}}}}'
+                    printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"compaction_update","compactionId":"fixture-compaction","status":"completed","error":null,"_meta":{"fixture":"compaction"}}}}'
+                    printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"notice","severity":"warning","title":"Provider retry","description":"The upstream request will be retried"}}}'
                 fi
                 printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn","_meta":{"fixture":"response"}}}\n' "$id"
             fi

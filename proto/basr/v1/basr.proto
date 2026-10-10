@@ -211,6 +211,8 @@ message Session {
   bool archived = 14;
   // Last agent message chunk; metadata-only changes are not unread replies.
   uint64 last_reply = 15;
+  // Latest valid Agent-reported RFC3339 updatedAt, converted to epoch milliseconds.
+  optional uint64 agent_updated_at = 16;
 }
 
 message CreateSessionRequest {
@@ -294,10 +296,11 @@ message Failed {
   string message = 1;
 }
 
-// One event in a session timeline.
+// A replayable timeline event or a live-only ACP Notice.
 message Event {
   string session = 1;
-  // Monotonic position; pass the last one seen back to Attach or LoadHistory.
+  // Replayable events have monotonic positions starting at 1. Live-only Notice
+  // events use 0 and must not replace the last cursor used for resumption.
   uint64 cursor = 2;
   uint64 at = 3;
   reserved 10, 11, 12;
