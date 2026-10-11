@@ -346,7 +346,7 @@ impl Registry {
         if session.is_restored() {
             return Ok(());
         }
-        let _gate = session.restore_gate.lock().await;
+        let gate = Arc::clone(&session.restore_gate).lock_owned().await;
         if session.is_restored() {
             return Ok(());
         }
@@ -408,7 +408,7 @@ impl Registry {
         drained.await.map_err(|_| {
             CreateError::NotResumable("backend update listener closed during restore")
         })?;
-        session.restore_agent(agent);
+        session.restore_agent(agent, gate).await?;
         Ok(())
     }
 

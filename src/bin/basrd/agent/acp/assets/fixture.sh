@@ -187,6 +187,29 @@ while IFS= read -r request; do
                 IFS= read -r response
                 printf '%s\n' "$response" > "$BASR_FIXTURE_PID.permission"
                 printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$prompt_id"
+            elif [ "$BASR_FIXTURE_MODE" = permission_cancel_successor ]; then
+                printf '%s\n' '{"jsonrpc":"2.0","id":"permission-old","method":"session/request_permission","params":{"sessionId":"fixture","toolCall":{"toolCallId":"execute","title":"old command","status":"pending"},"options":[{"optionId":"allow-old","name":"Allow old","kind":"allow_once"}]}}'
+                while [ ! -f "$BASR_FIXTURE_PID.cancel" ]; do sleep 0.01; done
+                printf '%s\n' '{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"permission-old"}}'
+                printf '%s\n' '{"jsonrpc":"2.0","id":"permission-successor","method":"session/request_permission","params":{"sessionId":"fixture","toolCall":{"toolCallId":"execute","title":"new command","status":"pending"},"options":[{"optionId":"allow-successor","name":"Allow new","kind":"allow_once"}]}}'
+                replies=0
+                while [ "$replies" -lt 2 ] && IFS= read -r response; do
+                    case "$response" in
+                        *'"id":"permission-old"'*) printf '%s\n' "$response" > "$BASR_FIXTURE_PID.permission-cancelled" ;;
+                        *'"id":"permission-successor"'*) printf '%s\n' "$response" > "$BASR_FIXTURE_PID.permission-successor" ;;
+                        *) continue ;;
+                    esac
+                    replies=$((replies + 1))
+                done
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$prompt_id"
+            elif [ "$BASR_FIXTURE_MODE" = session_async_elicitation ]; then
+                printf '%s\n' '{"jsonrpc":"2.0","id":"async-form","method":"elicitation/create","params":{"mode":"form","sessionId":"fixture","toolCallId":"question-item","message":"请选择工作方式","requestedSchema":{"type":"object","properties":{"workflow":{"type":"string","title":"工作方式","description":"希望先做哪一步？","oneOf":[{"const":"inspect","title":"检查","description":"先检查现有代码"},{"const":"implement","title":"实现","description":"直接实现功能"}]},"workflow_note":{"type":"string","title":"补充说明"}},"required":["workflow"]}}}'
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$prompt_id"
+                while IFS= read -r response; do
+                    case "$response" in *'"id":"async-form"'*) break;; esac
+                done
+                printf '%s\n' "$response" > "$BASR_FIXTURE_PID.elicitation"
+                printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Received async answer"}}}}'
             elif [ "$BASR_FIXTURE_MODE" = session_elicitation ]; then
                 printf '%s\n' '{"jsonrpc":"2.0","id":"session-form","method":"elicitation/create","params":{"mode":"form","sessionId":"fixture","message":"Choose a project","requestedSchema":{"type":"object","properties":{"project":{"type":"string"}},"required":["project"]},"_meta":{"future":"preserved"}}}'
                 while IFS= read -r response; do

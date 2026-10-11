@@ -17,17 +17,21 @@ use basr::{
 use futures::future::BoxFuture;
 use tokio::sync::{Notify, mpsc};
 
-use super::{Catalog, Limits, LocalHost, PendingAgent, Registry, Session, request};
+use super::{
+    AttachOptions, Catalog, CreateError, Limits, LocalHost, PendingAgent, Registry, Session,
+    request,
+};
 use crate::{
-    agent::{self, Agent},
+    agent::{self, Agent, AgentSpec, Driver, Kind, LaunchRequest, Update},
     storage::{self, LocalDb, Memory, ResumeData, Storage, StoredSession},
 };
 
-/// Holds only the turn commit, so initialization can complete before the test starts.
+/// Holds a matching commit until the test allows its durable write to complete.
 struct PausedCommit {
     inner: Memory,
     entered: Notify,
     resume: Notify,
+    pause_on: fn(&Event) -> bool,
 }
 
 impl Storage for PausedCommit {
@@ -44,10 +48,7 @@ impl Storage for PausedCommit {
         events: &'a [Event],
     ) -> BoxFuture<'a, Result<(), storage::Error>> {
         Box::pin(async move {
-            if events
-                .iter()
-                .any(|event| matches!(event.kind, EventKind::TurnStarted { .. }))
-            {
+            if events.iter().any(self.pause_on) {
                 self.entered.notify_one();
                 self.resume.notified().await;
             }
@@ -104,12 +105,415 @@ impl Agent for CountingAgent {
     async fn shutdown(&mut self) {}
 }
 
+fn mode_snapshot(value: &str) -> acp::NewSessionResponse {
+    serde_json::from_value(serde_json::json!({
+        "sessionId": "backend-id",
+        "configOptions": [{
+            "id": "mode", "name": "Mode", "category": "mode", "type": "select",
+            "currentValue": value,
+            "options": [
+                {"value": "workspace-write", "name": "Workspace access"},
+                {"value": "agent", "name": "Auto review"},
+                {"value": "agent-full-access", "name": "Full access"}
+            ]
+        }],
+        "modes": {
+            "currentModeId": value,
+            "availableModes": [
+                {"id": "workspace-write", "name": "Workspace access"},
+                {"id": "agent", "name": "Auto review"},
+                {"id": "agent-full-access", "name": "Full access"}
+            ]
+        }
+    }))
+    .expect("ACP session snapshot")
+}
+
+fn initialization_raw(load_session: bool) -> serde_json::Value {
+    serde_json::json!({
+        "protocolVersion": 1,
+        "agentCapabilities": {"loadSession": load_session},
+        "fixtureCapability": {"restored": load_session}
+    })
+}
+
+struct RestoredSnapshot {
+    _updates: mpsc::Sender<Update>,
+    info: Option<acp::NewSessionResponse>,
+}
+
+#[async_trait]
+impl Agent for RestoredSnapshot {
+    fn initialization(&self) -> Option<acp::InitializeResponse> {
+        Some(serde_json::from_value(initialization_raw(true)).expect("ACP initialization"))
+    }
+    fn initialization_raw(&self) -> Option<serde_json::Value> {
+        Some(initialization_raw(true))
+    }
+    fn session_info(&self) -> Option<acp::NewSessionResponse> {
+        self.info.clone()
+    }
+    fn prompt(&mut self, _: TurnId, _: acp::PromptRequest) -> Result<(), agent::Error> {
+        Ok(())
+    }
+    fn cancel(&mut self, _: acp::CancelNotification) -> Result<(), agent::Error> {
+        Ok(())
+    }
+    async fn shutdown(&mut self) {}
+}
+
+struct RestoreSnapshotDriver(Arc<AtomicUsize>);
+
+#[async_trait]
+impl Driver for RestoreSnapshotDriver {
+    fn kind(&self) -> Kind {
+        Kind::Embedded
+    }
+    async fn launch(&self, _: LaunchRequest) -> Result<Box<dyn Agent>, agent::Error> {
+        unreachable!("fixture only loads recovered sessions")
+    }
+    async fn restore(
+        &self,
+        request: LaunchRequest,
+        backend_session_id: String,
+    ) -> Result<Box<dyn Agent>, agent::Error> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        assert!(backend_session_id.is_empty());
+        request
+            .updates
+            .send(Update::Acp(acp::SessionUpdate::AgentMessageChunk(
+                acp::ContentChunk::new("replayed history".into()),
+            )))
+            .await
+            .expect("replay queue");
+        request
+            .updates
+            .send(Update::Acp(acp::SessionUpdate::ConfigOptionUpdate(
+                acp::ConfigOptionUpdate::new(
+                    mode_snapshot("workspace-write")
+                        .config_options
+                        .expect("options"),
+                ),
+            )))
+            .await
+            .expect("replayed configuration");
+        Ok(Box::new(RestoredSnapshot {
+            _updates: request.updates,
+            info: Some(mode_snapshot("agent")),
+        }))
+    }
+}
+
+#[tokio::test]
+async fn restored_snapshot_replaces_saved_mode_and_publishes_committed_actual_state() {
+    let storage = Arc::new(Memory::new(
+        NonZeroUsize::new(100).expect("history capacity"),
+    ));
+    let mut meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+    let id = meta.id;
+    let workspace = tempfile::tempdir().expect("workspace");
+    meta.cwd = Some(workspace.path().to_owned());
+    meta.set_status(SessionStatus::Idle);
+    meta.initialization =
+        Some(serde_json::from_value(initialization_raw(false)).expect("old initialization"));
+    meta.initialization_raw = Some(initialization_raw(false));
+    let mut saved_info = mode_snapshot("workspace-write");
+    saved_info.session_id = id.to_string().into();
+    meta.acp = Some(saved_info);
+    storage.create(meta, None).await.expect("saved session");
+    let mut catalog = Catalog::new();
+    catalog
+        .insert(
+            AgentSpec::embedded(),
+            Arc::new(RestoreSnapshotDriver(Arc::new(AtomicUsize::new(0)))),
+        )
+        .expect("fixture driver");
+    let mut registry = Registry::with_storage(
+        Arc::new(catalog),
+        Arc::new(LocalHost::default()),
+        Limits::default(),
+        storage.clone(),
+    );
+    registry.recover().await.expect("recover");
+    let session = registry.get(id).await.expect("recovered session");
+    let mut live = session
+        .attach(AttachOptions {
+            replay: 0,
+            cursor: None,
+        })
+        .await
+        .expect("attach before restore");
+    registry.ensure_restored(&session).await.expect("restore");
+
+    let meta = registry
+        .list()
+        .await
+        .pop()
+        .expect("GUI-facing session metadata");
+    let info = serde_json::to_value(meta.acp.as_ref().expect("session snapshot")).expect("JSON");
+    assert_eq!(info["sessionId"], id.to_string());
+    assert_eq!(info["configOptions"][0]["currentValue"], "agent");
+    assert_eq!(info["modes"]["currentModeId"], "agent");
+    assert!(
+        meta.initialization
+            .as_ref()
+            .expect("initialization")
+            .agent_capabilities
+            .load_session
+    );
+    assert_eq!(meta.initialization_raw, Some(initialization_raw(true)));
+    let events = storage
+        .page(id, None, 10)
+        .await
+        .expect("committed events")
+        .events;
+    assert_eq!(events.len(), 2, "load replay must not duplicate history");
+    assert!(matches!(
+        events[0].kind,
+        EventKind::Acp(acp::SessionUpdate::ConfigOptionUpdate(_))
+    ));
+    assert!(matches!(
+        events[1].kind,
+        EventKind::Acp(acp::SessionUpdate::CurrentModeUpdate(_))
+    ));
+    assert_eq!(events[0].cursor, Cursor::START.next());
+    assert_eq!(events[1].cursor, meta.revision);
+    assert_eq!(
+        storage.load(id).await.expect("load").expect("record").meta,
+        meta
+    );
+    for event in &events {
+        assert_eq!(
+            tokio::time::timeout(super::TIMEOUT, live.recv())
+                .await
+                .expect("live update")
+                .expect("event"),
+            *event
+        );
+    }
+    registry.shutdown().await;
+}
+
+#[tokio::test]
+async fn restore_barrier_retains_updates_after_the_load_response() {
+    let mut meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+    meta.set_status(SessionStatus::Idle);
+    meta.acp = Some(mode_snapshot("workspace-write"));
+    let storage = Arc::new(Memory::new(
+        NonZeroUsize::new(100).expect("history capacity"),
+    ));
+    let id = meta.id;
+    storage
+        .create(meta.clone(), None)
+        .await
+        .expect("saved session");
+    let session =
+        Session::with_storage(meta, Limits::default(), None, Some(storage.clone()), false);
+    let (updates, inbox) = mpsc::channel(10);
+    session.listen(inbox);
+    let restoring = Arc::clone(&session.restore_gate).lock_owned().await;
+    let (ack, drained) = tokio::sync::oneshot::channel();
+    updates
+        .send(Update::Barrier(ack))
+        .await
+        .expect("restore barrier");
+    drained.await.expect("replay drained");
+    let (committed, completion) = tokio::sync::oneshot::channel();
+    updates
+        .send(Update::Commit {
+            update: acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(
+                mode_snapshot("agent-full-access")
+                    .config_options
+                    .expect("options"),
+            )),
+            committed,
+        })
+        .await
+        .expect("post-load update");
+    session
+        .restore_agent(
+            Box::new(RestoredSnapshot {
+                _updates: updates,
+                info: Some(mode_snapshot("agent")),
+            }),
+            restoring,
+        )
+        .await
+        .expect("commit load response");
+    tokio::time::timeout(super::TIMEOUT, completion)
+        .await
+        .expect("later update commits")
+        .expect("ack");
+    let current = session.meta();
+    let info = serde_json::to_value(current.acp.expect("snapshot")).expect("JSON");
+    assert_eq!(
+        info["configOptions"][0]["currentValue"],
+        "agent-full-access"
+    );
+    let events = storage.page(id, None, 10).await.expect("events").events;
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        events.last().expect("later update").cursor,
+        current.revision
+    );
+    session.shutdown().await;
+}
+
+#[tokio::test]
+async fn restore_commits_initialization_changes_without_inventing_history_events() {
+    let mut meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+    meta.set_status(SessionStatus::Idle);
+    let storage = Arc::new(Memory::new(
+        NonZeroUsize::new(100).expect("history capacity"),
+    ));
+    let id = meta.id;
+    storage
+        .create(meta.clone(), None)
+        .await
+        .expect("saved session");
+    let session =
+        Session::with_storage(meta, Limits::default(), None, Some(storage.clone()), false);
+    let (updates, _) = mpsc::channel(1);
+    session
+        .restore_agent(
+            Box::new(RestoredSnapshot {
+                _updates: updates,
+                info: None,
+            }),
+            Arc::clone(&session.restore_gate).lock_owned().await,
+        )
+        .await
+        .expect("restore initialization");
+    let current = session.meta();
+    assert!(session.is_restored());
+    assert_eq!(current.revision, Cursor::START);
+    assert_eq!(current.initialization_raw, Some(initialization_raw(true)));
+    assert_eq!(
+        storage.load(id).await.expect("load").expect("record").meta,
+        current
+    );
+    assert!(
+        storage
+            .page(id, None, 10)
+            .await
+            .expect("history")
+            .events
+            .is_empty()
+    );
+    session.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancelled_restore_commit_retains_gate_and_retry_uses_one_agent() {
+    for timeout in [false, true] {
+        let storage = Arc::new(PausedCommit {
+            inner: Memory::new(NonZeroUsize::new(100).expect("history capacity")),
+            entered: Notify::new(),
+            resume: Notify::new(),
+            pause_on: |event| {
+                matches!(
+                    event.kind,
+                    EventKind::Acp(acp::SessionUpdate::ConfigOptionUpdate(_))
+                )
+            },
+        });
+        let workspace = tempfile::tempdir().expect("workspace");
+        let mut meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+        let id = meta.id;
+        meta.cwd = Some(workspace.path().to_owned());
+        meta.set_status(SessionStatus::Idle);
+        meta.acp = Some(mode_snapshot("workspace-write"));
+        storage.create(meta, None).await.expect("saved session");
+        let restores = Arc::new(AtomicUsize::new(0));
+        let mut catalog = Catalog::new();
+        catalog
+            .insert(
+                AgentSpec::embedded(),
+                Arc::new(RestoreSnapshotDriver(Arc::clone(&restores))),
+            )
+            .expect("fixture driver");
+        let mut registry = Registry::with_storage(
+            Arc::new(catalog),
+            Arc::new(LocalHost::default()),
+            Limits {
+                startup_timeout: if timeout {
+                    std::time::Duration::from_millis(100)
+                } else {
+                    super::TIMEOUT
+                },
+                ..Limits::default()
+            },
+            storage.clone(),
+        );
+        registry.recover().await.expect("recover");
+        let registry = Arc::new(registry);
+        let session = registry.get(id).await.expect("recovered session");
+        let caller = {
+            let registry = Arc::clone(&registry);
+            let session = Arc::clone(&session);
+            tokio::spawn(async move { registry.ensure_restored(&session).await })
+        };
+        tokio::time::timeout(super::TIMEOUT, storage.entered.notified())
+            .await
+            .expect("restore commit entered");
+        if timeout {
+            assert!(matches!(
+                caller.await.expect("restore caller"),
+                Err(CreateError::Timeout)
+            ));
+        } else {
+            caller.abort();
+            assert!(caller.await.expect_err("aborted caller").is_cancelled());
+        }
+        assert!(!session.is_restored());
+        assert!(
+            session.restore_gate.try_lock().is_err(),
+            "commit owns restore gate"
+        );
+        let mut retry = Box::pin(registry.ensure_restored(&session));
+        assert!(futures::poll!(retry.as_mut()).is_pending());
+        assert_eq!(
+            restores.load(Ordering::SeqCst),
+            1,
+            "retry must wait for the original agent"
+        );
+        storage.resume.notify_one();
+        tokio::time::timeout(super::TIMEOUT, retry)
+            .await
+            .expect("retry completes after commit")
+            .expect("restore succeeds");
+        assert!(session.is_restored());
+        assert_eq!(restores.load(Ordering::SeqCst), 1);
+        assert!(session.restore_gate.try_lock().is_ok());
+        let current = session.meta();
+        assert_eq!(
+            storage.load(id).await.expect("load").expect("record").meta,
+            current
+        );
+        let events = storage
+            .page(id, None, 10)
+            .await
+            .expect("restore events")
+            .events;
+        assert_eq!(events.len(), 2, "one restore state publication");
+        session
+            .accept_prompt(acp::PromptRequest::new(
+                id.to_string(),
+                vec!["hello".into()],
+            ))
+            .await
+            .expect("the restored agent is installed and accepts prompts");
+        registry.shutdown().await;
+    }
+}
+
 #[tokio::test]
 async fn aborted_prompt_during_commit_keeps_revision_contiguous_and_dispatches_once() {
     let storage = Arc::new(PausedCommit {
         inner: Memory::new(NonZeroUsize::new(100).expect("history capacity")),
         entered: Notify::new(),
         resume: Notify::new(),
+        pause_on: |event| matches!(event.kind, EventKind::TurnStarted { .. }),
     });
     let meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
     storage

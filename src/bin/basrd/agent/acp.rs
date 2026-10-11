@@ -217,11 +217,21 @@ impl Connection {
             notification_state.lock().await.on_notification(notification, &updates).await
                 .map_err(agent_client_protocol::Error::into_internal_error)
         }, on_receive_notification!())
-        .on_receive_request(async move |mut request: v1::RequestPermissionRequest, responder, _cx| {
+        .on_receive_request(async move |mut request: v1::RequestPermissionRequest, responder, cx| {
             request.session_id = session.to_string().into();
-            let response = permission_host.request_permission(request).await
-                .map_err(agent_client_protocol::Error::into_internal_error)?;
-            responder.respond(v1::RequestPermissionResponse::new(response))?;
+            let host = Arc::clone(&permission_host);
+            let cancellation = responder.cancellation();
+            // Keep inbound dispatch free to receive cancellation and other requests
+            // while the user decides. Dropping the host future clears its live card.
+            cx.spawn(async move {
+                let response = cancellation.run_until_cancelled(async move {
+                    host.request_permission(request).await
+                        .map(v1::RequestPermissionResponse::new)
+                        .map_err(agent_client_protocol::Error::into_internal_error)
+                }).await;
+                responder.respond_with_result(response)?;
+                Ok(())
+            })?;
             Ok(())
         }, on_receive_request!())
         .on_receive_request(async move |mut request: v1::ReadTextFileRequest, responder, _cx| {

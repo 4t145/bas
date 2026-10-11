@@ -48,7 +48,7 @@ pub struct Session {
     state: Mutex<State>,
     transaction: tokio::sync::Mutex<()>,
     updates_task: Mutex<Option<AbortOnDropHandle<()>>>,
-    pub(super) restore_gate: tokio::sync::Mutex<()>,
+    pub(super) restore_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// A connected foreground viewer; it never retains or stops the backend.
@@ -116,7 +116,7 @@ impl Session {
             }),
             transaction: tokio::sync::Mutex::new(()),
             updates_task: Mutex::new(None),
-            restore_gate: tokio::sync::Mutex::new(()),
+            restore_gate: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -124,10 +124,64 @@ impl Session {
         self.lock().restored
     }
 
-    pub(super) fn restore_agent(&self, agent: Box<dyn Agent>) {
-        let mut state = self.lock();
-        state.agent = Some(agent);
-        state.restored = true;
+    pub(super) async fn restore_agent(
+        self: &Arc<Self>,
+        agent: Box<dyn Agent>,
+        restore_gate: tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<(), SessionError> {
+        self.owned(move |session| async move {
+            // Retain exclusivity with the commit even if its caller times out.
+            let _restore_gate = restore_gate;
+            let _gate = session.transaction.lock().await;
+            let (mut meta, updates) = {
+                let state = session.lock();
+                if state.terminal() || state.deleted {
+                    return Err(SessionError::Inactive(state.meta.status));
+                }
+                let mut meta = state.meta.clone();
+                meta.initialization = agent.initialization();
+                meta.initialization_raw = agent.initialization_raw();
+                meta.acp = agent.session_info().map(|mut info| {
+                    info.session_id = meta.id.to_string().into();
+                    info
+                });
+                let mut updates = Vec::new();
+                if let Some(info) = &meta.acp {
+                    if let Some(options) = &info.config_options
+                        && state
+                            .meta
+                            .acp
+                            .as_ref()
+                            .and_then(|info| info.config_options.as_ref())
+                            != Some(options)
+                    {
+                        updates.push(EventKind::Acp(acp::SessionUpdate::ConfigOptionUpdate(
+                            acp::ConfigOptionUpdate::new(options.clone()),
+                        )));
+                    }
+                    if let Some(modes) = &info.modes
+                        && state
+                            .meta
+                            .acp
+                            .as_ref()
+                            .and_then(|info| info.modes.as_ref())
+                            .map(|modes| &modes.current_mode_id)
+                            != Some(&modes.current_mode_id)
+                    {
+                        updates.push(EventKind::Acp(acp::SessionUpdate::CurrentModeUpdate(
+                            acp::CurrentModeUpdate::new(modes.current_mode_id.clone()),
+                        )));
+                    }
+                }
+                (meta, updates)
+            };
+            session.publish_with_meta_locked(updates, &mut meta).await?;
+            let mut state = session.lock();
+            state.agent = Some(agent);
+            state.restored = true;
+            Ok(())
+        })
+        .await
     }
 
     /// Stop the process without recording a terminal event: a durable session
@@ -652,6 +706,11 @@ impl Session {
             }
             if let Update::Barrier(ack) = update {
                 let _ = ack.send(());
+                // The restore caller holds this gate until the load response has
+                // been committed and the agent installed. Keep later updates in
+                // the inbox while normal publication is still disabled.
+                drop(_gate);
+                let _restore = session.restore_gate.lock().await;
                 return;
             }
             if !session.lock().restored {
@@ -748,7 +807,7 @@ impl Session {
             }
             (events, state.storage.clone())
         };
-        if events.is_empty() {
+        if events.is_empty() && *meta == self.meta() {
             return Ok(());
         }
         if let Some(storage) = storage {
