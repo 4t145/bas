@@ -311,3 +311,214 @@ fn appending_activity_keeps_a_tool_the_user_opened_expanded(cx: &mut TestAppCont
     })
     .expect("window");
 }
+
+#[gpui_kit::test]
+fn content_footers_return_to_nested_headers_and_preserve_sibling_sections(cx: &mut TestAppContext) {
+    use basr::acp::{ContentChunk, SessionUpdate, ToolCall, ToolCallStatus};
+    use basr::model::{StopReason, TurnId};
+
+    let fixture = fixture(cx);
+    let session = session();
+    attach(&fixture, session.clone(), cx);
+    let thought_text = "分析每一项配置并记录处理结果。\n\n".repeat(80);
+    let output = "构建输出：检查当前配置并继续处理下一项。\n".repeat(80);
+    let mut thought_id = String::new();
+    let mut activity_id = String::new();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            let turn = TurnId::new();
+            let events = [
+                EventKind::TurnStarted { turn },
+                EventKind::Acp(SessionUpdate::UserMessageChunk(ContentChunk::new(
+                    "检查配置".into(),
+                ))),
+                EventKind::Acp(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+                    thought_text.clone().into(),
+                ))),
+                EventKind::Acp(SessionUpdate::ToolCall(
+                    ToolCall::new("nested", "运行构建")
+                        .status(ToolCallStatus::Completed)
+                        .raw_input(serde_json::json!({"command": "cargo build"}))
+                        .raw_output(serde_json::Value::String(output.clone())),
+                )),
+                EventKind::Acp(SessionUpdate::ToolCall(
+                    ToolCall::new("sibling", "检查输出")
+                        .status(ToolCallStatus::Completed)
+                        .raw_input(serde_json::json!({"path": "build.log"}))
+                        .raw_output(serde_json::Value::String(output.clone())),
+                )),
+                EventKind::Acp(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                    "检查完成，下面是完整结果。\n\n".repeat(100).into(),
+                ))),
+                EventKind::TurnFinished {
+                    turn,
+                    result: Ok(basr::acp::PromptResponse::new(StopReason::EndTurn)),
+                },
+            ];
+            for (index, kind) in events.into_iter().enumerate() {
+                view.update(
+                    Update::Event {
+                        epoch: view.epoch,
+                        event: Event::new(session.id, Cursor::from_raw(index as u64 + 1), kind),
+                    },
+                    window,
+                    cx,
+                );
+            }
+            thought_id = view.conversation.as_ref().expect("conversation").items[1].id();
+            activity_id = format!("activity-{thought_id}");
+            view.expanded.extend([
+                thought_id.clone(),
+                activity_id.clone(),
+                "tool-nested".into(),
+                "tool-sibling".into(),
+                "input-open-tool-nested".into(),
+                "output-closed-tool-sibling".into(),
+            ]);
+            view.composer_expanded = false;
+            view.list.set_follow_mode(FollowMode::Normal);
+            view.list.scroll_to(gpui_kit::ListOffset::default());
+        });
+        window.render_frame(cx);
+    })
+    .expect("expanded grouped content");
+    cx.run_until_parked();
+
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let nested_offset = fixture
+            .view
+            .read(cx)
+            .content_scroll_offset("tool-nested", 1)
+            .offset_in_item;
+        assert!(
+            nested_offset > px(800.),
+            "the nested tool follows a long thought"
+        );
+
+        for id in ["tool-nested", thought_id.as_str()] {
+            let expected = fixture.view.read(cx).content_scroll_offset(id, 1);
+            scroll_content_footer_into_view(&fixture, id, window, cx);
+            window.click(format!("scroll-to-content-{id}"), cx);
+            let actual = fixture.view.read(cx).list.logical_scroll_top();
+            assert_eq!(actual.item_ix, expected.item_ix);
+            assert!(
+                (actual.offset_in_item - expected.offset_in_item).abs() < px(1.),
+                "return {id}: actual={actual:?}, expected={expected:?}",
+            );
+            assert!(window.find(format!("expand-{id}")).visible());
+
+            scroll_content_footer_into_view(&fixture, id, window, cx);
+            window.click(format!("collapse-content-{id}"), cx);
+            let view = fixture.view.read(cx);
+            assert!(!view.expanded.contains(id));
+            assert!(view.expanded.contains(&activity_id));
+            assert!(view.expanded.contains("tool-sibling"));
+            assert!(view.expanded.contains("input-open-tool-nested"));
+            assert!(view.expanded.contains("output-closed-tool-sibling"));
+            let actual = view.list.logical_scroll_top();
+            assert!(
+                actual.item_ix < expected.item_ix
+                    || (actual.item_ix == expected.item_ix
+                        && actual.offset_in_item <= expected.offset_in_item),
+                "collapse may clamp at the end of the shorter row: actual={actual:?}, expected={expected:?}",
+            );
+            let header = window.find(format!("expand-{id}"));
+            assert!(header.visible());
+            let viewport = view.list.viewport_bounds();
+            assert!(header.bounds().top() >= viewport.top());
+            assert!(header.bounds().bottom() <= viewport.bottom());
+        }
+
+        scroll_content_footer_into_view(&fixture, &activity_id, window, cx);
+        window.click(format!("collapse-content-{activity_id}"), cx);
+        assert!(!fixture.view.read(cx).expanded.contains(&activity_id));
+        assert!(fixture.view.read(cx).expanded.contains("tool-sibling"));
+        assert!(window.try_find("tool-sibling").is_none());
+        assert!(window.find(format!("expand-{activity_id}")).visible());
+        window.click(format!("expand-{activity_id}"), cx);
+        assert!(window.find("tool-sibling").visible());
+        assert!(
+            fixture
+                .view
+                .read(cx)
+                .expanded
+                .contains("output-closed-tool-sibling")
+        );
+    })
+    .expect("footer navigation and selective collapse");
+}
+
+fn scroll_content_footer_into_view(fixture: &Fixture, id: &str, window: &mut Window, cx: &mut App) {
+    window.render_frame(cx);
+    let view = fixture.view.read(cx);
+    let footer = window.find(format!("content-actions-{id}")).bounds();
+    let row = view.list.bounds_for_item(1).expect("painted activity row");
+    view.list.scroll_to(gpui_kit::ListOffset {
+        item_ix: 1,
+        offset_in_item: (footer.top() - row.top() - view.list.viewport_bounds().size.height / 2.)
+            .max(px(0.)),
+    });
+    window.render_frame(cx);
+}
+
+#[gpui_kit::test]
+fn thought_footer_copy_only_appears_on_hover_and_keeps_the_thought_open(cx: &mut TestAppContext) {
+    use basr::acp::{ContentChunk, SessionUpdate};
+    use basr::model::{StopReason, TurnId};
+
+    let fixture = fixture(cx);
+    let session = session();
+    attach(&fixture, session.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        let thought_id = fixture.view.update(cx, |view, cx| {
+            let turn = TurnId::new();
+            for (index, kind) in [
+                EventKind::TurnStarted { turn },
+                EventKind::Acp(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+                    "**先检查**\n\n保留原始思考内容。".into(),
+                ))),
+                EventKind::TurnFinished {
+                    turn,
+                    result: Ok(basr::acp::PromptResponse::new(StopReason::EndTurn)),
+                },
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                view.update(
+                    Update::Event {
+                        epoch: view.epoch,
+                        event: Event::new(session.id, Cursor::from_raw(index as u64 + 1), kind),
+                    },
+                    window,
+                    cx,
+                );
+            }
+            view.composer_expanded = false;
+            view.conversation.as_ref().expect("conversation").items[0].id()
+        });
+        window.render_frame(cx);
+        window.click(format!("expand-{thought_id}"), cx);
+        assert!(!window.find(format!("copy-{thought_id}")).visible());
+        assert!(
+            window
+                .find(format!("scroll-to-content-{thought_id}"))
+                .visible()
+        );
+        assert!(
+            window
+                .find(format!("collapse-content-{thought_id}"))
+                .visible()
+        );
+        window.hover(format!("content-actions-{thought_id}"), cx);
+        assert!(window.find(format!("copy-{thought_id}")).visible());
+        window.click(format!("copy-{thought_id}"), cx);
+        assert_eq!(
+            cx.read_from_clipboard().expect("copied thought").text(),
+            Some("**先检查**\n\n保留原始思考内容。".into()),
+        );
+        assert!(fixture.view.read(cx).expanded.contains(&thought_id));
+    })
+    .expect("thought footer copy");
+}

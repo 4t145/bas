@@ -281,6 +281,7 @@ fn completed_response_actions_copy_markdown_and_navigate_grouped_timeline_rows(
             assert!(window.try_find(format!("copy-{}", ids[5])).is_none());
             assert!(window.try_find(format!("copy-{}", ids[6])).is_some());
 
+            window.hover(format!("message-actions-{}", ids[5]), cx);
             window.click(format!("copy-response-{}", ids[5]), cx);
             assert_eq!(
                 cx.read_from_clipboard().expect("copied response").text(),
@@ -301,6 +302,7 @@ fn completed_response_actions_copy_markdown_and_navigate_grouped_timeline_rows(
                     > list.viewport_bounds().size.height,
                 "the navigation target needs overflowing content below it"
             );
+            window.hover(format!("message-actions-{}", ids[9]), cx);
             window.click(format!("copy-response-{}", ids[9]), cx);
             assert_eq!(
                 cx.read_from_clipboard().expect("copied response").text(),
@@ -510,7 +512,7 @@ fn tool_and_thought_tail_actions_stay_outside_collapsed_activity_and_target_the_
                     .find(if grouped {
                         format!("expand-{row_id}")
                     } else {
-                        format!("copy-{tail_id}")
+                        format!("expand-{tail_id}")
                     })
                     .bounds();
                 assert!(row.size.height > working_height);
@@ -525,6 +527,7 @@ fn tool_and_thought_tail_actions_stay_outside_collapsed_activity_and_target_the_
                     assert!(!fixture.view.read(cx).expanded.contains(&row_id));
                     assert!(window.try_find(tail_id.clone()).is_none());
                 }
+                window.hover(format!("message-actions-{tail_id}"), cx);
                 window.click(format!("copy-response-{tail_id}"), cx);
                 assert_eq!(
                     cx.read_from_clipboard().expect("copied response").text(),
@@ -616,7 +619,7 @@ fn startup_response_copies_in_initialization_and_navigates_safely_in_the_timelin
         });
         window.render_frame(cx);
         assert!(window.find("agent-initialization-messages").visible());
-        assert!(window.find(format!("copy-response-{startup}")).visible());
+        assert!(!window.find(format!("copy-response-{startup}")).visible());
         assert!(
             window
                 .try_find(format!("scroll-to-user-{startup}"))
@@ -628,6 +631,8 @@ fn startup_response_copies_in_initialization_and_navigates_safely_in_the_timelin
                 .is_none()
         );
         assert!(window.try_find("conversation-navigation").is_none());
+        window.hover(format!("message-actions-{startup}"), cx);
+        assert!(window.find(format!("copy-response-{startup}")).visible());
         window.click(format!("copy-response-{startup}"), cx);
         assert_eq!(
             cx.read_from_clipboard().expect("startup copy").text(),

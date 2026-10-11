@@ -1,4 +1,37 @@
 use super::*;
+use gpui_kit::component::spinner::Spinner;
+
+const ACTIVITY_ICON_SIZE: f32 = 16.;
+
+/// Share the same motion and sizing across running activity indicators.
+pub(super) fn activity_icon(
+    id: impl Into<gpui_kit::ElementId>,
+    icon: IconName,
+    color: gpui_kit::Hsla,
+    running: bool,
+) -> AnyElement {
+    div()
+        .id(id)
+        .test_support()
+        .size(px(ACTIVITY_ICON_SIZE))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(if running {
+            Spinner::new()
+                .icon(IconName::LoaderCircle)
+                .with_size(px(ACTIVITY_ICON_SIZE))
+                .color(color)
+                .into_any_element()
+        } else {
+            Icon::new(icon)
+                .with_size(px(ACTIVITY_ICON_SIZE))
+                .text_color(color)
+                .into_any_element()
+        })
+        .into_any_element()
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConnectionStatus {
@@ -73,6 +106,8 @@ impl Workspace {
     pub(super) fn activity_label(&self) -> Option<String> {
         let active = self.creating
             || self.working()
+            || !self.approvals.is_empty()
+            || !self.elicitation_panels.is_empty()
             || self
                 .active
                 .is_some_and(|id| self.sending(id) || self.configuring.contains(&id));

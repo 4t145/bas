@@ -122,8 +122,17 @@ impl Workspace {
                                             .role(gpui_kit::Role::Status)
                                             .accessibility_label(format!("{label} · {priority}"))
                                             .tooltip(format!("{label} · {priority}"))
-                                            .icon(icon)
-                                            .text_color(color),
+                                            .child(
+                                                status::activity_icon(
+                                                    format!("{id}-status-icon-{index}"),
+                                                    icon,
+                                                    color,
+                                                    matches!(
+                                                        entry.status,
+                                                        acp2::PlanEntryStatus::InProgress
+                                                    ),
+                                                ),
+                                            ),
                                         )
                                         .child(
                                             div()
@@ -323,7 +332,12 @@ impl Workspace {
                         IconName::ChevronRight
                     })
                     .accessibility_label(label.clone())
-                    .child(Icon::new(icon).small().text_color(color))
+                    .child(status::activity_icon(
+                        format!("compaction-status-{id}"),
+                        icon,
+                        color,
+                        matches!(compaction.status, acp2::CompactionStatus::InProgress),
+                    ))
                     .child(div().flex_1().text_color(color).child(label))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.expanded.remove(&key) {

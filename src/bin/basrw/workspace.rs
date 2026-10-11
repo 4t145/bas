@@ -29,6 +29,7 @@ mod thought;
 mod thread_actions;
 mod thread_row;
 mod tool_content;
+mod turn_navigation;
 mod usage;
 mod workspaces;
 
@@ -84,7 +85,8 @@ actions!(
         NextThread,
         PreviousThread,
         Dismiss,
-        Refresh
+        Refresh,
+        ScrollConversationToEnd
     ]
 );
 
@@ -109,6 +111,17 @@ pub(super) fn bind_keys(cx: &mut App) {
         ),
         KeyBinding::new("escape", Dismiss, Some("BasrWorkspace")),
         KeyBinding::new("f5", Refresh, Some("BasrWorkspace")),
+        KeyBinding::new("ctrl-end", ScrollConversationToEnd, Some("BasrWorkspace")),
+        KeyBinding::new(
+            "ctrl-end",
+            ScrollConversationToEnd,
+            Some("BasrWorkspace > Input"),
+        ),
+        KeyBinding::new(
+            "ctrl-end",
+            ScrollConversationToEnd,
+            Some("BasrWorkspace > BasrComposer > Input"),
+        ),
     ]);
 }
 
@@ -193,6 +206,7 @@ pub(super) struct Workspace {
     popup_size: Option<Size<Pixels>>,
     placement: Option<desktop::Placement>,
     expanded: HashSet<String>,
+    content_bounds: std::rc::Rc<RefCell<HashMap<String, gpui_kit::Bounds<Pixels>>>>,
     list: ListState,
     _subscriptions: Vec<Subscription>,
     _rename_subscriptions: Vec<Subscription>,
@@ -483,6 +497,7 @@ impl Workspace {
             popup_size: None,
             placement: None,
             expanded: HashSet::new(),
+            content_bounds: Default::default(),
             list,
             _subscriptions: subscriptions,
             _rename_subscriptions: Vec::new(),
@@ -679,6 +694,7 @@ impl Workspace {
         self.stream = StreamState::Loading;
         self.error = None;
         self.expanded.clear();
+        self.content_bounds.borrow_mut().clear();
         self.list.reset(0);
         self.list.set_follow_mode(FollowMode::Tail);
         if restore_draft {
@@ -755,6 +771,7 @@ impl Workspace {
         self.images.borrow_mut().clear();
         self.commands_dismissed = false;
         self.expanded.clear();
+        self.content_bounds.borrow_mut().clear();
         self.list.reset(0);
         self.epoch += 1;
         self.error = None;

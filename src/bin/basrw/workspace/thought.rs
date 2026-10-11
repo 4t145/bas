@@ -14,11 +14,16 @@ impl Workspace {
         let mut tools = 0;
         let mut running = 0;
         let mut failed = 0;
+        let mut activity_running = false;
         for item in items {
             match item {
-                Item::Message { message, .. } if message.role == Role::Thought => thoughts += 1,
+                Item::Message { message, streaming } if message.role == Role::Thought => {
+                    thoughts += 1;
+                    activity_running |= *streaming;
+                }
                 Item::Tool(tool) => {
                     tools += 1;
+                    activity_running |= tool.status == ToolCallStatus::InProgress;
                     match tool.status {
                         ToolCallStatus::Pending | ToolCallStatus::InProgress => running += 1,
                         ToolCallStatus::Failed => failed += 1,
@@ -43,6 +48,11 @@ impl Workspace {
         }
         let expanded = self.expanded.contains(id);
         let key = id.to_owned();
+        let color = if failed > 0 {
+            cx.theme().danger
+        } else {
+            cx.theme().muted_foreground
+        };
         div()
             .flex()
             .flex_col()
@@ -54,17 +64,20 @@ impl Workspace {
                     .ghost()
                     .small()
                     .w_full()
-                    .text_color(if failed > 0 {
-                        cx.theme().danger
-                    } else {
-                        cx.theme().muted_foreground
-                    })
+                    .text_color(color)
                     .icon(if expanded {
                         IconName::ChevronDown
                     } else {
                         IconName::ChevronRight
                     })
                     .accessibility_label(summary.join(" · "))
+                    .on_prepaint(self.track_content_header(id))
+                    .child(status::activity_icon(
+                        SharedString::from(format!("activity-status-{id}")),
+                        IconName::Lightbulb,
+                        color,
+                        activity_running,
+                    ))
                     .child(
                         div()
                             .flex_1()
@@ -95,7 +108,8 @@ impl Workspace {
                                 .id(SharedString::from(item.id()))
                                 .test_support()
                                 .child(self.render_entry(item, index, cx))
-                        })),
+                        }))
+                        .child(self.render_content_actions(id, id, index, cx)),
                 )
             })
             .into_any_element()
@@ -110,8 +124,11 @@ impl Workspace {
     ) -> AnyElement {
         let expanded = self.expanded.contains(id);
         let key = id.to_owned();
-        let copy = message.plain_text();
-        let group = SharedString::from(format!("thought-{id}"));
+        let streaming = self.conversation.as_ref().is_some_and(|conversation| {
+            conversation.items.iter().any(
+                |item| matches!(item, Item::Message { streaming: true, .. } if item.id() == id),
+            )
+        });
         div()
             .px_3()
             .py_2()
@@ -122,26 +139,19 @@ impl Workspace {
             .child(
                 div()
                     .id(SharedString::from(format!("expand-{id}")))
-                    .group(group.clone())
+                    .test_support()
+                    .on_prepaint(self.track_content_header(id))
                     .flex()
                     .items_center()
                     .gap_1p5()
                     .cursor_pointer()
-                    .child(Icon::new(IconName::Lightbulb).small())
+                    .child(status::activity_icon(
+                        SharedString::from(format!("thought-status-{id}")),
+                        IconName::Lightbulb,
+                        cx.theme().muted_foreground,
+                        streaming,
+                    ))
                     .child(caption("思考", cx).flex_1())
-                    .child(
-                        Button::new(SharedString::from(format!("copy-{id}")))
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Copy)
-                            .tooltip("复制思考内容")
-                            .invisible()
-                            .group_hover(group, |style| style.visible())
-                            .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
-                            }),
-                    )
                     .child(
                         Icon::new(if expanded {
                             IconName::ChevronUp
@@ -168,11 +178,21 @@ impl Workspace {
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .children(message.content.iter().enumerate().map(
-                            |(block_index, block)| {
-                                self.render_block(format!("{id}-{block_index}"), block, index, cx)
-                            },
-                        )),
+                        .children(
+                            message
+                                .content
+                                .iter()
+                                .enumerate()
+                                .map(|(block_index, block)| {
+                                    self.render_block(
+                                        format!("{id}-{block_index}"),
+                                        block,
+                                        index,
+                                        cx,
+                                    )
+                                }),
+                        )
+                        .child(self.render_content_actions(id, id, index, cx)),
                 )
             })
             .into_any_element()

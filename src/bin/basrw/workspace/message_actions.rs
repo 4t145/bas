@@ -1,5 +1,5 @@
 use basr::model::Role;
-use gpui_kit::ListOffset;
+use gpui_kit::{Bounds, ListOffset};
 
 use super::*;
 
@@ -97,6 +97,110 @@ fn is_user_message(item: &Item) -> bool {
 }
 
 impl Workspace {
+    pub(super) fn track_content_header(
+        &self,
+        id: &str,
+    ) -> impl FnOnce(Bounds<Pixels>, &mut Window, &mut App) + 'static {
+        let bounds = self.content_bounds.clone();
+        let id = id.to_owned();
+        move |header, _, _| {
+            bounds.borrow_mut().insert(id, header);
+        }
+    }
+
+    pub(super) fn render_content_actions(
+        &self,
+        id: &str,
+        collapse_key: &str,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let top_id = id.to_owned();
+        let collapse_id = id.to_owned();
+        let collapse_key = collapse_key.to_owned();
+        let copy = self.conversation.as_ref().and_then(|conversation| {
+            conversation.items.iter().find_map(|item| match item {
+                Item::Message { message, .. }
+                    if item.id() == id && message.role == Role::Thought =>
+                {
+                    Some(message.plain_text())
+                }
+                _ => None,
+            })
+        });
+        let group = SharedString::from(format!("content-actions-{id}"));
+        div()
+            .id(group.clone())
+            .test_support()
+            .group(group.clone())
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap_1()
+            .pt_1()
+            .when_some(copy, |actions, copy| {
+                actions.child(
+                    action_button(SharedString::from(format!("copy-{id}")), IconName::Copy, cx)
+                        .accessibility_label("复制思考内容")
+                        .tooltip("复制思考内容")
+                        .invisible()
+                        .group_hover(group, |style| style.visible())
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                        }),
+                )
+            })
+            .child(
+                action_button(
+                    SharedString::from(format!("scroll-to-content-{id}")),
+                    IconName::CornerLeftUp,
+                    cx,
+                )
+                .accessibility_label("返回内容顶部")
+                .tooltip("返回内容顶部")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    let offset = this.content_scroll_offset(&top_id, index);
+                    this.list.scroll_to(offset);
+                    cx.notify();
+                })),
+            )
+            .child(
+                action_button(
+                    SharedString::from(format!("collapse-content-{id}")),
+                    IconName::ChevronUp,
+                    cx,
+                )
+                .accessibility_label("收起内容")
+                .tooltip("收起内容")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    let offset = this.content_scroll_offset(&collapse_id, index);
+                    this.expanded.remove(&collapse_key);
+                    this.list.remeasure_items(index..index + 1);
+                    this.list.scroll_to(offset);
+                    cx.notify();
+                })),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn content_scroll_offset(&self, id: &str, index: usize) -> ListOffset {
+        let offset_in_item = self
+            .content_bounds
+            .borrow()
+            .get(id)
+            .zip(self.list.bounds_for_item(index))
+            .map_or(px(0.), |(header, row)| {
+                (header.top() - row.top()).max(px(0.))
+            });
+        ListOffset {
+            item_ix: index,
+            offset_in_item,
+        }
+    }
+
     pub(super) fn render_message_actions(
         &self,
         item: &Item,
@@ -119,10 +223,12 @@ impl Workspace {
         if context.text.is_empty() && !navigation {
             return None;
         }
+        let group = SharedString::from(format!("message-actions-{id}"));
         Some(
             div()
-                .id(SharedString::from(format!("message-actions-{id}")))
+                .id(group.clone())
                 .test_support()
+                .group(group.clone())
                 .flex()
                 .items_center()
                 .justify_end()
@@ -137,6 +243,8 @@ impl Workspace {
                         )
                         .accessibility_label("复制本轮回复")
                         .tooltip("复制本轮回复")
+                        .invisible()
+                        .group_hover(group, |style| style.visible())
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(context.text.clone()));
                         }),

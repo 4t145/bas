@@ -37,7 +37,7 @@ fn new_thread_editor_fills_the_content_area_until_the_first_prompt(cx: &mut Test
             let send = window.find("send-message").bounds();
             let margin = panel.left() - body.left();
             assert_eq!(margin, px(chat::THREAD_BODY_PADDING));
-            assert_eq!(body.right() - panel.right(), margin);
+            assert_eq!(body.right() - panel.right(), px(24.));
             assert_eq!(body.bottom() - panel.bottom(), px(chat::COMPOSER_SIDE_PADDING));
             assert!(panel.size.height >= body.size.height - px(60.));
             assert!(editor.size.height >= body.size.height - px(110.));

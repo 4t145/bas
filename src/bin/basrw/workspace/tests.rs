@@ -27,6 +27,7 @@ mod thread_actions;
 mod timeline;
 mod tool_content;
 mod tooltips;
+mod turn_navigation;
 mod usage;
 mod workspaces;
 
@@ -2440,6 +2441,9 @@ fn multiline_commands_keep_a_single_line_header_and_original_expanded_content(
             assert!(status.right() <= window.find("tool-multi").bounds().right());
             window.click("expand-tool-multi", cx);
             window.render_frame(cx);
+            assert!(window.try_find("tool-input-tool-multi").is_none());
+            window.click("expand-input-open-tool-multi", cx);
+            window.render_frame(cx);
             assert!(
                 fixture
                     .view
@@ -2448,6 +2452,7 @@ fn multiline_commands_keep_a_single_line_header_and_original_expanded_content(
                     .borrow()
                     .contains_key("tool-multi-command")
             );
+            window.click("expand-input-open-tool-multi", cx);
             window.click("expand-tool-multi", cx);
         }
     })

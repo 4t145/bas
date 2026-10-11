@@ -248,6 +248,9 @@ impl Workspace {
                 .push(cx.observe(&panel, |_, _, cx| cx.notify()));
             self.elicitation_panels.insert(id, panel);
             self.output_open = true;
+            if self.compact {
+                self.resize_window(window, cx);
+            }
         }
         cx.notify();
     }

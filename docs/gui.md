@@ -247,6 +247,8 @@ Escape 恢复编辑前的输入草稿。时钟图标仍显示数量并可取回�
 连续的思考与多次工具调用合为一个默认折叠的活动块，显示思考、工具调用和执行中／失败
 数量；用户输入和 Agent 输出仍独立显示。展开活动块可查看各条思考和工具详情。
 Markdown 复用原版 GPUI 渲染，支持多级列表、列表内代码与表格，并可复制整表为 Markdown。
+悬停 Markdown 内容区域时，代码块右上角显示“复制代码”按钮；复制正文并保留缩进与换行，
+不包含围栏或语言标记。表格和消息／思考内容的复制也仅在所属热区悬停时显示。
 同一 thread 的 Agent 输出直接显示正文，各段不再重复展示 Agent 名称。
 回复图片支持本地绝对路径、相对会话工作目录的路径、`file:`、`data:` 和 HTTP(S)
 地址。路径中的空格可使用 Markdown 尖括号目标；加载失败时显示图片占位与简短提示。
@@ -309,7 +311,13 @@ daemon 后可以重新读取。`BASRD_STORAGE=memory` 仅保留本次 daemon 进
 消息支持粗体、链接、列表、
 代码块、选择与复制，HTTP(S) 和邮件链接可打开。Markdown 解析状态随消息保留，解析更新后
 重新测量对应行。工具调用在发起位置显示，后续结果原位更新，回答继续追加在工具之后；
-思考过程、工具参数与结果可展开。Markdown 样式参考 Zed Agent Panel 的紧凑标题比例、段落间距与代码块边框。
+思考过程、工具参数与结果可展开。工具卡展开后优先展示“输出”，输出默认展开，输入默认收起；
+两者可独立折叠，后续进度更新保留选择。长命令与参数归入输入，不在输出之前重复展示。
+输入对象中的字符串 `command` 按真实换行显示为命令代码，其余字段独立展示为参数，保留原始 ACP 数据。
+执行中的工具、思考、计划及上下文压缩使用旋转状态图标，完成后恢复静态状态；系统减少动态效果设置仍有效。
+展开的工具、思考和活动组底部提供返回当前内容顶部及收起按钮，收起后回到对应标题；
+同一活动组中的工具分别定位到自己的标题。工具标题按内容字号预留完整行高，保留英文下伸字形。
+Markdown 样式参考 Zed Agent Panel 的紧凑标题比例、段落间距与代码块边框。
 Markdown 中的 HTTP(S) 图片通过应用注册的 HTTP client 加载，使用系统证书验证并遵循代理环境变量，
 默认请求总期限为 30 秒。加载会向图片 URL 所在服务器发起网络请求，不会自动附加 BASR
 会话内容。Mermaid 目前仍按代码块显示，图形渲染为远期待办。
@@ -330,6 +338,7 @@ Markdown 解析、排版、换行与选择全部使用原版 GPUI Base，不维�
 prompt 原样发送。实现遵循 [ACP slash commands](https://agentclientprotocol.com/protocol/v1/slash-commands)，
 消息布局与持久 Markdown 状态参考 [Zed Agent Panel](https://github.com/zed-industries/zed/blob/main/crates/agent_ui/src/conversation_view/thread_view.rs)。
 输出使用虚拟滚动，默认跟随尾部，向上阅读后停止跟随；窗口模式的向下箭头恢复跟随。
+会话正文右侧的刻度对应各轮用户提示词，悬停可查看简短提示，点击可跳到该轮；末尾刻度跳到最新输出并恢复跟随。
 运行时可以停止当前回合，也可提前编辑下一条消息。切换 thread / workspace
 保留当前窗口内的草稿；发送失败保留原文。单独运行的 GUI 退出只断开客户端。
 
@@ -344,6 +353,7 @@ prompt 原样发送。实现遵循 [ACP slash commands](https://agentclientproto
 | Ctrl+F | 展开窗口并搜索 threads |
 | Ctrl+L | 聚焦输入框 |
 | Ctrl+B | 展开窗口或切换侧边栏 |
+| Ctrl+End | 跳到当前会话末尾并恢复跟随 |
 | Ctrl+, / Cmd+, | 打开或聚焦设置 |
 | Ctrl+Q / Cmd+Q | 打开退出确认，不停止 daemon |
 | Esc | 关闭编辑区；否则缩回最小模式、折叠输出、关闭弹窗 |
@@ -466,7 +476,9 @@ SDK 升为 3.3.0，启用 `schemars`、`unstable` 和 `unstable_protocol_v2`，
 | 文件变更 | 部分支持：v1 `type: "diff"` | 文件路径；提供 old/new 时生成真实 unified patch，无 oldText 时展示修改后全文；尚无 v2 新增／删除／重命名等多文件操作清单，也无 diff 审批 |
 | 终端 | 部分支持：Zed 的 `_meta.terminal_info` / `terminal_output` / `terminal_exit` 扩展 | 工具标题或扩展提供的命令、工作目录、ANSI 输出、退出码和信号，空输出退出可见，rawOutput 保留兜底；v2 终端展示 reducer 已实现，原生事件尚未接入，也未声明客户端托管终端执行能力 |
 | 计划 | 已支持：v1 `plan`、实验 `plan_update` / `plan_removed` | 条目进度、状态、优先级；按 ID 更新／移除多个计划；Markdown 计划预览；文件计划展示并打开 URI，不读取文件内容 |
-| 前台状态 | 部分支持：BASR 回合／生命周期事件和审批订阅 | 执行中、空闲、等待用户审批／交互；v2 `state_update` reducer 已实现，原生事件尚未接入 |
+| 前台状态 | 部分支持：BASR 回合／生命周期事件、审批和交互订阅 | 执行中、空闲、等待工具审批、等待用户交互；请求在回合外出现时也显示等待状态；v2 `state_update` reducer 已实现，原生事件尚未接入 |
+| 工具审批 | 已支持：v1 `session/request_permission` | 独立卡片展示 Agent 提供的允许／拒绝选项，返回原生 option ID；支持用户取消及 Agent 取消请求；不主动拦截 Agent 自行执行的工具 |
+| 用户选择／输入 | 已支持：v1 `elicitation/create` / `elicitation/complete` | 表单中的单选、多选、文本、数字和布尔值，提交前校验；URL 交互需用户点击，接受后等待完成通知；紧凑模式自动展开交互区域；需要适配器发出请求 |
 | 可用命令 | 已支持：`available_commands_update` | Slash commands 列表、描述、过滤和键盘补全；目录保存在会话快照，不受历史裁剪影响 |
 | 会话配置 | 已支持：`config_option_update` | Select 和 Bool 控件及当前值、更新请求与错误；分组选项摊平显示，未知控件类型不提供编辑器 |
 | 会话信息 | 已支持：`session_info_update` | 标题与 Agent 的 RFC3339 更新时间；单独保存 Agent 时间，后续 daemon 事件不覆盖；省略保持、Null 清空，无效时间保留上次值 |
@@ -474,11 +486,60 @@ SDK 升为 3.3.0，启用 `schemars`、`unstable` 和 `unstable_protocol_v2`，
 | 即时通知 | 已支持：标准 `notice` | 信息／警告／错误 banner、标题与可选说明，可关闭；仅实时接收，不写历史，断线或切换会话后不重放 |
 | 上下文压缩 | 已支持：`compaction_update` / `compaction_summary_chunk` | 按 ID 原位更新状态、错误和可展开富内容摘要；支持增量、整体替换、Null 清空和历史回放 |
 
-这 11 类均有展示入口，其中 7 类已接入同名 v1 事件或实验扩展，4 类通过兼容路径部分支持。
+这 13 类均有展示入口，其中 9 类已接入 v1 事件、请求或实验扩展，4 类通过兼容路径部分支持。
 启用 v2 schema 不等于原生 v2 传输已完成。初始化声明计划、通知和压缩能力，
 更新 daemon 后需新建 Agent 会话才能重新协商。
 实现与回归记录见 [协议基线](upstream-ui.md#acp-展示协议基线2026-10-10)，
 事件持久化和通知游标约定见 [RPC 边界](rpc.md#回放与输入边界)。
+
+### 前台交互与后台任务
+
+工具审批与用户选择使用不同的 ACP 请求。审批返回允许／拒绝选项的 ID；
+[Elicitation](https://agentclientprotocol.com/protocol/v1/elicitation) 返回结构化表单答案，
+不会将普通选择转换成工具授权。两者都依赖 Agent 或适配器主动发起请求；
+只在 Markdown 中列出选项，客户端不会自动生成选择控件。
+仓库固定的 `pi-acp 0.0.32` 自行执行文件和 shell 工具，不调用 BASR 权限回调；
+因此使用该适配器测试普通工具执行时，不出现审批卡片。
+已核对的 `pi-acp 0.0.34` 会在 Pi 扩展调用 `ctx.ui.select()` 或 `ctx.ui.confirm()` 时
+发出 ACP `session/request_permission`，由 BASR 显示审批卡片并返回所选选项；
+这种选择不是标准 `elicitation/create` 表单。
+Pi 内置工具不会自动调用这两个方法；助手只在正文里列出 1／2／3，也不会生成请求。
+该版本未将扩展的 `input`／`editor` 转为 ACP `elicitation/create`。
+转换路径见 [pi-acp 0.0.34 源码](https://github.com/svkozak/pi-acp/blob/v0.0.34/src/acp/session.ts#L915)，
+触发审批的 Pi 扩展示例见 [permission-gate](https://github.com/earendil-works/pi/blob/v1.1.0/packages/coding-agent/examples/extensions/permission-gate.ts)。
+
+`codex-acp 2.1.1` 能将同步 `item/tool/requestUserInput` 转为表单，
+但会丢弃 Codex 异步 `request_user_input_async` 生成的 AgentMessage `questions`。
+这类问题在 Codex 中已接受，ACP 客户端却收不到 `elicitation/create`；
+仅升级 BASR 或切换 Plan 模式不能补齐这条适配链路。
+这属于适配器侧兼容限制，等待上游修复。BASR 已验证标准表单请求在回合结束后
+仍可保留、提交及接收后续通知的生命周期；需要适配器实际发出该请求。
+
+Codex 的权限 **Mode** 与 **Collaboration mode** 是独立配置。
+`codex-acp 2.1.1` 默认权限预设为 Auto review，会显式传入 `approvals_reviewer=auto_review`；
+Default／Plan 的切换不改变审批人。人工审批应选择 Workspace access 或 Read-only，
+默认值配置见 [Codex 安装说明](install.md#codex)。恢复会话时，BASR 将后端返回的
+当前配置保存并通知 GUI，避免保留恢复前的权限显示；适配器仍决定恢复后的实际值。
+
+2026-10-11 对照 Zed `main`
+[`96984225`](https://github.com/zed-industries/zed/tree/96984225abc235519e66b5c6c9ed23b87621f868) 的
+[ACP handlers](https://github.com/zed-industries/zed/blob/96984225abc235519e66b5c6c9ed23b87621f868/crates/agent_servers/src/acp.rs)
+与 [Elicitation UI](https://github.com/zed-industries/zed/blob/96984225abc235519e66b5c6c9ed23b87621f868/crates/agent_ui/src/conversation_view/elicitation.rs)，
+补齐交互等待状态及 Agent 取消审批请求的生命周期处理。
+
+ACP 能表达后台工作，但 BASR 当前尚未提供独立任务面板或任务管理 RPC：
+
+- **长终端任务**：v1 [终端接口](https://agentclientprotocol.com/protocol/v1/terminals)
+  的 `terminal/create` 立即返回 `terminalId`，后续用 `output`、`wait_for_exit`、`kill`、
+  `release` 查询输出、等待、停止和释放。BASR 当前声明 `terminal: false`，
+  仅展示 Agent 自行执行后通过工具更新发送的终端内容，尚不托管这些进程。
+- **Subagent**：上游 [Subagents RFD](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/rfds/subagents.mdx)
+  定义子会话关联与独立事件；本项目启用的实验 schema 包含相关类型，
+  但尚未声明 subagent 能力、路由子会话或展示独立子任务。当前只能展示适配器发送的普通工具进度。
+- **前台空闲时继续工作**：v1 会话通知可在回合外到达，BASR 会作为会话事件接收；
+  v2 [前台状态](https://agentclientprotocol.com/protocol/v2/prompt-lifecycle)
+  明确区分前台回合与后台工作，`idle` 不表示所有后台任务已结束。
+  后续接入应分别保存前台状态和任务状态，并为任务保留 ID、进度、输出及取消操作。
 
 ## 数据与验证
 
@@ -498,6 +559,9 @@ Agent 提供 `configOptions` 时，输入区展示选择或开关控件，可用
 不回退为自动允许。
 从未进入交互审批的无界面会话沿用 daemon 原有权限策略。旧 daemon 会明确提示升级。
 只有后端主动发起标准 ACP 权限请求的工具才经过此界面，工具自己的执行机制仍由后端决定。
+标准 `elicitation/create` 表单提供单选、多选和自由输入，答案通过独立 RPC 返回，
+保留聊天草稿；请求到达后显示“等待用户交互…”，紧凑模式自动展开。
+Agent 取消、回合取消、会话切换或最后一个交互客户端断开时，未回答请求按连接生命周期清理。
 目前还没有 diff 审批或音频播放；Mermaid、TeX 和 Typst 保留为后续功能。
 RPC 已支持 ACP 的完整内容类型。
 
@@ -535,6 +599,7 @@ nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-pan
 nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel menus
 nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel files
 nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel thoughts
+nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel tool-details
 nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel completed
 nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel reply-preview
 # 加 --window 查看完整窗口布局

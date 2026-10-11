@@ -176,6 +176,33 @@ BASR 不锁定、注入或覆盖 CLI 路径。需要自定义 CLI 时遵循上�
 适配器实现见 [codex-acp](https://github.com/agentclientprotocol/codex-acp)，
 底层接口见 [Codex App Server 文档](https://learn.chatgpt.com/docs/app-server)。
 
+`codex-acp 2.1.1` 的权限 **Mode** 与 **Collaboration mode**（Default／Plan）独立。
+其默认权限预设为 **Auto review**，每次发起回合都会显式传入审批与沙箱设置，
+覆盖 Codex 全局配置中的同名值。若要由用户审批，选择 **Workspace access**
+（允许工作区编辑，越界写入与联网请求审批）或 **Read-only**；
+**Full access** 使用 `approval_policy=never`，不会弹出工具审批。
+配置字段含义见 [Codex 配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)。
+权限预设及环境变量读取见
+[`codex-acp 2.1.1` 的 AgentMode 定义](https://github.com/agentclientprotocol/codex-acp/blob/68d7d2d5ddfc0ed5746f9f6130892dda685e65dd/src/AgentMode.ts)。
+
+适配器在新建及恢复会话时重新读取 `INITIAL_AGENT_MODE`，默认值为 `agent`。
+可在 `basrd.env` 中加入以下非秘密环境变量，使权限初始值为人工审批的工作区模式：
+
+```sh
+INITIAL_AGENT_MODE=workspace-write
+```
+
+修改服务环境文件后需重启 basrd；已有 Agent 进程保留启动时的环境。
+其他可选值为 `read-only`、`agent`、`agent-full-access`。
+自定义 Agent 也可在 `settings.json` 的该 Agent `env` 中设置；
+修改目录安装记录以外的 Agent 配置会使它成为自定义注册，后续目录更新将报告注册冲突，
+因此目录管理的安装宜使用服务环境设置默认值。
+
+该版本将同步 `request_user_input` 转为 ACP 表单，但未映射
+`request_user_input_async` 的 AgentMessage `questions`；Agent 文本中的“已发出选择题”
+不表示 ACP 客户端收到表单。这属于适配器侧兼容限制，等待上游修复，详见
+[前台交互与后台任务](gui.md#前台交互与后台任务)。
+
 ### 从旧版捆绑安装迁移
 
 `--with-codex` 已移除，使用它会在任何安装动作前报错并指向本文；改用
@@ -202,6 +229,10 @@ command -v pi-acp
 
 配置程序为 `pi-acp`（或其绝对路径），参数为 `[]`，不要把登录参数放入日常 ACP 启动配置。
 仓库的 Pi 固定依赖仅供开发 shell 和虚拟机测试，不属于 BASR 安装包或用户安装渠道。
+`pi-acp 0.0.34` 仅在 Pi 扩展主动调用 `ctx.ui.select()`／`confirm()` 时转发
+ACP 权限请求；普通助手文字中的选项和内置工具执行不会自动弹卡。
+如需测试这种请求，可参考 [Pi 官方审批扩展示例](https://github.com/earendil-works/pi/blob/v1.1.0/packages/coding-agent/examples/extensions/permission-gate.ts)。
+该适配器尚未将扩展的 `input`／`editor` 转为 ACP 表单。
 配置命令不执行安装、下载、登录或模型请求。
 如果服务找不到程序，可填写绝对路径；GUI 自身的 PATH 不代表 systemd 服务的 PATH。
 

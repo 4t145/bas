@@ -220,6 +220,52 @@ impl Workspace {
             }
             view.expanded.insert(conversation.items[0].id());
         }
+        if fixture == "tool-details" {
+            let command = "node /project/long-task.mjs";
+            for (index, update) in [
+                acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(
+                    "检查文档并运行长任务，优先查看执行结果。".into(),
+                )),
+                acp::SessionUpdate::ToolCall(
+                    acp::ToolCall::new("search", "WebSearch for hooks")
+                        .status(acp::ToolCallStatus::Completed)
+                        .raw_input(serde_json::json!({
+                            "type": "webSearch",
+                            "query": "https://learn.chatgpt.com/docs/hooks",
+                            "action": {"type": "openPage"}
+                        }))
+                        .content(vec![acp::ToolCallContent::Content(acp::Content::new(
+                            "找到文档：\n\n- Hooks 概览\n- 配置示例\n- 生命周期说明",
+                        ))]),
+                ),
+                acp::SessionUpdate::ToolCall(
+                    acp::ToolCall::new("long-task", "Running long task in /project")
+                        .status(acp::ToolCallStatus::InProgress)
+                        .raw_input(serde_json::json!({
+                            "command": command,
+                            "script": "// 长任务实现\n".repeat(40)
+                        }))
+                        .raw_output(serde_json::json!(
+                            "开始采样\n\n[8.4%] 已运行 10.0 秒，采样 38,200,000 次\n[16.7%] 已运行 20.0 秒，采样 76,000,000 次\n[25.0%] 已运行 30.0 秒，π ≈ 3.1416199\n\n结果目录：/project/output"
+                        )),
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                conversation.apply(Event::new(
+                    session.id,
+                    Cursor::from_raw(index as u64 + 1),
+                    EventKind::Acp(update),
+                ));
+            }
+            for item in &conversation.items {
+                if matches!(item, Item::Tool(_)) {
+                    view.expanded.insert(item.id());
+                }
+            }
+            view.expanded.insert("activity-tool-search".into());
+        }
         let mut hover_attachment = None;
         if matches!(fixture, "attachments" | "attachment-preview") {
             view.composer.update(cx, |input, cx| {
@@ -256,7 +302,7 @@ impl Workspace {
                 view.expanded.insert("tool-multiline".into());
             }
         }
-        view.list.reset(conversation.items.len());
+        view.list.reset(conversation.rows.len());
         view.list.set_follow_mode(FollowMode::Normal);
         view.list.scroll_to(gpui_kit::ListOffset::default());
         view.composer_expanded = !compact && conversation.items.is_empty();
@@ -268,7 +314,14 @@ impl Workspace {
         view.conversation = Some(conversation);
         view.output_open = matches!(
             fixture,
-            "sample" | "layout" | "files" | "images" | "thoughts" | "multiline" | "multiline-hover"
+            "sample"
+                | "layout"
+                | "files"
+                | "images"
+                | "thoughts"
+                | "multiline"
+                | "multiline-hover"
+                | "tool-details"
         );
         if matches!(fixture, "connecting" | "disconnected") {
             view.connected = false;

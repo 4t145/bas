@@ -54,7 +54,7 @@ struct Args {
     #[arg(long, env = "BASR_SETTINGS_FILE")]
     settings_file: Option<PathBuf>,
     #[cfg(feature = "gui-tests")]
-    #[arg(long, hide = true, value_parser = ["empty", "startup", "agent-menu", "sample", "layout", "connecting", "disconnected", "menus", "files", "images", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "usage", "usage-details", "usage-hover", "clipboard", "settings"])]
+    #[arg(long, hide = true, value_parser = ["empty", "startup", "agent-menu", "sample", "layout", "connecting", "disconnected", "menus", "files", "images", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "tool-details", "usage", "usage-details", "usage-hover", "clipboard", "settings"])]
     preview_panel: Option<String>,
     #[cfg(all(feature = "gui-tests", target_os = "linux"))]
     #[arg(long, hide = true)]

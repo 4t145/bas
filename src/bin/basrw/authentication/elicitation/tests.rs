@@ -5,6 +5,30 @@ use gpui_kit::{TestAppContext, component::Root, px, size};
 fn request(mode: &str) -> Request {
     let mut raw = if mode == "form" {
         json!({"mode":"form","message":"Configure account","requestedSchema":{"type":"object","properties":{"name":{"type":"string","minLength":2},"age":{"type":"integer","minimum":1},"enabled":{"type":"boolean","default":true}},"required":["name","age","enabled"]}})
+    } else if mode == "choices" {
+        json!({
+            "mode": "form",
+            "message": "Choose account options",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "region": {
+                        "type": "string",
+                        "oneOf": [
+                            {"const": "eu", "title": "Europe"},
+                            {"const": "ap", "title": "Asia Pacific"}
+                        ]
+                    },
+                    "permissions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "uniqueItems": true,
+                        "items": {"enum": ["read", "write"]}
+                    }
+                },
+                "required": ["region", "permissions"]
+            }
+        })
     } else {
         json!({"mode":"url","message":"Authorize account","url":"https://example.test/authorize?scope=profile","elicitationId":"url-1"})
     };
@@ -12,6 +36,52 @@ fn request(mode: &str) -> Request {
         .expect("request object")
         .insert("requestId".into(), json!("auth-1"));
     basr::authentication::elicitation::parse_request(&raw).expect("valid request")
+}
+
+#[gpui_kit::test]
+fn choice_fields_validate_required_values_and_toggle_native_selections(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::init_default(cx);
+    });
+    let mut panel = None;
+    let window = cx.open_window(size(px(720.), px(500.)), |window, cx| {
+        let entity = cx.new(|cx| Panel::new("choice-1".into(), request("choices"), window, cx));
+        panel = Some(entity.clone());
+        Root::new(entity, window, cx)
+    });
+    let panel = panel.expect("panel");
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let received = events.clone();
+    let _subscription = cx.update(|cx| {
+        cx.subscribe(&panel, move |_, event: &Answered, _| {
+            received.borrow_mut().push(event.response.clone())
+        })
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("elicitation-submit", cx);
+        assert!(events.borrow().is_empty());
+        assert!(panel.read(cx).errors.contains_key("region"));
+        assert!(panel.read(cx).errors.contains_key("permissions"));
+        window.render_frame(cx);
+        window.click("elicitation-input-region-1", cx);
+        window.render_frame(cx);
+        window.click("elicitation-input-permissions-0", cx);
+        window.render_frame(cx);
+        window.click("elicitation-input-permissions-1", cx);
+        window.render_frame(cx);
+        window.click("elicitation-input-permissions-0", cx);
+        window.render_frame(cx);
+        window.click("elicitation-submit", cx);
+        assert!(panel.read(cx).submitting);
+        assert!(panel.read(cx).errors.is_empty());
+    })
+    .expect("choice form");
+    assert_eq!(
+        *events.borrow(),
+        vec![json!({"action":"accept","content":{"region":"ap","permissions":["write"]}})]
+    );
 }
 
 #[gpui_kit::test]

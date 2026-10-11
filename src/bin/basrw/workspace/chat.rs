@@ -111,7 +111,10 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .w_full()
-            .when(!self.compact, |area| area.px(px(THREAD_BODY_PADDING)))
+            .when(!self.compact, |area| {
+                area.pl(px(THREAD_BODY_PADDING))
+                    .pr(px(turn_navigation::RAIL_WIDTH))
+            })
             .children(self.render_plan(cx))
             .children(self.render_notices(cx))
             .when(!self.composer_fills_thread(), |area| {
@@ -172,8 +175,7 @@ impl Workspace {
                     .accessibility_label("滚动到最新输出")
                     .tooltip("滚动到最新输出")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.list.set_follow_mode(FollowMode::Tail);
-                        cx.notify();
+                        this.scroll_conversation_to_end(cx);
                     })),
             )
             .into_any_element()
@@ -249,12 +251,18 @@ impl Workspace {
             })
             .when(!empty, |area| {
                 area.child(
-                    list(self.list.clone(), move |index, _, cx| {
-                        view.update(cx, |this, cx| this.render_item(index, cx))
-                    })
-                    .w_full()
-                    .flex_1()
-                    .min_h_0(),
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .child(
+                            list(self.list.clone(), move |index, _, cx| {
+                                view.update(cx, |this, cx| this.render_item(index, cx))
+                            })
+                            .size_full(),
+                        )
+                        .child(self.render_turn_navigation(cx)),
                 )
             })
             .when(!self.approvals.is_empty(), |area| {
@@ -317,6 +325,9 @@ impl Workspace {
         }
         if self.approval_error.is_some() {
             return "工具审批不可用".into();
+        }
+        if !self.elicitation_panels.is_empty() {
+            return "等待用户交互…".into();
         }
         if !self.connected {
             return if self.connection_error.is_some() {
@@ -637,7 +648,9 @@ impl Workspace {
         div()
             .id(SharedString::from(id))
             .test_support()
-            .when(self.compact, |row| row.px_3())
+            .when(self.compact, |row| {
+                row.pl_3().pr(px(turn_navigation::RAIL_WIDTH))
+            })
             .py_1()
             .w_full()
             .text_size(theme::content_font_size(cx))
@@ -752,16 +765,28 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Button {
         let key = id.to_owned();
+        let line_height = (f32::from(theme::content_font_size(cx)) * 1.4).ceil();
         Button::new(SharedString::from(format!("expand-{id}")))
             .ghost()
             .small()
+            .h(px((line_height + 8.).max(24.)))
             .icon(if expanded {
                 IconName::ChevronDown
             } else {
                 IconName::ChevronRight
             })
             .accessibility_label(label.to_owned())
-            .child(div().flex_1().min_w_0().truncate().child(label.to_owned()))
+            .child(
+                div()
+                    .id(SharedString::from(format!("disclosure-label-{id}")))
+                    .test_support()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(theme::content_font_size(cx))
+                    .line_height(px(line_height))
+                    .truncate()
+                    .child(label.to_owned()),
+            )
             .on_click(cx.listener(move |this, _, _, cx| {
                 if !this.expanded.remove(&key) {
                     this.expanded.insert(key.clone());
@@ -779,6 +804,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let expanded = self.expanded.contains(id);
+        let input_key = format!("input-open-{id}");
+        let output_key = format!("output-closed-{id}");
+        let input_open = self.expanded.contains(&input_key);
+        let output_open = !self.expanded.contains(&output_key);
         let title = if tool.title.trim().is_empty() {
             tool.name.as_deref().unwrap_or("工具调用")
         } else {
@@ -803,6 +832,7 @@ impl Workspace {
                     .gap_2()
                     .px_2()
                     .py_1()
+                    .on_prepaint(self.track_content_header(id))
                     .child(
                         crate::tooltip::bounded(
                             SharedString::from(format!("tool-hint-{id}")),
@@ -831,10 +861,17 @@ impl Workspace {
                         Button::new(SharedString::from(format!("status-{id}")))
                             .ghost()
                             .xsmall()
+                            .w(px(20.))
+                            .h(px(20.))
+                            .p_0()
                             .flex_none()
-                            .icon(status_icon)
-                            .text_color(color)
-                            .tooltip(label),
+                            .tooltip(label)
+                            .child(status::activity_icon(
+                                SharedString::from(format!("tool-status-animation-{id}")),
+                                status_icon,
+                                color,
+                                tool.status == ToolCallStatus::InProgress,
+                            )),
                     ),
             )
             .when(expanded, |card| {
@@ -843,81 +880,269 @@ impl Workspace {
                         .flex()
                         .flex_col()
                         .gap_3()
-                        .p_4()
-                        .when_some(tool.name.as_ref(), |body, name| {
+                        .px_3()
+                        .pb_3()
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("tool-output-section-{id}")))
+                                .test_support()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(
+                                    self.disclosure(&output_key, "输出", output_open, index, cx)
+                                        .w_full()
+                                        .font_weight(FontWeight::SEMIBOLD),
+                                )
+                                .when(output_open, |section| {
+                                    section.child(self.render_tool_output(id, tool, index, cx))
+                                }),
+                        )
+                        .when(self.tool_has_input(tool), |body| {
                             body.child(
                                 div()
-                                    .id(SharedString::from(format!("tool-name-{id}")))
+                                    .id(SharedString::from(format!("tool-input-section-{id}")))
                                     .test_support()
-                                    .child(caption(format!("工具：{name}"), cx)),
+                                    .rounded_md()
+                                    .bg(cx.theme().muted.opacity(0.25))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        self.disclosure(&input_key, "输入", input_open, index, cx)
+                                            .w_full()
+                                            .text_color(cx.theme().muted_foreground),
+                                    )
+                                    .when(input_open, |section| {
+                                        section.child(self.render_tool_input(id, tool, index, cx))
+                                    }),
                             )
                         })
-                        .when(tool.title.contains(['\r', '\n']), |body| {
-                            body.child(self.markdown(
-                                format!("{id}-command"),
-                                code_block("sh", &tool.title),
+                        .child(self.render_content_actions(id, id, index, cx)),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn tool_has_input(&self, tool: &ToolCall) -> bool {
+        tool.raw_input.is_some()
+            || tool.name.is_some()
+            || tool.title.contains(['\r', '\n'])
+            || tool.title.chars().count() > 96
+            || tool.content.iter().any(|content| {
+                let acp::ToolCallContent::Terminal(reference) = content else {
+                    return false;
+                };
+                self.conversation
+                    .as_ref()
+                    .and_then(|c| c.terminals.get(reference.terminal_id.0.as_ref()))
+                    .is_some_and(|terminal| terminal.label.is_some() || terminal.cwd.is_some())
+            })
+    }
+
+    fn render_tool_input(
+        &self,
+        id: &str,
+        tool: &ToolCall,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let title_is_terminal_command = tool.content.iter().any(|content| {
+            let acp::ToolCallContent::Terminal(reference) = content else {
+                return false;
+            };
+            self.conversation
+                .as_ref()
+                .and_then(|c| c.terminals.get(reference.terminal_id.0.as_ref()))
+                .and_then(|terminal| terminal.label.as_ref())
+                .is_some_and(|label| label.trim() == tool.title.trim())
+        });
+        div()
+            .id(SharedString::from(format!("tool-input-{id}")))
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .px_3()
+            .pb_3()
+            .when_some(tool.name.as_ref(), |body, name| {
+                body.child(
+                    div()
+                        .id(SharedString::from(format!("tool-name-{id}")))
+                        .test_support()
+                        .child(caption(format!("工具：{name}"), cx)),
+                )
+            })
+            .when(
+                !tool
+                    .raw_input
+                    .as_ref()
+                    .is_some_and(|input| input_contains_command(input, &tool.title))
+                    && !title_is_terminal_command
+                    && (tool.title.contains(['\r', '\n']) || tool.title.chars().count() > 96),
+                |body| {
+                    body.child(self.markdown(
+                        format!("{id}-command"),
+                        code_block("sh", &tool.title),
+                        index,
+                        cx,
+                    ))
+                },
+            )
+            .when_some(tool.raw_input.as_ref(), |body, input| {
+                if let Some(command) = input.get("command").and_then(serde_json::Value::as_str) {
+                    let mut parameters = input
+                        .as_object()
+                        .expect("command belongs to an object")
+                        .clone();
+                    parameters.remove("command");
+                    body.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(caption("命令", cx))
+                            .child(self.markdown(
+                                format!("{id}-input-command"),
+                                code_block("sh", command),
                                 index,
                                 cx,
                             ))
-                        })
-                        .when_some(tool.raw_input.as_ref(), |body, input| {
-                            body.child(div().child(caption("参数", cx)).child(self.markdown(
-                                format!("{id}-input"),
-                                json_block(input),
-                                index,
-                                cx,
-                            )))
-                        })
-                        .when_some(
-                            tool.raw_output
-                                .as_ref()
-                                .filter(|_| !self.tool_has_rendered_output(tool)),
-                            |body, output| {
-                                body.child(div().child(caption("结果", cx)).child(self.markdown(
-                                    format!("{id}-output"),
-                                    json_block(output),
+                            .when(!parameters.is_empty(), |input| {
+                                input.child(caption("参数", cx)).child(self.markdown(
+                                    format!("{id}-input"),
+                                    json_block(&serde_json::Value::Object(parameters)),
                                     index,
                                     cx,
-                                )))
+                                ))
+                            }),
+                    )
+                } else {
+                    body.child(self.markdown(format!("{id}-input"), json_block(input), index, cx))
+                }
+            })
+            .children(tool.content.iter().filter_map(|content| {
+                let acp::ToolCallContent::Terminal(reference) = content else {
+                    return None;
+                };
+                let terminal = self
+                    .conversation
+                    .as_ref()?
+                    .terminals
+                    .get(reference.terminal_id.0.as_ref())?;
+                Some(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .when_some(
+                            terminal.label.as_ref().filter(|label| {
+                                !tool
+                                    .raw_input
+                                    .as_ref()
+                                    .is_some_and(|input| input_contains_command(input, label))
+                            }),
+                            |body, label| {
+                                body.child(self.markdown(
+                                    format!("{id}-terminal-command-{}", reference.terminal_id),
+                                    code_block("sh", label),
+                                    index,
+                                    cx,
+                                ))
                             },
                         )
-                        .children(tool.locations.iter().map(|location| {
-                            caption(
-                                format!(
-                                    "{}{}",
-                                    location.path.display(),
-                                    location
-                                        .line
-                                        .map(|line| format!(":{line}"))
-                                        .unwrap_or_default()
-                                ),
-                                cx,
+                        .when_some(terminal.cwd.as_ref(), |body, cwd| {
+                            body.child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "terminal-cwd-{}",
+                                        reference.terminal_id
+                                    )))
+                                    .test_support()
+                                    .child(caption(format!("工作目录：{}", cwd.display()), cx)),
                             )
-                        }))
-                        .children(tool.content.iter().enumerate().map(|(part, content)| {
-                            match content {
-                                acp::ToolCallContent::Content(content) => self.render_block(
-                                    format!("{id}-content-{part}"),
-                                    &content.content,
-                                    index,
-                                    cx,
-                                ),
-                                acp::ToolCallContent::Diff(diff) => self
-                                    .markdown(
-                                        format!("{id}-diff-{part}"),
-                                        tool_content::legacy_diff(diff),
-                                        index,
-                                        cx,
-                                    )
-                                    .into_any_element(),
-                                acp::ToolCallContent::Terminal(terminal) => {
-                                    self.render_terminal(id, terminal, tool, index, cx)
-                                }
-                                _ => caption("此工具内容暂不支持预览", cx).into_any_element(),
-                            }
-                        })),
+                        }),
                 )
-            })
+            }))
+            .into_any_element()
+    }
+
+    fn render_tool_output(
+        &self,
+        id: &str,
+        tool: &ToolCall,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id(SharedString::from(format!("tool-output-{id}")))
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .pl_3()
+            .border_l_2()
+            .border_color(cx.theme().primary.opacity(0.55))
+            .when_some(
+                tool.raw_output
+                    .as_ref()
+                    .filter(|_| !self.tool_has_rendered_output(tool)),
+                |body, output| {
+                    body.child(self.markdown(format!("{id}-output"), json_block(output), index, cx))
+                },
+            )
+            .children(tool.locations.iter().map(|location| {
+                caption(
+                    format!(
+                        "{}{}",
+                        location.path.display(),
+                        location
+                            .line
+                            .map(|line| format!(":{line}"))
+                            .unwrap_or_default()
+                    ),
+                    cx,
+                )
+            }))
+            .children(
+                tool.content
+                    .iter()
+                    .enumerate()
+                    .map(|(part, content)| match content {
+                        acp::ToolCallContent::Content(content) => self.render_block(
+                            format!("{id}-content-{part}"),
+                            &content.content,
+                            index,
+                            cx,
+                        ),
+                        acp::ToolCallContent::Diff(diff) => self.markdown(
+                            format!("{id}-diff-{part}"),
+                            tool_content::legacy_diff(diff),
+                            index,
+                            cx,
+                        ),
+                        acp::ToolCallContent::Terminal(terminal) => {
+                            self.render_terminal(id, terminal, tool, index, cx)
+                        }
+                        _ => caption("此工具内容暂不支持预览", cx).into_any_element(),
+                    }),
+            )
+            .when(
+                tool.content.is_empty() && tool.raw_output.is_none(),
+                |body| {
+                    body.child(caption(
+                        if matches!(
+                            tool.status,
+                            ToolCallStatus::Completed | ToolCallStatus::Failed
+                        ) {
+                            "此调用未提供输出"
+                        } else {
+                            "等待工具输出…"
+                        },
+                        cx,
+                    ))
+                },
+            )
             .into_any_element()
     }
     fn tool_has_rendered_output(&self, tool: &ToolCall) -> bool {
@@ -954,25 +1179,6 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .when_some(terminal.label.as_ref(), |body, label| {
-                    body.child(self.markdown(
-                        format!("{id}-terminal-command-{}", reference.terminal_id),
-                        code_block("sh", label),
-                        index,
-                        cx,
-                    ))
-                })
-                .when_some(terminal.cwd.as_ref(), |body, cwd| {
-                    body.child(
-                        div()
-                            .id(SharedString::from(format!(
-                                "terminal-cwd-{}",
-                                reference.terminal_id
-                            )))
-                            .test_support()
-                            .child(caption(format!("工作目录：{}", cwd.display()), cx)),
-                    )
-                })
                 .when(!terminal.output.is_empty(), |body| {
                     body.child(self.markdown(
                         format!("{id}-terminal-{}", reference.terminal_id),
@@ -1044,6 +1250,13 @@ impl Workspace {
     }
 }
 
+fn input_contains_command(input: &serde_json::Value, command: &str) -> bool {
+    input
+        .as_str()
+        .or_else(|| input.get("command").and_then(serde_json::Value::as_str))
+        .is_some_and(|input| input.trim() == command.trim())
+}
+
 fn json_block(value: &serde_json::Value) -> String {
     if let Some(text) = value.as_str() {
         return code_block("text", text);
@@ -1090,7 +1303,9 @@ pub(super) fn render_content(
         ContentBlock::Text(_) => div().children(markdown).into_any_element(),
         ContentBlock::ResourceLink(resource) => {
             let uri = resource.uri.clone();
+            let group = SharedString::from(format!("resource-copy-{id}"));
             div()
+                .group(group.clone())
                 .rounded_md()
                 .border_1()
                 .border_color(cx.theme().border)
@@ -1107,11 +1322,10 @@ pub(super) fn render_content(
                         .child(caption(uri.clone(), cx).truncate()),
                 )
                 .child(
-                    Button::new(SharedString::from(id))
-                        .ghost()
-                        .small()
-                        .icon(IconName::Copy)
+                    message_actions::action_button(SharedString::from(id), IconName::Copy, cx)
                         .tooltip("复制资源地址")
+                        .invisible()
+                        .group_hover(group, |style| style.visible())
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(uri.clone()))
                         }),
