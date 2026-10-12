@@ -235,7 +235,7 @@ impl Workspace {
             .ghost()
             .xsmall()
             .icon(IconName::ArrowUp)
-            .tooltip("立即发送 · 打断当前任务后发送此消息")
+            .tooltip(crate::i18n::tr!("queue-send-now"))
             .disabled(!self.can_send(cx))
             .on_click(cx.listener(|this, _, window, cx| this.send_immediately(window, cx)))
     }
@@ -270,11 +270,11 @@ impl Workspace {
                                 .px_3()
                                 .py_1()
                                 .child(caption(
-                                    format!(
-                                        "待发送 · {} 条{}",
-                                        outbox.len(),
-                                        if outbox.paused() { " · 已暂停" } else { "" }
-                                    ),
+                                    if outbox.paused() {
+                                        crate::i18n::tr!("queue-paused-count", count = outbox.len())
+                                    } else {
+                                        crate::i18n::tr!("queue-count", count = outbox.len())
+                                    },
                                     cx,
                                 ))
                                 .child(div().flex_1())
@@ -283,7 +283,7 @@ impl Workspace {
                                         Button::new("resume-pending-messages")
                                             .ghost()
                                             .xsmall()
-                                            .label("继续发送")
+                                            .label(crate::i18n::tr!("queue-resume"))
                                             .disabled(!send_ready)
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if !this.queue_send_ready(session) {
@@ -318,9 +318,15 @@ impl Workspace {
                                             row.bg(cx.theme().accent)
                                         })
                                         .child(
-                                            div().flex_1().min_w_0().text_sm().truncate().child(
-                                                queue_summary(draft, QUEUE_PREVIEW_CHARACTERS),
-                                            ),
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_size(crate::ui::SMALL)
+                                                .truncate()
+                                                .child(queue_summary(
+                                                    draft,
+                                                    QUEUE_PREVIEW_CHARACTERS,
+                                                )),
                                         )
                                         .child(
                                             Button::new(SharedString::from(format!(
@@ -329,9 +335,9 @@ impl Workspace {
                                             .ghost()
                                             .xsmall()
                                             .label(if editing == Some(index) {
-                                                "编辑中"
+                                                crate::i18n::tr!("queue-editing")
                                             } else {
-                                                "修改"
+                                                crate::i18n::tr!("action-edit")
                                             })
                                             .disabled(busy || editing.is_some())
                                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -344,7 +350,7 @@ impl Workspace {
                                             )))
                                             .ghost()
                                             .xsmall()
-                                            .label("撤回")
+                                            .label(crate::i18n::tr!("queue-withdraw"))
                                             .disabled(busy)
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.withdraw_queue_draft(
@@ -359,9 +365,9 @@ impl Workspace {
                                             .ghost()
                                             .xsmall()
                                             .label(if self.working() {
-                                                "打断发送"
+                                                crate::i18n::tr!("queue-interrupt")
                                             } else {
-                                                "发送"
+                                                crate::i18n::tr!("action-send")
                                             })
                                             .disabled(!send_ready)
                                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -380,17 +386,8 @@ impl Workspace {
     pub(super) fn render_queue(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let session = self.active?;
         let outbox = self.outboxes.get(&session)?;
-        let draft = outbox.front()?;
-        let summary = queue_summary(draft, QUEUE_PREVIEW_CHARACTERS);
-        let hint = format!(
-            "{} 条待发送消息{} · 点击取回编辑 · Escape 取消编辑\n{summary}",
-            outbox.len(),
-            if outbox.paused() {
-                "（已暂停）"
-            } else {
-                ""
-            },
-        );
+        outbox.front()?;
+        let hint = crate::i18n::tr!("queue-hint");
         Some(
             crate::tooltip::bounded(
                 "pending-messages-hint",

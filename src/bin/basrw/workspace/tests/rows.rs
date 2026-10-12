@@ -601,7 +601,7 @@ fn rows_local_draft_hover_renames_and_discards_without_creating_a_session(cx: &m
         assert!(view.composer.read(cx).value().is_empty());
         assert!(view.new_drafts.is_empty());
         assert!(view.new_draft_metadata.is_empty());
-        assert_eq!(view.draft_title(), "新 thread");
+        assert_eq!(view.draft_title(), "新建会话");
         assert!(fixture.commands.try_recv().is_err());
     })
     .expect("local draft actions need no daemon session");

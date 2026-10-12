@@ -16,6 +16,8 @@ const TERMINAL_RESULT_GRACE: std::time::Duration = std::time::Duration::from_sec
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Invocation {
+    #[serde(default)]
+    language: crate::i18n::Language,
     program: PathBuf,
     args: Vec<String>,
     env: BTreeMap<String, String>,
@@ -23,21 +25,22 @@ pub(crate) struct Invocation {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error("没有经过检测的本机可执行文件，请重新检测。")]
+    #[error("{}", crate::i18n::tr!("auth-terminal-unchecked"))]
     MissingProgram,
-    #[error("认证命令包含无效的参数或环境变量。")]
+    #[error("{}", crate::i18n::tr!("auth-terminal-invalid"))]
     InvalidCommand,
-    #[error("未找到可用终端。请安装 Alacritty、Kitty、Foot 或 XTerm，再重试。")]
+    #[error("{}", crate::i18n::tr!("auth-terminal-missing"))]
     NoTerminal,
-    #[error("无法启动认证终端，请检查终端安装和图形会话。")]
+    #[error("{}", crate::i18n::tr!("auth-terminal-start-failed"))]
     Launch,
-    #[error("无法启动登录程序：{0}")]
+    #[error("{}", crate::i18n::tr!("auth-program-start-failed", error = .0.to_string()))]
     LoginLaunch(std::io::Error),
 }
 
 impl Invocation {
     pub(crate) fn from_plan(plan: basr::authentication::Invocation) -> Result<Self, Error> {
         let invocation = Self {
+            language: crate::i18n::language(),
             program: plan.program,
             args: plan.args,
             env: plan.env,
@@ -129,8 +132,9 @@ impl Login {
     pub(crate) async fn complete(self) -> Result<(), String> {
         match self.complete_code().await? {
             0 => Ok(()),
-            code => Err(format!(
-                "登录失败（退出码 {code}）。请查看登录终端中的错误信息后重试。"
+            code => Err(crate::i18n::tr!(
+                "auth-exit-failed",
+                code = (code).to_string()
             )),
         }
     }
@@ -141,7 +145,7 @@ impl Login {
         let mut child = self.child;
         let mut terminal = tokio::spawn(async move { child.wait().await });
         tokio::time::timeout(LOGIN_TIMEOUT, async {
-            let mut terminal_exit = None;
+            let mut terminal_exit: Option<(tokio::time::Instant, String)> = None;
             loop {
                 if let Ok(value) = tokio::fs::read_to_string(&self.result).await
                     && let Ok(code) = value.trim().parse::<i32>()
@@ -152,18 +156,18 @@ impl Login {
                     && tokio::time::Instant::now().duration_since(*closed_at)
                         >= TERMINAL_RESULT_GRACE
                 {
-                    return Err(format!("登录终端已退出（{detail}）。请重新打开登录终端。"));
+                    return Err(crate::i18n::tr!("auth-terminal-exited", detail = (detail).to_string()));
                 }
                 tokio::select! {
                     _ = tokio::time::sleep(RESULT_INTERVAL) => {},
                     result = &mut terminal, if terminal_exit.is_none() => {
                         let detail = match result {
                             Ok(Ok(status)) => status.code().map_or_else(
-                                || "进程被中止".into(),
-                                |code| format!("退出码 {code}"),
+                                || crate::i18n::tr!("process-terminated").into(),
+                                |code| crate::i18n::tr!("terminal-exit-code", code = (code).to_string()),
                             ),
                             Ok(Err(error)) => error.to_string(),
-                            Err(_) => "无法读取退出结果".into(),
+                            Err(_) => crate::i18n::tr!("process-exit-unavailable").into(),
                         };
                         terminal_exit = Some((tokio::time::Instant::now(), detail));
                     },
@@ -171,7 +175,7 @@ impl Login {
             }
         })
         .await
-        .unwrap_or_else(|_| Err("未收到登录完成结果。可完成终端登录后点击“重新检测”。".into()))
+        .unwrap_or_else(|_| Err(crate::i18n::tr!("auth-check-after-terminal").into()))
     }
 }
 
@@ -210,6 +214,7 @@ pub(crate) fn run_helper_if_requested() {
         let value = std::env::var(INVOCATION_ENV).map_err(|_| Error::InvalidCommand)?;
         let invocation: Invocation =
             serde_json::from_str(&value).map_err(|_| Error::InvalidCommand)?;
+        crate::i18n::set_language(invocation.language);
         invocation.validate()?;
         Ok(invocation)
     })();
@@ -235,7 +240,7 @@ fn execute_helper(
         Ok(status) if status.success() => 0,
         Ok(status) => {
             let code = status.code().unwrap_or(1);
-            eprintln!("\n登录失败（退出码 {code}）。请查看上方错误信息后重试。");
+            eprintln!("{}", crate::i18n::tr!("auth-exit-failed", code = code));
             code
         }
         Err(error) => {
@@ -248,7 +253,7 @@ fn execute_helper(
         let _ = publish_result(path, code);
     }
     if code != 0 && hold_failure {
-        eprint!("按 Enter 关闭登录终端…");
+        eprint!("{}", crate::i18n::tr!("auth-terminal-close"));
         let _ = std::io::stderr().flush();
         let mut line = String::new();
         let _ = std::io::stdin().lock().read_line(&mut line);

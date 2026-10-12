@@ -124,14 +124,14 @@ impl Panel {
                     Kind::Integer => text
                         .parse::<i64>()
                         .map(|value| json!(value))
-                        .map_err(|_| "请输入整数".into()),
+                        .map_err(|_| crate::i18n::tr!("validation-integer").into()),
                     Kind::Number => text
                         .parse::<f64>()
                         .ok()
                         .filter(|value| value.is_finite())
                         .and_then(serde_json::Number::from_f64)
                         .map(Value::Number)
-                        .ok_or_else(|| "请输入有效数字".into()),
+                        .ok_or_else(|| crate::i18n::tr!("validation-number").into()),
                     _ => unreachable!("only textual fields create inputs"),
                 };
                 match value {
@@ -150,7 +150,10 @@ impl Panel {
                     }
                 }
                 None if field.required => {
-                    errors.insert(field.name.clone(), format!("请填写 {}", field.title));
+                    errors.insert(
+                        field.name.clone(),
+                        crate::i18n::tr!("validation-required", field = (field.title).to_string()),
+                    );
                 }
                 _ => {}
             }
@@ -189,9 +192,9 @@ impl Panel {
         self.submitting = true;
         self.accepted = action == "accept";
         self.message = if matches!(self.request.mode, Mode::Url(_)) && self.accepted {
-            "链接已打开，请在浏览器中完成操作；正在等待 Agent 的结果。".into()
+            crate::i18n::tr!("elicitation-browser").into()
         } else {
-            "正在提交给 Agent…".into()
+            crate::i18n::tr!("elicitation-submitting").into()
         };
         cx.emit(Answered {
             request_id: self.request_id.clone(),
@@ -209,7 +212,7 @@ impl Render for Panel {
             .flex()
             .flex_col()
             .gap_2()
-            .text_sm()
+            .text_size(crate::ui::SMALL)
             .p_3()
             .border_1()
             .border_color(cx.theme().border)
@@ -233,7 +236,7 @@ impl Render for Panel {
                         .when_some(field.description.clone(), |row, description| {
                             row.child(
                                 div()
-                                    .text_xs()
+                                    .text_size(crate::ui::SMALL)
                                     .text_color(cx.theme().muted_foreground)
                                     .child(description),
                             )
@@ -270,14 +273,13 @@ impl Render for Panel {
                                 options.iter().enumerate().map(|(index, option)| {
                                     let name = name.clone();
                                     let value = option.value.clone();
-                                    Button::new(format!("{id}-{index}"))
-                                        .small()
+                                    crate::ui::action_button(format!("{id}-{index}"))
                                         .label(option.title.clone())
                                         .disabled(self.submitting)
-                                        .when_some(
-                                            option.description.clone(),
-                                            |button, description| button.tooltip(description),
-                                        )
+                                        .tooltip(crate::i18n::tr!(
+                                            "option-choose",
+                                            name = option.title.as_str()
+                                        ))
                                         .when(
                                             self.values.get(&name).and_then(Value::as_str)
                                                 == Some(value.as_str()),
@@ -290,6 +292,21 @@ impl Render for Panel {
                                         }))
                                 }),
                             ));
+                            if let Some(description) = options
+                                .iter()
+                                .find(|option| {
+                                    self.values.get(&name).and_then(Value::as_str)
+                                        == Some(option.value.as_str())
+                                })
+                                .and_then(|option| option.description.as_ref())
+                            {
+                                row = row.child(
+                                    div()
+                                        .text_size(crate::ui::SMALL)
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(description.clone()),
+                                );
+                            }
                         }
                         Kind::MultiSelect { options } => {
                             row = row.child(div().flex().flex_col().gap_1().children(
@@ -332,7 +349,7 @@ impl Render for Panel {
                     if let Some(error) = self.errors.get(&name) {
                         row = row.child(
                             div()
-                                .text_xs()
+                                .text_size(crate::ui::SMALL)
                                 .text_color(cx.theme().danger)
                                 .child(error.clone()),
                         );
@@ -340,10 +357,10 @@ impl Render for Panel {
                     panel = panel.child(row);
                 }
                 panel = panel.child(
-                    Button::new("elicitation-submit")
+                    crate::ui::action_button("elicitation-submit")
                         .small()
                         .primary()
-                        .label("提交")
+                        .label(crate::i18n::tr!("action-submit"))
                         .disabled(self.submitting)
                         .on_click(cx.listener(|this, _, _, cx| this.answer("accept", cx))),
                 );
@@ -351,19 +368,21 @@ impl Render for Panel {
             Mode::Url(url) => {
                 let url = url.clone();
                 panel = panel
-                    .child(format!("授权网站：{}", url.host))
+                    .child(crate::i18n::tr!(
+                        "elicitation-host",
+                        host = (url.host).to_string()
+                    ))
                     .child(
                         div()
                             .id("elicitation-url")
                             .test_support()
-                            .text_xs()
+                            .text_size(crate::ui::SMALL)
                             .child(url.url.clone()),
                     )
                     .child(
-                        Button::new("elicitation-open-url")
-                            .small()
+                        crate::ui::action_button("elicitation-open-url")
                             .primary()
-                            .label("打开链接")
+                            .label(crate::i18n::tr!("action-open-link"))
                             .disabled(self.submitting)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !this.submitting {
@@ -380,16 +399,14 @@ impl Render for Panel {
                     .flex()
                     .gap_2()
                     .child(
-                        Button::new("elicitation-decline")
-                            .small()
-                            .label("拒绝")
+                        crate::ui::action_button("elicitation-decline")
+                            .label(crate::i18n::tr!("action-decline"))
                             .disabled(self.submitting)
                             .on_click(cx.listener(|this, _, _, cx| this.answer("decline", cx))),
                     )
                     .child(
-                        Button::new("elicitation-cancel")
-                            .small()
-                            .label("取消")
+                        crate::ui::action_button("elicitation-cancel")
+                            .label(crate::i18n::tr!("action-cancel"))
                             .disabled(self.submitting)
                             .on_click(cx.listener(|this, _, _, cx| this.answer("cancel", cx))),
                     ),

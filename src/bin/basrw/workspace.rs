@@ -270,7 +270,8 @@ impl Workspace {
         });
         let selected_directory = Some(groups::normalize(&cwd));
         let directories = vec![groups::normalize(&cwd)];
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 threads…"));
+        let search = cx
+            .new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr!("session-search")));
         let composer_mode = if compact {
             cx.global::<theme::Appearance>().composer_enter_behavior
         } else {
@@ -278,7 +279,7 @@ impl Workspace {
         };
         let composer = cx.new(|cx| {
             EditorState::new(window, cx)
-                .placeholder("描述你想完成的任务…")
+                .placeholder(crate::i18n::tr!("composer-placeholder"))
                 .language("markdown")
                 .line_number(false)
                 .folding(false)
@@ -292,7 +293,8 @@ impl Workspace {
         let mention_decorations = composer.update(cx, |input, cx| {
             input.create_decorations_collection(Vec::new(), cx)
         });
-        let rename = cx.new(|cx| InputState::new(window, cx).placeholder("会话标题"));
+        let rename =
+            cx.new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr!("session-title")));
         if cx.try_global::<crate::settings::AgentChanges>().is_none() {
             cx.set_global(crate::settings::AgentChanges::default());
         }
@@ -353,7 +355,25 @@ impl Workspace {
                 );
                 cx.notify();
             }),
-            cx.observe_global::<theme::Appearance>(|this, cx| this.sync_composer_mode(cx)),
+            cx.observe_global_in::<theme::Appearance>(window, |this, window, cx| {
+                this.sync_composer_mode(cx);
+                for (input, label) in [
+                    (&this.search, crate::i18n::tr!("session-search")),
+                    (&this.rename, crate::i18n::tr!("session-title")),
+                ] {
+                    input.update(cx, |input, cx| input.set_placeholder(label, window, cx));
+                }
+                this.composer.update(cx, |input, cx| {
+                    input.set_placeholder(crate::i18n::tr!("composer-placeholder"), window, cx)
+                });
+                this.close_menu(window, cx);
+                window.set_window_title(if this.compact {
+                    crate::i18n::tr!("app-quick-input")
+                } else {
+                    "BASR"
+                });
+                cx.notify();
+            }),
             cx.observe(&composer, |this, _, cx| {
                 this.sync_mentions(cx);
                 cx.notify();
@@ -524,8 +544,10 @@ impl Workspace {
             if let Some((session, request_id)) = permission
                 && self.active == Some(session)
             {
-                self.approvals
-                    .responded(&request_id, Err("连接任务已停止，请重新打开 BASR。".into()));
+                self.approvals.responded(
+                    &request_id,
+                    Err(crate::i18n::tr!("connection-reopen").into()),
+                );
             }
             if let Some(session) = prompt
                 && let Some(outbox) = self.outboxes.get_mut(&session)
@@ -537,7 +559,7 @@ impl Workspace {
                 self.drafts.insert(session, draft);
             }
             self.connected = false;
-            self.connection_error = Some("连接任务已停止，请重新打开 BASR。".into());
+            self.connection_error = Some(crate::i18n::tr!("connection-reopen").into());
         }
     }
 
@@ -564,40 +586,18 @@ impl Workspace {
             .or_else(|| self.attachment_error(cx))
     }
 
-    fn send_hint(&self, cx: &App) -> String {
-        let hint = if self.paste_pending {
-            "正在读取剪贴板…"
-        } else if self.connection_status() != status::ConnectionStatus::Connected {
-            "连接未就绪，暂不能发送"
-        } else if self.creating {
-            "正在创建 thread，暂不能发送"
-        } else if self.waiting_for_agent_selection {
-            "请先选择 Agent"
-        } else if self.active.is_some_and(|id| self.archive_blocked(id)) {
-            "已归档或正在更新归档状态；恢复后可发送，待发送队列需手动重试"
-        } else if self.active.is_some_and(|id| self.sending(id)) {
-            "正在发送…"
-        } else if self.working() {
-            "加入待发送队列"
-        } else {
-            "发送"
-        };
-        let hint = if self.working() {
-            format!(
-                "{hint} · {}\n当前回复结束后发送 · {} 换行",
-                self.composer_send_shortcut(),
-                self.composer_newline_shortcut()
+    fn send_hint(&self, _: &App) -> String {
+        if self.working() {
+            crate::i18n::tr!(
+                "composer-queue-hint",
+                shortcut = self.composer_send_shortcut()
             )
         } else {
-            format!(
-                "{hint} · {}\n换行 · {}",
-                self.composer_send_shortcut(),
-                self.composer_newline_shortcut()
+            crate::i18n::tr!(
+                "composer-send-hint",
+                shortcut = self.composer_send_shortcut()
             )
-        };
-        self.composer_error(cx)
-            .map(|error| format!("{error}\n\n{hint}"))
-            .unwrap_or(hint)
+        }
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -857,7 +857,7 @@ impl Workspace {
             .transpose()
         {
             Err(_) => {
-                self.error = Some("工作目录不是有效 UTF-8，无法创建会话".into());
+                self.error = Some(crate::i18n::tr!("workspace-encoding").into());
                 cx.notify();
                 return;
             }
@@ -1134,8 +1134,7 @@ impl Workspace {
                 match result {
                     Ok(session) if self.removed_sessions.contains(&session.id) => {
                         if current {
-                            self.error =
-                                Some("创建的 thread 已被删除，请新建 thread 后继续。".into());
+                            self.error = Some(crate::i18n::tr!("session-deleted").into());
                         }
                     }
                     Ok(session) => {
@@ -1172,8 +1171,10 @@ impl Workspace {
                         }
                     }
                     Err(error) if current => {
-                        self.error =
-                            Some(format!("初始化 Agent 失败，草稿已保留；F5 重试：{error}"));
+                        self.error = Some(crate::i18n::tr!(
+                            "agent-init-error",
+                            error = (error).to_string()
+                        ));
                     }
                     Err(_) => {}
                 }
@@ -1213,8 +1214,11 @@ impl Workspace {
                     }
                     Err(error) => {
                         self.operation_error(
-                            "归档状态更新失败",
-                            format!("草稿和队列已保留。\n{error}"),
+                            crate::i18n::tr!("session-archive-update-failed"),
+                            crate::i18n::tr!(
+                                "session-operation-error",
+                                error = (error).to_string()
+                            ),
                             cx,
                         );
                     }
@@ -1259,8 +1263,12 @@ impl Workspace {
                     }
                     Err(error) => {
                         self.operation_error(
-                            "删除失败",
-                            format!("会话 {session} 的本地草稿和队列已保留。\n{error}"),
+                            crate::i18n::tr!("session-delete-failed"),
+                            crate::i18n::tr!(
+                                "session-delete-error",
+                                session = (session).to_string(),
+                                error = (error).to_string()
+                            ),
                             cx,
                         );
                     }
@@ -1305,8 +1313,11 @@ impl Workspace {
                             self.drafts.insert(session, draft);
                         }
                         let error = result.expect_err("rejection requires an RPC error");
-                        self.error =
-                            Some(format!("发送失败，草稿已保留（会话 {session}）：{error}"))
+                        self.error = Some(crate::i18n::tr!(
+                            "message-send-error",
+                            session = (session).to_string(),
+                            error = (error).to_string()
+                        ))
                     }
                     _ => {}
                 }
@@ -1315,7 +1326,10 @@ impl Workspace {
                 self.cancelling.remove(&session);
                 self.complete_queue_interrupt(session, result.is_ok());
                 if let Err(error) = result {
-                    self.error = Some(format!("停止失败：{error}"));
+                    self.error = Some(crate::i18n::tr!(
+                        "task-stop-error",
+                        error = (error).to_string()
+                    ));
                 }
             }
             Update::Snapshot {
@@ -1471,7 +1485,7 @@ fn title(session: &SessionMeta) -> String {
         .title
         .clone()
         .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| "新 thread".into())
+        .unwrap_or_else(|| crate::i18n::tr!("session-new").into())
 }
 
 fn matches_query(session: &SessionMeta, query: &str) -> bool {
@@ -1487,7 +1501,7 @@ fn matches_query(session: &SessionMeta, query: &str) -> bool {
 
 fn caption(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
-        .text_xs()
+        .text_size(crate::ui::SMALL)
         .text_color(cx.theme().muted_foreground)
         .child(text.into())
 }

@@ -57,7 +57,16 @@ gpui_kit::assets::icon_assets!(
         CircleCheck,
         CircleAlert,
         CircleStop,
-        CornerLeftUp
+        CornerLeftUp,
+        Wrench,
+        Terminal,
+        FileText,
+        FilePen,
+        Globe,
+        ListTodo,
+        Circle,
+        Clock,
+        X
     ]
 );
 

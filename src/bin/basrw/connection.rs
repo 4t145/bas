@@ -25,7 +25,6 @@ const HISTORY_PAGE_SIZE: u32 = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
-const REQUEST_TIMEOUT_MESSAGE: &str = "请求超时；操作可能已被服务端接收，请检查会话状态后再试。";
 
 pub(super) struct CreateSession {
     pub epoch: u64,
@@ -304,7 +303,7 @@ async fn catalog_loop(mut client: Client, updates: mpsc::Sender<Update>, refresh
 async fn request<T>(future: impl Future<Output = Result<T>>) -> Result<T, String> {
     match tokio::time::timeout(REQUEST_TIMEOUT, future).await {
         Ok(result) => result.map_err(|error| format!("{error:#}")),
-        Err(_) => Err(REQUEST_TIMEOUT_MESSAGE.into()),
+        Err(_) => Err(crate::i18n::tr!("connection-request-timeout").into()),
     }
 }
 
@@ -319,7 +318,11 @@ async fn create_session(client: &mut Client, form: CreateSession) -> Update {
     };
     let response = tokio::time::timeout(REQUEST_TIMEOUT, client.create_session(request))
         .await
-        .unwrap_or_else(|_| Err(tonic::Status::deadline_exceeded(REQUEST_TIMEOUT_MESSAGE)))
+        .unwrap_or_else(|_| {
+            Err(tonic::Status::deadline_exceeded(crate::i18n::tr!(
+                "connection-request-timeout"
+            )))
+        })
         .map(tonic::Response::into_inner);
     creation_result(form.epoch, form.agent, response)
 }
@@ -341,7 +344,7 @@ fn creation_result(
         .and_then(|response| {
             response
                 .session
-                .ok_or_else(|| "basrd 未返回创建的会话".to_owned())
+                .ok_or_else(|| crate::i18n::tr!("session-create-empty").to_owned())
         })
         .and_then(|session| {
             session
@@ -419,10 +422,7 @@ async fn execute(mut client: Client, command: Command) -> Update {
                     .await
                     .map_err(|error| {
                         if error.code() == Code::Unimplemented {
-                            anyhow::anyhow!(
-                                "当前运行的 basrd 不支持归档。需要升级服务入口并重启后才能使用。\n\
-                                 注意：重启会结束 Agent 并清空内存会话和历史，请先确认可丢弃。\n当前会话未删除。"
-                            )
+                            anyhow::anyhow!(crate::i18n::tr!("session-archive-upgrade"))
                         } else {
                             error.into()
                         }
@@ -430,7 +430,7 @@ async fn execute(mut client: Client, command: Command) -> Update {
                     .into_inner();
                 response
                     .session
-                    .context("basrd 未返回归档后的会话")?
+                    .context(crate::i18n::tr!("session-archive-empty"))?
                     .try_into()
                     .map_err(Into::into)
             })
@@ -528,7 +528,7 @@ async fn snapshot(client: &mut Client, session: SessionId) -> Result<Snapshot> {
         }
         match page.next {
             Some(next) if Some(next) != after => after = Some(next),
-            Some(_) => anyhow::bail!("basrd 返回了重复的历史游标"),
+            Some(_) => anyhow::bail!(crate::i18n::tr!("session-history-cursor")),
             None => break,
         }
     }
@@ -539,7 +539,7 @@ async fn snapshot(client: &mut Client, session: SessionId) -> Result<Snapshot> {
         .await?
         .into_inner()
         .session
-        .context("basrd 未返回会话信息")?
+        .context(crate::i18n::tr!("session-info-empty"))?
         .try_into()?;
     Ok(Snapshot {
         session: meta,
@@ -655,8 +655,9 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                             let _ = updates
                                 .send(Update::Stream {
                                     epoch,
-                                    state: StreamState::Unavailable(format!(
-                                        "无效的会话事件：{error}"
+                                    state: StreamState::Unavailable(crate::i18n::tr!(
+                                        "session-invalid-event",
+                                        error = (error).to_string()
                                     )),
                                 })
                                 .await;

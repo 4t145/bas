@@ -8,18 +8,11 @@ const COMMAND_ROW_HEIGHT: f32 = 44.;
 const COMMAND_HINT_HEIGHT: f32 = 28.;
 const OUTPUT_HEIGHT: f32 = 440.;
 pub(super) const HEADER_HEIGHT: f32 = 44.;
-pub(super) const ICON_BUTTON_SIZE: f32 = 24.;
+pub(super) const ICON_BUTTON_SIZE: f32 = crate::ui::COMPACT_CONTROL;
 pub(super) const MACOS_WINDOW_CONTROLS_WIDTH: f32 = 80.;
 
 pub(super) fn icon_button(id: impl Into<gpui_kit::ElementId>, icon: IconName) -> Button {
-    Button::new(id)
-        .ghost()
-        .xsmall()
-        .icon(icon)
-        .w(px(ICON_BUTTON_SIZE))
-        .h(px(ICON_BUTTON_SIZE))
-        .p_0()
-        .flex_shrink_0()
+    crate::ui::icon_button(id, icon)
 }
 
 pub(crate) fn initial_size(compact: bool) -> Size<Pixels> {
@@ -73,6 +66,7 @@ impl Workspace {
                     OUTPUT_HEIGHT.max(
                         COMPACT_HEADER_HEIGHT
                             + self.composer_height(cx)
+                            + self.feedback_height(cx)
                             + chat::COMPOSER_TOOLBAR_HEIGHT
                             + chat::COMPOSER_BOTTOM_PADDING
                             + PANEL_BORDER_WIDTH * 2.
@@ -82,6 +76,7 @@ impl Workspace {
                 } else {
                     COMPACT_HEADER_HEIGHT
                         + self.composer_height(cx)
+                        + self.feedback_height(cx)
                         + chat::COMPOSER_TOOLBAR_HEIGHT
                         + chat::COMPOSER_BOTTOM_PADDING
                         + PANEL_BORDER_WIDTH * 2.
@@ -100,7 +95,7 @@ impl Workspace {
             window.resize(size);
         }
         window.set_window_title(if self.compact {
-            "BASR — Quick input"
+            crate::i18n::tr!("app-quick-input")
         } else {
             "BASR"
         });
@@ -187,9 +182,9 @@ impl Workspace {
             },
         )
         .tooltip(if self.compact {
-            "展开窗口 · Ctrl Shift M"
+            crate::i18n::tr!("window-expand")
         } else {
-            "最小模式 · Ctrl Shift M"
+            crate::i18n::tr!("window-compact")
         })
         .on_click(cx.listener(|this, _, window, cx| this.toggle_mode(window, cx)))
     }
@@ -308,6 +303,27 @@ impl Workspace {
                         .min_h_0()
                         .border_b_1()
                         .border_color(cx.theme().border)
+                        .when(
+                            self.conversation.as_ref().is_some_and(|conversation| {
+                                !conversation.plans.is_empty() || !conversation.notices.is_empty()
+                            }),
+                            |output| {
+                                output.child(
+                                    div()
+                                        .id("compact-feedback")
+                                        .test_support()
+                                        .flex_shrink_0()
+                                        .max_h(px(OUTPUT_HEIGHT / 2.))
+                                        .overflow_y_scroll()
+                                        .pl(px(chat::THREAD_BODY_PADDING))
+                                        .pr(px(
+                                            turn_navigation::RAIL_WIDTH + chat::THREAD_BODY_PADDING
+                                        ))
+                                        .children(self.render_notices(cx))
+                                        .children(self.render_plan(cx)),
+                                )
+                            },
+                        )
                         .child(self.render_timeline(cx)),
                 )
             })
@@ -335,7 +351,7 @@ impl Workspace {
                                 IconName::ChevronRight
                             },
                         )
-                        .tooltip("折叠 / 展开输出 · Ctrl O")
+                        .tooltip(crate::i18n::tr!("conversation-toggle"))
                         .on_click(
                             cx.listener(|this, _, window, cx| this.toggle_output(window, cx)),
                         ),
@@ -350,11 +366,13 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .text_xs()
+                            .text_size(crate::ui::SMALL)
                             .child(self.connection_indicator("compact-connection", cx))
                             .when(
                                 self.current().is_some_and(|session| session.archived),
-                                |status| status.child(caption("已归档", cx)),
+                                |status| {
+                                    status.child(caption(crate::i18n::tr!("session-archived"), cx))
+                                },
                             )
                             .children(
                                 self.activity_label()
@@ -383,7 +401,7 @@ impl Workspace {
                     .child(self.workspace_button(cx))
                     .child(
                         icon_button("new-session", IconName::Plus)
-                            .tooltip("新 thread · Ctrl N")
+                            .tooltip(crate::i18n::tr!("session-new-shortcut"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.new_session(window, cx)),
                             ),

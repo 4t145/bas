@@ -33,7 +33,7 @@ impl gpui_kit::Global for AgentChanges {}
 
 // Keep actions distinct from the ghost navigation items, using upstream state styling.
 fn action_button(id: impl Into<gpui_kit::ElementId>) -> Button {
-    Button::new(id).with_variant(ButtonVariant::Default).small()
+    crate::ui::action_button(id)
 }
 
 fn navigation_button(
@@ -78,8 +78,8 @@ impl Category {
 
     fn title(self) -> &'static str {
         match self {
-            Self::Appearance => "外观",
-            Self::Agents => "Agent 服务",
+            Self::Appearance => crate::i18n::tr!("settings-appearance"),
+            Self::Agents => crate::i18n::tr!("settings-agents"),
         }
     }
 
@@ -90,9 +90,19 @@ impl Category {
                 word,
                 "agent" | "agents" | "acp" | "codex" | "opencode" | "pi"
             )
-        }) || ["服务", "后端", "命令", "参数"]
-            .iter()
-            .any(|word| query.contains(word));
+        }) || [
+            "智能体",
+            "服务",
+            "后端",
+            "命令",
+            "参数",
+            "service",
+            "backend",
+            "command",
+            "arguments",
+        ]
+        .iter()
+        .any(|word| query.contains(word));
         if agents {
             Self::Agents
         } else {
@@ -116,7 +126,8 @@ pub(crate) struct Settings {
 
 impl Settings {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索设置…"));
+        let search = cx
+            .new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr!("settings-search")));
         let editor = crate::theme::Editor::current(cx);
         let agents = cx.new(|cx| agents::Agents::new(editor.store(), window, cx));
         let appearance = cx.new(|cx| appearance::AppearancePage::new(editor, window, cx));
@@ -142,6 +153,13 @@ impl Settings {
                 }
             }),
             cx.observe(&agents, |_, _, cx| cx.notify()),
+            cx.observe_global_in::<crate::theme::Appearance>(window, |this, window, cx| {
+                this.search.update(cx, |input, cx| {
+                    input.set_placeholder(crate::i18n::tr!("settings-search"), window, cx)
+                });
+                this.agents.update(cx, |page, cx| page.localize(window, cx));
+                cx.notify();
+            }),
         ];
         Self {
             focus: cx.focus_handle(),
@@ -282,7 +300,11 @@ impl Settings {
                             })
                             .accessibility_label(format!(
                                 "{}{}",
-                                if expanded { "收起" } else { "展开" },
+                                if expanded {
+                                    crate::i18n::tr!("action-collapse")
+                                } else {
+                                    crate::i18n::tr!("action-expand")
+                                },
                                 category.title()
                             ))
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -369,16 +391,18 @@ impl Render for Settings {
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(crate::ui::SMALL)
                             .text_color(cx.theme().muted_foreground)
                             .child(match self.category {
-                                Category::Appearance => "有效外观修改自动保存",
-                                Category::Agents => "Agent 命令需明确保存",
+                                Category::Appearance => {
+                                    crate::i18n::tr!("settings-appearance-footer")
+                                }
+                                Category::Agents => crate::i18n::tr!("settings-agents-footer"),
                             }),
                     )
                     .child(
                         action_button("settings-close")
-                            .label("关闭设置")
+                            .label(crate::i18n::tr!("settings-close"))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(Close))),
                     ),
             )

@@ -6,7 +6,6 @@ use basr::acp_v2 as acp;
 use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
     progress::ProgressCircle,
-    tooltip::Tooltip,
 };
 use std::rc::Rc;
 
@@ -29,7 +28,10 @@ fn summary(usage: &acp::UsageUpdate) -> String {
             format::short_tokens(usage.used),
             format::short_tokens(usage.size),
         ),
-        None => format!("{} · 容量未知", format::short_tokens(usage.used)),
+        None => crate::i18n::tr!(
+            "usage-unknown",
+            used = (format::short_tokens(usage.used)).to_string()
+        ),
     }
 }
 
@@ -40,26 +42,6 @@ fn label(id: &'static str, text: String) -> impl IntoElement {
         .role(gpui_kit::Role::Label)
         .aria_label(text.clone())
         .child(text)
-}
-
-fn hint(usage: &acp::UsageUpdate, cx: &App) -> AnyElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child("Context"),
-        )
-        .child(label("usage-hover-summary", summary(usage)))
-        .children(usage.cost.as_ref().map(|cost| {
-            div()
-                .text_sm()
-                .child(format!("费用 · {}", format::cost_label(cost)))
-        }))
-        .into_any_element()
 }
 
 fn details(usage: &acp::UsageUpdate, cx: &App) -> AnyElement {
@@ -81,35 +63,44 @@ fn details(usage: &acp::UsageUpdate, cx: &App) -> AnyElement {
         .py_1()
         .child(
             div()
-                .text_sm()
+                .text_size(crate::ui::SMALL)
                 .text_color(cx.theme().muted_foreground)
-                .child("Context"),
+                .child(crate::i18n::tr!("usage-title")),
         )
         .child(label("usage-summary", summary(usage)))
         .child(div().h(px(1.)).bg(cx.theme().border))
         .child(label(
             "usage-used",
-            format!("已用 tokens · {}", format::exact_tokens(usage.used)),
+            crate::i18n::tr!(
+                "usage-used",
+                used = (format::exact_tokens(usage.used)).to_string()
+            ),
         ))
         .child(label(
             "usage-capacity",
             match ratio(usage) {
-                Some(_) => format!("上下文容量 · {}", format::exact_tokens(usage.size)),
-                None => "上下文容量 · 未知".into(),
+                Some(_) => crate::i18n::tr!(
+                    "usage-capacity",
+                    capacity = (format::exact_tokens(usage.size)).to_string()
+                ),
+                None => crate::i18n::tr!("usage-unknown-capacity").into(),
             },
         ))
         .when(usage.size > 0, |panel| {
             panel.child(label(
                 "usage-remaining",
-                format!("剩余 tokens · {}", format::exact_tokens(remaining)),
+                crate::i18n::tr!(
+                    "usage-remaining",
+                    remaining = (format::exact_tokens(remaining)).to_string()
+                ),
             ))
         })
         .children(usage.cost.as_ref().map(|cost| {
             label(
                 "usage-cost",
-                crate::tooltip::wrap_tokens(&format!(
-                    "会话累计费用 · {}",
-                    format::cost_label(cost)
+                crate::tooltip::wrap_tokens(&crate::i18n::tr!(
+                    "usage-cost",
+                    cost = (format::cost_label(cost)).to_string()
                 )),
             )
         }))
@@ -127,7 +118,10 @@ impl Workspace {
         } else {
             cx.theme().muted_foreground
         };
-        let name = format!("上下文 {} · 查看详情", summary(usage));
+        let name = crate::i18n::tr!(
+            "usage-accessibility",
+            summary = (summary(usage)).to_string()
+        );
         let button = Button::new(SharedString::from(format!("context-usage-{session}")))
             .ghost()
             .xsmall()
@@ -190,7 +184,7 @@ impl Workspace {
             self.menu_button(button, DETAILS_ROWS, false, build, cx)
         } else {
             button
-                .dropdown_menu(build)
+                .dropdown_menu(move |menu, window, cx| crate::ui::menu(build(menu, window, cx)))
                 .anchor(gpui_kit::Anchor::BottomLeft)
                 .on_open_change(move |open, _, cx| {
                     let _ = owner.update(cx, |this, cx| {
@@ -204,9 +198,9 @@ impl Workspace {
                 })
                 .into_any_element()
         };
+        let hint = crate::i18n::tr!("usage-accessibility", summary = summary(usage));
         let details_open =
             self.usage_details_open == Some(session) || (self.compact && self.menu.is_some());
-        let preview = usage.clone();
         Some(
             div()
                 .id("session-usage")
@@ -214,8 +208,7 @@ impl Workspace {
                 .flex_shrink_0()
                 .when(!details_open, |trigger| {
                     trigger.hoverable_tooltip(move |window, cx| {
-                        let preview = preview.clone();
-                        Tooltip::element(move |_, cx| hint(&preview, cx)).build(window, cx)
+                        crate::tooltip::view_with_id("usage-hint", hint.clone(), window, cx)
                     })
                 })
                 .child(menu)

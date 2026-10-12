@@ -3,6 +3,54 @@ use gpui_kit::TestAppContext;
 use super::*;
 
 #[gpui_kit::test]
+fn syntax_defaults_follow_theme_switches_and_preserve_custom_colors(cx: &mut TestAppContext) {
+    use gpui_kit::component::highlighter::{HighlightTheme, HighlightThemeStyle};
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        for dark in [true, false, true] {
+            let expected = if dark {
+                HighlightTheme::default_dark()
+            } else {
+                HighlightTheme::default_light()
+            };
+            let resolved = source::fallback(dark);
+            let effective = preferences::resolve(&Preferences::default(), resolved)
+                .expect("built-in appearance");
+            apply(effective, None, cx);
+            let actual = &Theme::global(cx).highlight_theme;
+            assert_eq!(actual.appearance.is_dark(), dark);
+            assert_eq!(actual.style.syntax, expected.style.syntax);
+        }
+        let mut resolved = source::fallback(true);
+        let editor_background = gpui_kit::rgb(0x123456).into();
+        resolved.config.highlight = Some(HighlightThemeStyle {
+            editor_background: Some(editor_background),
+            ..Default::default()
+        });
+        let effective = preferences::resolve(&Preferences::default(), resolved)
+            .expect("theme with editor colors");
+        apply(effective, None, cx);
+        let actual = &Theme::global(cx).highlight_theme;
+        assert_eq!(actual.style.editor_background, Some(editor_background));
+        assert_eq!(
+            actual.style.syntax,
+            HighlightTheme::default_dark().style.syntax
+        );
+
+        let mut resolved = source::fallback(true);
+        let custom: HighlightThemeStyle = serde_json::from_value(serde_json::json!({
+            "syntax": {"function": {"color": "#f1c678"}}, "editor.background": "#123456"
+        }))
+        .expect("custom syntax palette");
+        resolved.config.highlight = Some(custom.clone());
+        let effective =
+            preferences::resolve(&Preferences::default(), resolved).expect("custom appearance");
+        apply(effective, None, cx);
+        assert_eq!(Theme::global(cx).highlight_theme.style, custom);
+    });
+}
+
+#[gpui_kit::test]
 fn application_watcher_survives_window_closure_and_updates_all_views(cx: &mut TestAppContext) {
     use gpui_kit::component::Root;
     use gpui_kit::{

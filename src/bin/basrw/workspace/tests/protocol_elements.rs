@@ -98,6 +98,16 @@ fn plans_usage_compaction_and_dismissible_notices_are_visible(cx: &mut TestAppCo
                 .contains_key("compaction-cmp-summary-0")
         );
         assert!(window.find("protocol-notice-1").bounds().size.height > px(0.));
+        fixture.view.update(cx, |view, cx| {
+            view.compact = true;
+            view.output_open = true;
+            view.resize_window(window, cx);
+        });
+        window.bounds_changed(cx);
+        window.render_frame(cx);
+        assert!(window.find("protocol-notice-1").visible());
+        assert!(window.find("session-plans").visible());
+        assert!(window.find("conversation-timeline").bounds().size.height >= px(100.));
         window.click("dismiss-protocol-notice-1", cx);
         window.render_frame(cx);
         assert!(window.try_find("protocol-notice-1").is_none());

@@ -1261,11 +1261,11 @@ fn compact_menu_actions_use_the_parent_window(cx: &mut TestAppContext) {
         .expect("parent preserves compact draft while choosing workspace source");
     cx.update_window(add_popup, |_, window, cx| {
         window.render_frame(cx);
-        window.within("popup-menu").click(1usize, cx);
+        assert!(window.within("popup-menu").try_find(1usize).is_none());
         assert!(fixture.view.read(cx).menu.is_some());
         assert!(fixture.commands.try_recv().is_err());
     })
-    .expect("unavailable remote source leaves its menu open");
+    .expect("source menu offers only implemented destinations");
     assert!(!cx.did_prompt_for_paths());
     cx.update_window(add_popup, |_, window, cx| {
         window.render_frame(cx);
@@ -1677,7 +1677,7 @@ fn clipboard_images_are_inline_and_support_delete_undo_and_text_paste(cx: &mut T
         let value = fixture.view.read(cx).composer.read(cx).value();
         let attachment = fixture.view.read(cx).attachments[0].clone();
         assert_eq!(value, format!("前{} 后", attachment.mention));
-        assert_eq!(attachment.label, "Image");
+        assert_eq!(attachment.label, "图片");
         assert!(
             window
                 .try_find(SharedString::from(format!(
@@ -1946,13 +1946,13 @@ fn compact_status_tracks_thought_tools_and_answer_without_expanding(cx: &mut Tes
                         basr::acp::ToolCall::new("shell", "检查文件")
                             .status(basr::acp::ToolCallStatus::InProgress),
                     ),
-                    "调用工具 · 检查文件",
+                    "执行工具 · 检查文件",
                 ),
                 (
                     basr::acp::SessionUpdate::AgentMessageChunk(basr::acp::ContentChunk::new(
                         "结果".into(),
                     )),
-                    "正在输出…",
+                    "正在回复…",
                 ),
             ]
             .into_iter()
@@ -1970,7 +1970,7 @@ fn compact_status_tracks_thought_tools_and_answer_without_expanding(cx: &mut Tes
                     window,
                     cx,
                 );
-                assert_eq!(view.stream_label(), status);
+                assert_eq!(crate::i18n::visible_text(&view.stream_label()), status);
                 assert!(!view.output_open);
             }
         });
@@ -2000,8 +2000,9 @@ fn unsupported_attachment_is_rejected_before_insertion_and_hint_clears_on_edit(
             assert!(view.attachments.is_empty());
             assert_eq!(view.composer.read(cx).value(), "原有草稿");
             assert!(
-                view.send_hint(cx)
-                    .starts_with("当前 Agent 不支持此附件类型")
+                view.composer_error(cx)
+                    .expect("attachment error")
+                    .starts_with("请为此智能体选择其他附件类型")
             );
             assert_eq!(
                 view.stream_label(),
@@ -2022,7 +2023,7 @@ fn unsupported_attachment_is_rejected_before_insertion_and_hint_clears_on_edit(
                 .view
                 .read(cx)
                 .send_hint(cx)
-                .starts_with("发送 · Enter")
+                .starts_with("发送消息 · ")
         );
         let path = directory.path().join("flake.nix");
         std::fs::write(&path, "{ inputs = {}; }\n").expect("Nix");

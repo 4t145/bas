@@ -46,16 +46,16 @@ impl Workspace {
                     )
                     .child(
                         layout::icon_button("add-workspace-button", IconName::FolderPlus)
-                            .accessibility_label("添加 workspace")
-                            .tooltip("添加 workspace")
+                            .accessibility_label(crate::i18n::tr!("workspace-add"))
+                            .tooltip(crate::i18n::tr!("workspace-add"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.open_workspace_add_menu(window, cx)
                             })),
                     )
                     .child(
                         layout::icon_button("new-session", IconName::Plus)
-                            .accessibility_label("新 thread")
-                            .tooltip("新 thread · Ctrl N")
+                            .accessibility_label(crate::i18n::tr!("session-new"))
+                            .tooltip(crate::i18n::tr!("session-new-shortcut"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.new_session(window, cx)),
                             ),
@@ -88,14 +88,14 @@ impl Workspace {
                         layout::icon_button("archived-list", IconName::Archive)
                             .selected(self.archived_list)
                             .accessibility_label(if self.archived_list {
-                                "返回普通列表"
+                                crate::i18n::tr!("session-show-active")
                             } else {
-                                "查看已归档"
+                                crate::i18n::tr!("session-show-archived")
                             })
                             .tooltip(if self.archived_list {
-                                "已归档 · 点击返回普通列表"
+                                crate::i18n::tr!("session-show-active")
                             } else {
-                                "查看已归档"
+                                crate::i18n::tr!("session-show-archived")
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.stop_propagation();
@@ -111,7 +111,11 @@ impl Workspace {
                     .min_h_0()
                     .overflow_y_scroll()
                     .when(groups.is_empty(), |list| {
-                        list.child(div().p_3().child(caption("没有匹配的 thread", cx)))
+                        list.child(
+                            div()
+                                .p_3()
+                                .child(caption(crate::i18n::tr!("session-no-results"), cx)),
+                        )
                     })
                     .children(groups.into_iter().enumerate().map(|(index, group)| {
                         let collapsed = query.is_empty()
@@ -128,7 +132,10 @@ impl Workspace {
                                     })
                                     .when(group.threads.is_empty() && !draft_selected, |column| {
                                         column.child(
-                                            caption("还没有 thread", cx).ml_5().px_3().py_2(),
+                                            caption(crate::i18n::tr!("session-empty"), cx)
+                                                .ml_5()
+                                                .px_3()
+                                                .py_2(),
                                         )
                                     })
                                     .children(
@@ -151,7 +158,6 @@ impl Workspace {
     ) -> AnyElement {
         let group = SharedString::from(format!("workspace-header-{index}"));
         let name = groups::name(directory.as_deref());
-        let path_label = groups::path_label(directory.as_deref());
         let new_directory = directory.clone();
         let menu = self.workspace_menu(directory.clone(), collapsed, cx);
         let button_menu = menu.clone();
@@ -205,9 +211,17 @@ impl Workspace {
                         .xsmall()
                         .flex_shrink_0(),
                     )
-                    .child(div().text_sm().truncate().child(name))
+                    .child(div().text_size(crate::ui::SMALL).truncate().child(name))
                     .hoverable_tooltip(move |window, cx| {
-                        crate::tooltip::view(path_label.clone(), window, cx)
+                        crate::tooltip::view(
+                            if collapsed {
+                                crate::i18n::tr!("workspace-expand")
+                            } else {
+                                crate::i18n::tr!("workspace-collapse")
+                            },
+                            window,
+                            cx,
+                        )
                     }),
             )
             .child(
@@ -224,8 +238,8 @@ impl Workspace {
                             SharedString::from(format!("new-thread-{index}")),
                             IconName::Plus,
                         )
-                        .accessibility_label("在此 workspace 新建 thread")
-                        .tooltip("在此 workspace 新建 thread")
+                        .accessibility_label(crate::i18n::tr!("workspace-new-session"))
+                        .tooltip(crate::i18n::tr!("workspace-new-session"))
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
                                 cx.stop_propagation();
@@ -239,8 +253,8 @@ impl Workspace {
                                 SharedString::from(format!("workspace-menu-{index}")),
                                 IconName::Ellipsis,
                             )
-                            .accessibility_label("更多 workspace 操作")
-                            .tooltip("更多 workspace 操作")
+                            .accessibility_label(crate::i18n::tr!("workspace-more"))
+                            .tooltip(crate::i18n::tr!("workspace-more"))
                             .on_click(|_, _, cx| cx.stop_propagation()),
                             WORKSPACE_MENU_ROWS,
                             false,
@@ -277,7 +291,7 @@ impl Workspace {
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned());
             menu.item(
-                PopupMenuItem::new("新建 thread")
+                PopupMenuItem::new(crate::i18n::tr!("session-new"))
                     .icon(IconName::Plus)
                     .on_click(move |_, window, cx| {
                         menus::in_parent(parent, window, cx, |window, cx| {
@@ -289,9 +303,9 @@ impl Workspace {
             )
             .item(
                 PopupMenuItem::new(if collapsed {
-                    "展开 workspace"
+                    crate::i18n::tr!("workspace-expand")
                 } else {
-                    "折叠 workspace"
+                    crate::i18n::tr!("workspace-collapse")
                 })
                 .icon(if collapsed {
                     IconName::ChevronRight
@@ -307,7 +321,7 @@ impl Workspace {
                 }),
             )
             .item(
-                PopupMenuItem::new("复制目录路径")
+                PopupMenuItem::new(crate::i18n::tr!("workspace-copy-path"))
                     .icon(IconName::Copy)
                     .disabled(path.is_none())
                     .on_click(move |_, _, cx| {
@@ -317,7 +331,7 @@ impl Workspace {
                     }),
             )
             .item(
-                PopupMenuItem::new("添加 workspace")
+                PopupMenuItem::new(crate::i18n::tr!("workspace-add"))
                     .icon(IconName::FolderPlus)
                     .on_click(move |_, window, cx| {
                         menus::in_parent(parent, window, cx, |window, cx| {

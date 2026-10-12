@@ -119,7 +119,7 @@ fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
         click(window, "agents-edit-1", cx);
         click(window, "agents-delete", cx);
         window.render_frame(cx);
-        assert_eq!(window.find("agents-save").label(), Some("确认移除配置"));
+        assert_eq!(window.find("agents-save").label(), Some("移除配置"));
         // Deletion, like command editing, requires explicit saving.
         assert_eq!(
             Store::at(path.clone())

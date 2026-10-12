@@ -12,7 +12,7 @@ impl Workspace {
             let build: menus::Builder = std::rc::Rc::new(move |menu, _, _| {
                 let owner = owner.clone();
                 menu.item(
-                    PopupMenuItem::new("本地文件夹…")
+                    PopupMenuItem::new(crate::i18n::tr!("workspace-local-folder"))
                         .icon(IconName::Folder)
                         .disabled(pending)
                         .on_click(move |_, window, cx| {
@@ -23,9 +23,8 @@ impl Workspace {
                             });
                         }),
                 )
-                .item(PopupMenuItem::new("远程工作区（稍后支持）").disabled(true))
             });
-            this.open_context_menu(position, 2, build, window, cx);
+            this.open_context_menu(position, 1, build, window, cx);
         });
     }
 
@@ -63,7 +62,7 @@ impl Workspace {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("选择工作区文件夹".into()),
+            prompt: Some(crate::i18n::tr!("workspace-choose-folder").into()),
         });
         cx.spawn_in(window, async move |view, cx| {
             let result = async { paths.await? }.await;
@@ -80,8 +79,8 @@ impl Workspace {
                     }
                     Ok(None) => {}
                     Err(error) => this.operation_error(
-                        "选择工作区失败",
-                        format!("选择工作区失败：{error:#}"),
+                        crate::i18n::tr!("workspace-select-failed"),
+                        crate::i18n::tr!("workspace-select-error", error = format!("{:#}", error)),
                         cx,
                     ),
                 }

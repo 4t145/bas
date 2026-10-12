@@ -18,7 +18,22 @@ const APPROVAL_PANEL_HEIGHT: f32 = 240.;
 const EDITOR_WRAP_INSET: f32 = 20.;
 
 pub(super) fn content_panel() -> Div {
-    div().w_full().max_w(px(CONTENT_WIDTH)).mx_auto()
+    div().w_full().min_w_0().max_w(px(CONTENT_WIDTH)).mx_auto()
+}
+
+fn tool_icon(kind: basr::model::ToolKind) -> IconName {
+    use basr::model::ToolKind;
+    match kind {
+        ToolKind::Read => IconName::FileText,
+        ToolKind::Edit => IconName::FilePen,
+        ToolKind::Delete => IconName::Trash,
+        ToolKind::Move => IconName::Folder,
+        ToolKind::Search => IconName::Search,
+        ToolKind::Execute => IconName::Terminal,
+        ToolKind::Think => IconName::Lightbulb,
+        ToolKind::Fetch => IconName::Globe,
+        _ => IconName::Wrench,
+    }
 }
 
 impl Workspace {
@@ -75,31 +90,35 @@ impl Workspace {
                 conversation.foreground_state,
                 Some(basr::acp_v2::StateUpdate::RequiresAction(_))
             ) {
-                return "等待 Agent 确认…".into();
+                return crate::i18n::tr!("status-agent-confirming").into();
             }
             for item in conversation.items.iter().rev() {
                 match item {
                     Item::Message {
                         message,
                         streaming: true,
-                    } if message.role == Role::Thought => return "思考中…".into(),
+                    } if message.role == Role::Thought => {
+                        return crate::i18n::tr!("status-thinking").into();
+                    }
                     Item::Message {
                         message,
                         streaming: true,
-                    } if message.role == Role::Agent => return "正在输出…".into(),
+                    } if message.role == Role::Agent => {
+                        return crate::i18n::tr!("status-responding").into();
+                    }
                     Item::Tool(tool)
                         if matches!(
                             tool.status,
                             ToolCallStatus::Pending | ToolCallStatus::InProgress
                         ) =>
                     {
-                        return format!("调用工具 · {}", tool.title);
+                        return crate::i18n::tr!("status-tool", tool = (tool.title).to_string());
                     }
                     _ => {}
                 }
             }
         }
-        "思考中…".into()
+        crate::i18n::tr!("status-thinking").into()
     }
 
     pub(super) fn render_chat(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -113,10 +132,10 @@ impl Workspace {
             .w_full()
             .when(!self.compact, |area| {
                 area.pl(px(THREAD_BODY_PADDING))
-                    .pr(px(turn_navigation::RAIL_WIDTH))
+                    .pr(px(turn_navigation::RAIL_WIDTH + THREAD_BODY_PADDING))
             })
-            .children(self.render_plan(cx))
             .children(self.render_notices(cx))
+            .children(self.render_plan(cx))
             .when(!self.composer_fills_thread(), |area| {
                 area.child(self.render_timeline(cx))
             })
@@ -163,8 +182,8 @@ impl Workspace {
             .gap_1()
             .child(
                 message_actions::action_button("scroll-to-top", IconName::ArrowUp, cx)
-                    .accessibility_label("滚动到对话顶部")
-                    .tooltip("滚动到对话顶部")
+                    .accessibility_label(crate::i18n::tr!("conversation-top"))
+                    .tooltip(crate::i18n::tr!("conversation-top"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.list.scroll_to(gpui_kit::ListOffset::default());
                         cx.notify();
@@ -172,8 +191,8 @@ impl Workspace {
             )
             .child(
                 message_actions::action_button("scroll-to-bottom", IconName::ArrowDown, cx)
-                    .accessibility_label("滚动到最新输出")
-                    .tooltip("滚动到最新输出")
+                    .accessibility_label(crate::i18n::tr!("conversation-latest"))
+                    .tooltip(crate::i18n::tr!("conversation-latest"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.scroll_conversation_to_end(cx);
                     })),
@@ -195,7 +214,11 @@ impl Workspace {
                 .overflow_y_scroll()
                 .border_b_1()
                 .border_color(cx.theme().border)
-                .child(caption("初始化信息", cx).px_3().pt_2())
+                .child(
+                    caption(crate::i18n::tr!("conversation-startup"), cx)
+                        .px_3()
+                        .pt_2(),
+                )
                 .children((0..conversation.rows.len()).map(|index| self.render_item(index, cx)))
                 .into_any_element(),
         )
@@ -229,15 +252,13 @@ impl Workspace {
                         .p_5()
                         .child(caption(
                             if self.creating {
-                                "正在创建 thread…"
+                                crate::i18n::tr!("status-creating")
                             } else if self.waiting_for_agent_selection {
-                                "选择 Agent 后开始新 thread"
-                            } else if self.active.is_some() {
-                                "Agent 的回复会显示在这里"
-                            } else if self.compact {
-                                "发送后在这里查看 Agent 输出"
+                                crate::i18n::tr!("conversation-choose-agent")
+                            } else if self.active.is_some() || self.compact {
+                                crate::i18n::tr!("conversation-empty")
                             } else {
-                                "从一个问题开始"
+                                crate::i18n::tr!("conversation-start")
                             },
                             cx,
                         ))
@@ -319,49 +340,108 @@ impl Workspace {
             .into_any_element()
     }
 
+    pub(super) fn feedback_height(&self, cx: &App) -> f32 {
+        if self.composer_error(cx).is_some() {
+            crate::ui::CONTROL
+        } else {
+            0.
+        }
+    }
+
+    fn render_composer_feedback(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let message = self.composer_error(cx)?;
+        let detail = message.clone();
+        Some(
+            div()
+                .id("composer-feedback")
+                .test_support()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .h(px(crate::ui::CONTROL))
+                .flex_shrink_0()
+                .text_size(crate::ui::SMALL)
+                .text_color(cx.theme().danger)
+                .child(
+                    div()
+                        .id("composer-feedback-message")
+                        .test_support()
+                        .role(gpui_kit::Role::Label)
+                        .aria_label(message.clone())
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(message.replace('\n', " ")),
+                )
+                .child(
+                    layout::icon_button("composer-feedback-details", IconName::Info)
+                        .accessibility_label(crate::i18n::tr!("feedback-details"))
+                        .tooltip(crate::i18n::tr!("feedback-details"))
+                        .on_click(move |_, _, cx| {
+                            if let Err(error) = crate::application::open_message(
+                                crate::i18n::tr!("feedback-title"),
+                                &detail,
+                                cx,
+                            ) {
+                                tracing::error!(%error, "cannot open operation details");
+                            }
+                        }),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn stream_label(&self) -> String {
+        if self.paste_pending {
+            return crate::i18n::tr!("status-pasting").into();
+        }
         if !self.approvals.is_empty() {
-            return "等待工具审批…".into();
+            return crate::i18n::tr!("status-approval").into();
         }
         if self.approval_error.is_some() {
-            return "工具审批不可用".into();
+            return crate::i18n::tr!("status-approval-unavailable").into();
         }
         if !self.elicitation_panels.is_empty() {
-            return "等待用户交互…".into();
+            return crate::i18n::tr!("status-input").into();
         }
         if !self.connected {
             return if self.connection_error.is_some() {
-                "连接已断开，正在重试…".into()
+                crate::i18n::tr!("status-reconnecting").into()
             } else {
-                "正在连接 basrd…".into()
+                crate::i18n::tr!("status-connecting").into()
             };
         }
         if self.active.is_none() {
             return if self.creating {
-                "正在创建 thread…".into()
+                crate::i18n::tr!("status-creating").into()
             } else if self.waiting_for_agent_selection {
-                "等待选择 Agent".into()
+                crate::i18n::tr!("status-select-agent").into()
             } else if self.authentication_required.is_some() {
-                "Agent 需要认证".into()
+                crate::i18n::tr!("status-auth").into()
             } else if self.agents.is_empty() {
-                "basrd 暂未配置可用的 Agent".into()
+                crate::i18n::tr!("status-no-agents").into()
             } else {
-                "Enter 发送 · Shift Enter 换行".into()
+                crate::i18n::tr!(
+                    "composer-shortcuts-custom",
+                    send = self.composer_send_shortcut(),
+                    newline = self.composer_newline_shortcut()
+                )
             };
         }
         if self.active.is_some_and(|id| self.configuring.contains(&id)) {
-            return "正在应用选项…".into();
+            return crate::i18n::tr!("status-applying").into();
         }
         if self.active.is_some_and(|id| self.sending(id)) {
-            return "正在发送…".into();
+            return crate::i18n::tr!("status-sending").into();
         }
         match &self.stream {
-            StreamState::Loading => "正在加载对话…".into(),
+            StreamState::Loading => crate::i18n::tr!("status-loading").into(),
             StreamState::Live if self.working() => self.work_status(),
-            StreamState::Live => "已同步".into(),
-            StreamState::Reconnecting(_) => "正在恢复连接…".into(),
-            StreamState::Unavailable(_) => "无法读取 thread".into(),
-            StreamState::Closed => "Thread 已结束".into(),
+            StreamState::Live => crate::i18n::tr!("status-synced").into(),
+            StreamState::Reconnecting(_) => crate::i18n::tr!("status-reconnecting").into(),
+            StreamState::Unavailable(_) => crate::i18n::tr!("status-session-unavailable").into(),
+            StreamState::Closed => crate::i18n::tr!("status-session-ended").into(),
         }
     }
 
@@ -376,14 +456,7 @@ impl Workspace {
         let cancelling = self.active.is_some_and(|id| self.cancelling.contains(&id));
         let can_send = self.can_send(cx);
         let submit_hint = if self.working() || cancelling {
-            let hint = if cancelling {
-                "正在停止…"
-            } else {
-                "停止当前任务"
-            };
-            self.composer_error(cx)
-                .map(|error| format!("{error}\n\n{hint}"))
-                .unwrap_or_else(|| hint.into())
+            crate::i18n::tr!("action-stop").into()
         } else {
             self.send_hint(cx)
         };
@@ -450,6 +523,7 @@ impl Workspace {
                         input.border_1().border_color(cx.theme().border)
                     })
                     .child(self.render_commands(cx))
+                    .children(self.render_composer_feedback(cx))
                     .child(
                         div()
                             .id("composer-editor")
@@ -542,7 +616,7 @@ impl Workspace {
                                             .appearance(false)
                                             .bordered(false)
                                             .readonly(sending || self.paste_pending)
-                                            .aria_label("发送给 Agent 的消息")
+                                            .aria_label(crate::i18n::tr!("composer-message"))
                                             .when(fills_thread, |editor| editor.h_full())
                                             .when(!fills_thread, |editor| {
                                                 editor.h(px(self.composer_height(cx)))
@@ -649,10 +723,12 @@ impl Workspace {
             .id(SharedString::from(id))
             .test_support()
             .when(self.compact, |row| {
-                row.pl_3().pr(px(turn_navigation::RAIL_WIDTH))
+                row.pl(px(THREAD_BODY_PADDING))
+                    .pr(px(turn_navigation::RAIL_WIDTH + THREAD_BODY_PADDING))
             })
             .py_1()
             .w_full()
+            .min_w_0()
             .text_size(theme::content_font_size(cx))
             .child(
                 content_panel()
@@ -687,6 +763,10 @@ impl Workspace {
                 let copy = message.plain_text();
                 let group = SharedString::from(format!("message-{id}"));
                 div()
+                    .id(SharedString::from(format!("message-surface-{id}")))
+                    .test_support()
+                    .w_full()
+                    .min_w_0()
                     .group(group.clone())
                     .relative()
                     .flex()
@@ -723,7 +803,7 @@ impl Workspace {
                                         .ghost()
                                         .xsmall()
                                         .icon(IconName::Copy)
-                                        .tooltip("复制消息")
+                                        .tooltip(crate::i18n::tr!("action-copy-message"))
                                         .on_click(move |_, _, cx| {
                                             cx.write_to_clipboard(ClipboardItem::new_string(
                                                 copy.clone(),
@@ -737,9 +817,18 @@ impl Workspace {
             Item::Tool(tool) => self.render_tool(&id, tool, index, cx),
             Item::Compaction(compaction) => self.render_compaction(&id, compaction, index, cx),
             Item::Notice { text, .. } => div()
-                .px_4()
+                .px_3()
                 .py_2()
-                .child(caption(text.clone(), cx))
+                .flex()
+                .items_start()
+                .gap_2()
+                .child(
+                    Icon::new(IconName::Info)
+                        .size(px(crate::ui::ICON))
+                        .text_color(cx.theme().muted_foreground)
+                        .flex_shrink_0(),
+                )
+                .child(caption(text.clone(), cx).flex_1().min_w_0())
                 .into_any_element(),
         }
     }
@@ -762,6 +851,7 @@ impl Workspace {
         label: &str,
         expanded: bool,
         index: usize,
+        icon: Option<IconName>,
         cx: &mut Context<Self>,
     ) -> Button {
         let key = id.to_owned();
@@ -775,7 +865,14 @@ impl Workspace {
             } else {
                 IconName::ChevronRight
             })
+            .on_prepaint(self.track_content_header(id))
             .accessibility_label(label.to_owned())
+            .children(icon.map(|icon| {
+                Icon::new(icon)
+                    .size(px(crate::ui::ICON))
+                    .text_color(cx.theme().muted_foreground)
+                    .flex_shrink_0()
+            }))
             .child(
                 div()
                     .id(SharedString::from(format!("disclosure-label-{id}")))
@@ -788,11 +885,7 @@ impl Workspace {
                     .child(label.to_owned()),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
-                if !this.expanded.remove(&key) {
-                    this.expanded.insert(key.clone());
-                }
-                this.list.remeasure_items(index..index + 1);
-                cx.notify();
+                this.toggle_content(&key, index, cx);
             }))
     }
 
@@ -809,19 +902,43 @@ impl Workspace {
         let input_open = self.expanded.contains(&input_key);
         let output_open = !self.expanded.contains(&output_key);
         let title = if tool.title.trim().is_empty() {
-            tool.name.as_deref().unwrap_or("工具调用")
+            tool.name
+                .as_deref()
+                .unwrap_or(crate::i18n::tr!("tool-call"))
         } else {
             &tool.title
         };
         let (label, status_icon, color) = match tool.status {
-            ToolCallStatus::Pending => ("等待中", IconName::Clock, cx.theme().muted_foreground),
-            ToolCallStatus::InProgress => ("执行中", IconName::Loader, cx.theme().primary),
-            ToolCallStatus::Completed => ("完成", IconName::Check, cx.theme().success),
-            ToolCallStatus::Failed => ("失败", IconName::CircleX, cx.theme().danger),
-            _ => ("未知", IconName::CircleAlert, cx.theme().muted_foreground),
+            ToolCallStatus::Pending => (
+                crate::i18n::tr!("status-pending"),
+                IconName::Clock,
+                cx.theme().muted_foreground,
+            ),
+            ToolCallStatus::InProgress => (
+                crate::i18n::tr!("status-running"),
+                IconName::Loader,
+                cx.theme().primary,
+            ),
+            ToolCallStatus::Completed => (
+                crate::i18n::tr!("status-completed"),
+                IconName::Check,
+                cx.theme().success,
+            ),
+            ToolCallStatus::Failed => (
+                crate::i18n::tr!("status-failed"),
+                IconName::CircleX,
+                cx.theme().danger,
+            ),
+            _ => (
+                crate::i18n::tr!("status-unknown"),
+                IconName::CircleAlert,
+                cx.theme().muted_foreground,
+            ),
         };
         div()
-            .rounded_lg()
+            .rounded_md()
+            .w_full()
+            .min_w_0()
             .border_1()
             .border_color(cx.theme().border)
             .overflow_hidden()
@@ -848,6 +965,7 @@ impl Workspace {
                                         &title.split_whitespace().collect::<Vec<_>>().join(" "),
                                         expanded,
                                         index,
+                                        Some(tool_icon(tool.kind)),
                                         cx,
                                     )
                                     .w_full(),
@@ -861,8 +979,8 @@ impl Workspace {
                         Button::new(SharedString::from(format!("status-{id}")))
                             .ghost()
                             .xsmall()
-                            .w(px(20.))
-                            .h(px(20.))
+                            .w(px(crate::ui::COMPACT_CONTROL))
+                            .h(px(crate::ui::COMPACT_CONTROL))
                             .p_0()
                             .flex_none()
                             .tooltip(label)
@@ -882,6 +1000,31 @@ impl Workspace {
                         .gap_3()
                         .px_3()
                         .pb_3()
+                        .when(self.tool_has_input(tool), |body| {
+                            body.child(
+                                div()
+                                    .id(SharedString::from(format!("tool-input-section-{id}")))
+                                    .test_support()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        self.disclosure(
+                                            &input_key,
+                                            crate::i18n::tr!("tool-input"),
+                                            input_open,
+                                            index,
+                                            None,
+                                            cx,
+                                        )
+                                        .w_full()
+                                        .text_color(cx.theme().muted_foreground),
+                                    )
+                                    .when(input_open, |section| {
+                                        section.child(self.render_tool_input(id, tool, index, cx))
+                                    }),
+                            )
+                        })
                         .child(
                             div()
                                 .id(SharedString::from(format!("tool-output-section-{id}")))
@@ -890,34 +1033,21 @@ impl Workspace {
                                 .flex_col()
                                 .gap_2()
                                 .child(
-                                    self.disclosure(&output_key, "输出", output_open, index, cx)
-                                        .w_full()
-                                        .font_weight(FontWeight::SEMIBOLD),
+                                    self.disclosure(
+                                        &output_key,
+                                        crate::i18n::tr!("tool-output"),
+                                        output_open,
+                                        index,
+                                        None,
+                                        cx,
+                                    )
+                                    .w_full()
+                                    .text_color(cx.theme().muted_foreground),
                                 )
                                 .when(output_open, |section| {
                                     section.child(self.render_tool_output(id, tool, index, cx))
                                 }),
                         )
-                        .when(self.tool_has_input(tool), |body| {
-                            body.child(
-                                div()
-                                    .id(SharedString::from(format!("tool-input-section-{id}")))
-                                    .test_support()
-                                    .rounded_md()
-                                    .bg(cx.theme().muted.opacity(0.25))
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2()
-                                    .child(
-                                        self.disclosure(&input_key, "输入", input_open, index, cx)
-                                            .w_full()
-                                            .text_color(cx.theme().muted_foreground),
-                                    )
-                                    .when(input_open, |section| {
-                                        section.child(self.render_tool_input(id, tool, index, cx))
-                                    }),
-                            )
-                        })
                         .child(self.render_content_actions(id, id, index, cx)),
                 )
             })
@@ -970,7 +1100,10 @@ impl Workspace {
                     div()
                         .id(SharedString::from(format!("tool-name-{id}")))
                         .test_support()
-                        .child(caption(format!("工具：{name}"), cx)),
+                        .child(caption(
+                            crate::i18n::tr!("tool-name", name = (name).to_string()),
+                            cx,
+                        )),
                 )
             })
             .when(
@@ -1001,7 +1134,7 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(caption("命令", cx))
+                            .child(caption(crate::i18n::tr!("tool-command"), cx))
                             .child(self.markdown(
                                 format!("{id}-input-command"),
                                 code_block("sh", command),
@@ -1009,12 +1142,14 @@ impl Workspace {
                                 cx,
                             ))
                             .when(!parameters.is_empty(), |input| {
-                                input.child(caption("参数", cx)).child(self.markdown(
-                                    format!("{id}-input"),
-                                    json_block(&serde_json::Value::Object(parameters)),
-                                    index,
-                                    cx,
-                                ))
+                                input
+                                    .child(caption(crate::i18n::tr!("tool-arguments"), cx))
+                                    .child(self.markdown(
+                                        format!("{id}-input"),
+                                        json_block(&serde_json::Value::Object(parameters)),
+                                        index,
+                                        cx,
+                                    ))
                             }),
                     )
                 } else {
@@ -1059,7 +1194,13 @@ impl Workspace {
                                         reference.terminal_id
                                     )))
                                     .test_support()
-                                    .child(caption(format!("工作目录：{}", cwd.display()), cx)),
+                                    .child(caption(
+                                        crate::i18n::tr!(
+                                            "tool-directory",
+                                            path = (cwd.display()).to_string()
+                                        ),
+                                        cx,
+                                    )),
                             )
                         }),
                 )
@@ -1124,7 +1265,8 @@ impl Workspace {
                         acp::ToolCallContent::Terminal(terminal) => {
                             self.render_terminal(id, terminal, tool, index, cx)
                         }
-                        _ => caption("此工具内容暂不支持预览", cx).into_any_element(),
+                        _ => caption(crate::i18n::tr!("tool-preview-unavailable"), cx)
+                            .into_any_element(),
                     }),
             )
             .when(
@@ -1135,9 +1277,9 @@ impl Workspace {
                             tool.status,
                             ToolCallStatus::Completed | ToolCallStatus::Failed
                         ) {
-                            "此调用未提供输出"
+                            crate::i18n::tr!("tool-empty-output")
                         } else {
-                            "等待工具输出…"
+                            crate::i18n::tr!("tool-awaiting-output")
                         },
                         cx,
                     ))
@@ -1190,10 +1332,16 @@ impl Workspace {
                 .when_some(terminal.exit.as_ref(), |body, exit| {
                     let mut status = Vec::new();
                     if let Some(code) = exit.exit_code {
-                        status.push(format!("退出码 {code}"));
+                        status.push(crate::i18n::tr!(
+                            "terminal-exit-code",
+                            code = (code).to_string()
+                        ));
                     }
                     if let Some(signal) = &exit.signal {
-                        status.push(format!("信号 {signal}"));
+                        status.push(crate::i18n::tr!(
+                            "terminal-signal",
+                            signal = (signal).to_string()
+                        ));
                     }
                     body.child(
                         div()
@@ -1204,7 +1352,7 @@ impl Workspace {
                             .test_support()
                             .child(caption(
                                 if status.is_empty() {
-                                    "已退出".to_owned()
+                                    crate::i18n::tr!("terminal-exited").to_owned()
                                 } else {
                                     status.join(" · ")
                                 },
@@ -1222,9 +1370,9 @@ impl Workspace {
                                 tool.status,
                                 ToolCallStatus::Completed | ToolCallStatus::Failed
                             ) {
-                                "此调用未提供可读取的终端输出"
+                                crate::i18n::tr!("terminal-empty-output")
                             } else {
-                                "等待终端输出…"
+                                crate::i18n::tr!("terminal-awaiting-output")
                             },
                             cx,
                         ))
@@ -1239,9 +1387,9 @@ impl Workspace {
                     tool.status,
                     ToolCallStatus::Completed | ToolCallStatus::Failed
                 ) {
-                    "此调用未提供可读取的终端输出"
+                    crate::i18n::tr!("terminal-empty-output")
                 } else {
-                    "等待终端输出…"
+                    crate::i18n::tr!("terminal-awaiting-output")
                 },
                 cx,
             )
@@ -1323,7 +1471,7 @@ pub(super) fn render_content(
                 )
                 .child(
                     message_actions::action_button(SharedString::from(id), IconName::Copy, cx)
-                        .tooltip("复制资源地址")
+                        .tooltip(crate::i18n::tr!("action-copy-resource"))
                         .invisible()
                         .group_hover(group, |style| style.visible())
                         .on_click(move |_, _, cx| {
@@ -1336,7 +1484,7 @@ pub(super) fn render_content(
             .flex()
             .flex_col()
             .gap_2()
-            .child(caption(format!("图片 · {}", image.mime_type), cx))
+            .child(caption(crate::i18n::tr!("resource-image", type = (image.mime_type).to_string()), cx))
             .child(images::acp_image(&id, image, images, false, cx))
             .into_any_element(),
         ContentBlock::Resource(resource) => match &resource.resource {
@@ -1348,21 +1496,17 @@ pub(super) fn render_content(
                 .children(markdown)
                 .into_any_element(),
             acp::EmbeddedResourceResource::BlobResourceContents(blob) => caption(
-                format!(
-                    "文件 · {} · {}",
-                    blob.uri,
-                    blob.mime_type
+                crate::i18n::tr!("resource-file", type = (blob.uri).to_string(), uri = (blob.mime_type
                         .as_deref()
-                        .unwrap_or("application/octet-stream")
-                ),
+                        .unwrap_or("application/octet-stream")).to_string()),
                 cx,
             )
             .into_any_element(),
-            _ => caption("嵌入资源", cx).into_any_element(),
+            _ => caption(crate::i18n::tr!("resource-embedded"), cx).into_any_element(),
         },
         ContentBlock::Audio(audio) => {
-            caption(format!("音频 · {}", audio.mime_type), cx).into_any_element()
+            caption(crate::i18n::tr!("resource-audio", type = (audio.mime_type).to_string()), cx).into_any_element()
         }
-        _ => caption("内容暂不支持预览", cx).into_any_element(),
+        _ => caption(crate::i18n::tr!("resource-preview-unavailable"), cx).into_any_element(),
     }
 }

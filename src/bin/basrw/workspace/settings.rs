@@ -1,23 +1,15 @@
 use super::*;
 
 pub(super) fn config_option_hint(option: &basr::acp::SessionConfigOption) -> String {
-    let mut hint = option.name.clone();
-    if let basr::acp::SessionConfigKind::Boolean(boolean) = &option.kind {
-        hint.push_str(if boolean.current_value {
-            " · 开启"
-        } else {
-            " · 关闭"
-        });
+    match &option.kind {
+        basr::acp::SessionConfigKind::Boolean(boolean) if boolean.current_value => {
+            crate::i18n::tr!("option-disable", name = option.name.as_str())
+        }
+        basr::acp::SessionConfigKind::Boolean(_) => {
+            crate::i18n::tr!("option-enable", name = option.name.as_str())
+        }
+        _ => crate::i18n::tr!("option-choose", name = option.name.as_str()),
     }
-    if let Some(description) = option
-        .description
-        .as_deref()
-        .filter(|description| !description.is_empty())
-    {
-        hint.push_str(" · ");
-        hint.push_str(description);
-    }
-    hint
 }
 
 impl Workspace {
@@ -27,12 +19,16 @@ impl Workspace {
             Button::new("agent-authenticate")
                 .xsmall()
                 .label(if self.server.ip().is_loopback() {
-                    "认证"
+                    crate::i18n::tr!("auth-action")
                 } else {
-                    "认证说明"
+                    crate::i18n::tr!("auth-instructions")
                 })
                 .on_click(cx.listener(|this, _, window, cx| this.open_agent_auth(window, cx))),
-            self.authentication_hint().unwrap_or_default(),
+            if self.server.ip().is_loopback() {
+                crate::i18n::tr!("auth-action")
+            } else {
+                crate::i18n::tr!("auth-view-instructions")
+            },
         )
         .into_any_element()
     }
@@ -40,15 +36,19 @@ impl Workspace {
     pub(super) fn authentication_hint(&self) -> Option<String> {
         self.authentication_required.as_ref().map(|agent| {
             if self.server.ip().is_loopback() {
-                format!("{agent} 需要认证。按照会话中的认证步骤完成后会自动重试；草稿已保留。")
+                crate::i18n::tr!("auth-local-help", agent = (agent).to_string())
             } else {
-                format!("{agent} 需要认证。请在远端 daemon（{}）所在主机完成登录后按 F5 重试；不会在本机运行远端登录命令。", self.server)
+                crate::i18n::tr!(
+                    "auth-remote-help",
+                    agent = (agent).to_string(),
+                    server = (self.server).to_string()
+                )
             }
         })
     }
 
     pub(super) fn open_agent_auth(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(_agent) = self.authentication_required.clone() else {
+        let Some(agent) = self.authentication_required.clone() else {
             return;
         };
         self.close_reply_preview(window, cx);
@@ -59,21 +59,28 @@ impl Workspace {
                 .try_global::<crate::settings::agents::check::Service>()
                 .is_none()
             {
-                crate::settings_window::open_agent(&_agent, cx).map(|_| ())
+                crate::settings_window::open_agent(&agent, cx).map(|_| ())
             } else {
                 self.load_authentication_panel(window, cx);
                 Ok(())
             }
         } else {
             crate::application::open_message(
-                "远端 Agent 需要认证",
-                &self.authentication_hint().unwrap_or_default(),
+                crate::i18n::tr!("auth-remote-title"),
+                &crate::i18n::tr!(
+                    "auth-remote-help",
+                    agent = agent.as_str(),
+                    server = self.server.to_string()
+                ),
                 cx,
             )
             .map(|_| ())
         };
         if let Err(error) = result {
-            self.error = Some(format!("无法打开认证说明：{error}"));
+            self.error = Some(crate::i18n::tr!(
+                "auth-instructions-error",
+                error = (error).to_string()
+            ));
         }
         cx.notify();
     }
@@ -115,9 +122,7 @@ impl Workspace {
                     .into_iter()
                     .find(|entry| entry.id == agent)
                     .and_then(|entry| entry.spec)
-                    .ok_or_else(|| {
-                        "daemon 的目录中没有这个 Agent 的配置，请重新检测。".to_owned()
-                    })?;
+                    .ok_or_else(|| crate::i18n::tr!("agent-catalog-missing").to_owned())?;
                 let status = service.request(spec.clone(), true, path.clone()).await;
                 Ok::<_, String>((spec, status))
             }
@@ -204,7 +209,7 @@ impl Workspace {
             let request = pending
                 .request
                 .as_ref()
-                .ok_or_else(|| "Agent 未提供交互请求内容。".to_owned())
+                .ok_or_else(|| crate::i18n::tr!("elicitation-empty").to_owned())
                 .and_then(|payload| {
                     payload
                         .decode::<serde_json::Value>()
@@ -260,7 +265,10 @@ impl Workspace {
         self.close_menu(window, cx);
         self.record_settings_target(cx);
         if let Err(error) = crate::settings_window::open_catalog(cx) {
-            self.error = Some(format!("无法打开 Agent 安装目录：{error}"));
+            self.error = Some(crate::i18n::tr!(
+                "catalog-open-error",
+                error = (error).to_string()
+            ));
         }
         cx.notify();
     }
@@ -270,7 +278,10 @@ impl Workspace {
         self.close_menu(window, cx);
         self.record_settings_target(cx);
         if let Err(error) = crate::settings_window::open(cx) {
-            self.error = Some(format!("无法打开设置窗口：{error}"));
+            self.error = Some(crate::i18n::tr!(
+                "settings-open-error",
+                error = (error).to_string()
+            ));
         }
         cx.notify();
     }

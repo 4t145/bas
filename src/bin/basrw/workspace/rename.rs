@@ -97,7 +97,7 @@ impl Workspace {
                 self.new_draft_metadata
                     .get(directory)
                     .and_then(|draft| draft.title.clone())
-                    .unwrap_or_else(|| "新 thread".into())
+                    .unwrap_or_else(|| crate::i18n::tr!("session-new").into())
             }
         };
         let attempt = match &target {
@@ -110,7 +110,7 @@ impl Workspace {
         // from submitting a replacement edit after a click changes its target.
         let input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("会话标题")
+                .placeholder(crate::i18n::tr!("session-title"))
                 // Native text menus move focus and would detach their own editor on Blur.
                 .context_menu(false)
                 .default_value(attempt)
@@ -182,9 +182,8 @@ impl Workspace {
                             self.rename_retries.insert(session, attempt);
                             self.connected = false;
                             self.connection_error =
-                                Some("连接任务已停止，请重新打开 BASR。".into());
-                            self.error =
-                                Some("重命名失败：连接任务已停止，请重新打开 BASR。".into());
+                                Some(crate::i18n::tr!("connection-reopen").into());
+                            self.error = Some(crate::i18n::tr!("session-rename-reopen").into());
                         }
                     }
                 }
@@ -206,7 +205,10 @@ impl Workspace {
             }
             Err(error) => {
                 self.rename_retries.insert(session, attempt);
-                self.error = Some(format!("重命名失败：{error}"));
+                self.error = Some(crate::i18n::tr!(
+                    "session-rename-error",
+                    error = (error).to_string()
+                ));
             }
         }
     }

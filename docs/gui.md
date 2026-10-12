@@ -11,6 +11,36 @@
 首次使用或原 thread 已被删除时，优先打开最近使用的可用会话，没有可用会话才创建新的 thread。
 `w` 表示 window。默认构建不启用图形依赖。
 
+## 界面语言与设计约定
+
+默认使用简体中文。在「设置 → 外观 → 界面 → 界面语言」选择简体中文或 English，
+立即应用到已打开的界面与输入框提示，保留草稿。也可在配置文件中设置
+`"appearance": { "language": "zh-CN" }` 或 `"en-US"`；旧配置缺省为中文。
+语言偏好沿用外观设置的校验、原子保存和外部热更新。
+
+BASR 自有文案使用 Mozilla [Fluent](https://projectfluent.org/)，资源位于
+`src/bin/basrw/i18n/assets/{zh-CN,en-US}.ftl`，随可执行文件嵌入。
+调用使用稳定的语义 ID 和具名参数；数量变化由 Fluent 选择器处理。
+简体中文是资源缺失时的回退。资源测试检查解析、消息覆盖、参数一致性及复数规则。
+GPUI Kit 内置编辑菜单和选择器通过其公开语言 API 同步切换。
+用户消息、路径、智能体名称、智能体提供的选项和服务端原文按原样展示。
+
+界面统一使用「会话 / Conversation」「工作区 / Workspace」「智能体 / Agent」。
+标题说明对象，说明文字描述用途；空状态给出下一步操作。操作型提示说明所在控件的动作，
+可附快捷键。信息型入口展示当前信息：时间线预览提示词、用量环显示占比与用量、
+智能体图标显示当前名称；长标题保留完整预览。错误和进度在对应区域展示，精确用量与费用可点击查看。
+同一动作复用同一消息 ID。新增界面文案需同时提供中文和英文。
+
+`ui.rs` 集中定义界面尺度：辅助文字 0.875rem、正文 1rem、分组标题 1.125rem、
+页面标题 1.25rem；界面基准字号仍由用户配置。消息与代码保留独立正文字号和行高。
+常规控件 32px、紧凑图标按钮 24px，图标使用 16px 或 12px。
+按钮按职责区分视觉权重：发送等主要操作保留强调色，工具栏入口使用普通 ghost 样式；
+复制、返回内容顶部和展开编辑器使用浅色辅助样式，直接悬停时增强前景与底色，移出后恢复。
+同类按钮共用尺度和状态规则，保留主要、辅助、危险、选中与禁用的区别。
+菜单复用 GPUI Kit 的选中态与键盘行为，标准宽度 320px、最大高度 360px，
+原生弹出窗口进一步受屏幕尺寸约束。提示共用主题颜色、边框、圆角与小号文字，
+长内容使用有边界的提示容器。新增字号或尺寸先检查这些尺度是否能满足用途。
+
 ## 设置窗口
 
 BASR 应用菜单中的“设置”或 `Ctrl+,` 打开设置，完整窗口与最小模式都可使用。
@@ -19,14 +49,14 @@ BASR 应用菜单中的“设置”或 `Ctrl+,` 打开设置，完整窗口与�
 标题栏关闭按钮或 `Ctrl+W`（macOS 为 `Cmd+W`）只关闭设置窗口。
 
 左侧分类导航和搜索由通用设置入口负责，具体配置由分类页面负责；
-“外观”是可展开的父分类，主题、字体和布局是缩进的子节点。
-“Agent 服务”提供本机 ACP agents 配置，后续类别不需要塞进外观表单。
+“外观”是可展开的父分类，界面、字体和布局是缩进的子节点。
+“智能体”提供本机 ACP 智能体配置。
 尚未实现的终端、模型供应商等功能不显示占位开关。
 
-字体选择将 `Default`（继承桌面或内置配置）与具体字体放在同一个可搜索下拉框内，
+字体选择将「自动」（继承桌面或内置配置）与具体字体放在同一个可搜索下拉框内，
 已配置但当前未安装的字体名称不会被悄悄删除。主题来源、模式、窗口背景也提供默认选项。
 数字留空表示继承，并有恢复默认入口；字号和行高必须大于零，不透明度范围为 0–1。
-每行 `Default`、恢复全部默认和关闭设置使用带底色、细边框的操作按钮；
+每行「重置」、「重置外观设置」和「关闭设置」使用带底色、细边框的操作按钮；
 分类导航仍使用轻量选中态，与可执行操作区分。
 Fallback 用逗号分隔，留空继承，`[]` 表示不指定额外 fallback。
 
@@ -188,7 +218,10 @@ nix develop .#gui -c cargo run --features gui --bin basrw -- --window
 按钮与 Enter 使用相同的检查，草稿会保留。
 右侧展开按钮切换到完整窗口，保留当前 thread、草稿与对话。两种模式都显示用户消息与 Agent 输出；
 多行输入与命令补全菜单会增加弹窗高度。完整窗口的同步状态、滚动按钮与输入框共用整个内容区宽度。
-完整窗口的内容容器统一提供左右 12px 内边距，状态、消息与输入框共享边缘；
+完整窗口的内容容器统一提供左右 12px 内边距，右侧另为 24px 导航栏留位；
+状态、消息与输入框共享边缘，消息卡片与导航栏之间保留 12px 间隙。
+侧边快捷跳转按对话顺序集中排列，标记保持固定间距；悬停预览提示词，点击定位对应用户消息。
+入口组位于侧边中部，不表达正文的像素位置。最多显示 20 个请求标记，超出时独立滚动，末尾入口始终可用。
 最小模式的输入框两侧保留 4px。文字和附件按钮共用编辑器的实际文字起点。
 输入框左侧正文和工具栏保留 4px 内边距；应用通过实测起点补偿编辑器自身的额外留白。
 
@@ -211,7 +244,7 @@ GPUI 同时提供图片和文本条目时保留两者；仅有文本形式的文
 发送时按正文中标记的位置构造 ACP 内容块：图片使用 `ImageContent`，支持 `embeddedContext` 时文件使用原生嵌入资源，
 否则 `.nix` 等文本文件使用带文件名和 URI 的原生文本块。不会把界面标记发给 Agent。
 不支持的图片或二进制文件在插入前拒绝；单文件最多 8 MiB、一次最多 16 MiB，可单独发送附件。
-错误只在发送 / 停止按钮的悬浮提示上方显示；操作错误在继续编辑或开始新操作时清除。
+错误在编辑区的反馈行显示，可打开详情；操作错误在继续编辑或开始新操作时清除。
 
 Wayland 使用原生 data-control 协议补充 GPUI 的剪贴板读取：支持纯 `text/plain`、
 UTF-8 文本、图片与文本并存，以及文件管理器的 `text/uri-list`。
@@ -247,8 +280,8 @@ Escape 恢复编辑前的输入草稿。时钟图标仍显示数量并可取回�
 连续的思考与多次工具调用合为一个默认折叠的活动块，显示思考、工具调用和执行中／失败
 数量；用户输入和 Agent 输出仍独立显示。展开活动块可查看各条思考和工具详情。
 Markdown 复用原版 GPUI 渲染，支持多级列表、列表内代码与表格，并可复制整表为 Markdown。
-悬停 Markdown 内容区域时，代码块右上角显示“复制代码”按钮；复制正文并保留缩进与换行，
-不包含围栏或语言标记。表格和消息／思考内容的复制也仅在所属热区悬停时显示。
+悬停一个代码块时，仅该块右上角显示“复制代码”按钮；复制正文并保留缩进与换行，
+不包含围栏或语言标记。表格下方操作行、消息／思考内容的复制在各自热区悬停时显示。
 同一 thread 的 Agent 输出直接显示正文，各段不再重复展示 Agent 名称。
 回复图片支持本地绝对路径、相对会话工作目录的路径、`file:`、`data:` 和 HTTP(S)
 地址。路径中的空格可使用 Markdown 尖括号目标；加载失败时显示图片占位与简短提示。
@@ -311,8 +344,9 @@ daemon 后可以重新读取。`BASRD_STORAGE=memory` 仅保留本次 daemon 进
 消息支持粗体、链接、列表、
 代码块、选择与复制，HTTP(S) 和邮件链接可打开。Markdown 解析状态随消息保留，解析更新后
 重新测量对应行。工具调用在发起位置显示，后续结果原位更新，回答继续追加在工具之后；
-思考过程、工具参数与结果可展开。工具卡展开后优先展示“输出”，输出默认展开，输入默认收起；
-两者可独立折叠，后续进度更新保留选择。长命令与参数归入输入，不在输出之前重复展示。
+思考过程、工具参数与结果可展开。工具卡按“输入 → 输出”排列，输入默认收起，输出默认展开；
+两者可独立折叠，后续进度更新保留选择。长命令与参数归入输入。
+主动展开或收起暂停末尾跟随，保留当前阅读位置；侧边快捷入口的位置不随内容折叠而重新分布。
 输入对象中的字符串 `command` 按真实换行显示为命令代码，其余字段独立展示为参数，保留原始 ACP 数据。
 执行中的工具、思考、计划及上下文压缩使用旋转状态图标，完成后恢复静态状态；系统减少动态效果设置仍有效。
 展开的工具、思考和活动组底部提供返回当前内容顶部及收起按钮，收起后回到对应标题；
@@ -321,7 +355,8 @@ Markdown 样式参考 Zed Agent Panel 的紧凑标题比例、段落间距与代
 Markdown 中的 HTTP(S) 图片通过应用注册的 HTTP client 加载，使用系统证书验证并遵循代理环境变量，
 默认请求总期限为 30 秒。加载会向图片 URL 所在服务器发起网络请求，不会自动附加 BASR
 会话内容。Mermaid 目前仍按代码块显示，图形渲染为远期待办。
-思考块使用左侧灯泡和淡色标签、右侧展开箭头，展开后的正文沿左侧细线缩进，复制按钮在悬停时出现。
+活动摘要分别使用思考、工具、运行和失败图标，只有失败项使用错误色，窄窗口自动换行。
+思考块使用统一的展开按钮、灯泡和淡色标签，展开后的正文沿左侧细线缩进，复制按钮在悬停时出现。
 长工具标题会省略显示，悬停查看完整命令；状态图标固定保留在右侧，不随标题长度挤出卡片。
 输入框、用户消息、回答、表格和代码块使用内容字号：优先使用 Zed 的 `agent_ui_font_size`，
 未设置时使用 UI 字号的 87.5% 并取整（UI 为 16px 时，内容为 14px）。行内代码使用上游的默认字号比例，不再通过本地库补丁强制与正文等大；表格可横向滚动。
@@ -412,6 +447,7 @@ BASR 偏好和 Agent 配置保存在系统用户配置目录下的 `basr/setting
 ```json
 {
   "appearance": {
+    "language": "zh-CN",
     "ui_font_family": "Inter",
     "mono_font_family": "Fira Code",
     "font_fallbacks": ["Sarasa UI SC"],
@@ -428,6 +464,7 @@ BASR 偏好和 Agent 配置保存在系统用户配置目录下的 `basr/setting
 
 | 字段 | 缺省行为 / 可选值 |
 | --- | --- |
+| `language` | 默认 `zh-CN`；也支持 `en-US`，即时切换界面语言 |
 | `ui_font_family` / `mono_font_family` | Zed UI / buffer 字体，然后 DMS UI / mono 字体，然后运行时平台 fallback |
 | `font_fallbacks` | 导入 Zed `ui_font_fallbacks`；显式数组替换导入链，`[]` 清空导入链 |
 | `ui_font_size` | 导入 Zed `ui_font_size`，否则 15px |
@@ -436,6 +473,7 @@ BASR 偏好和 Agent 配置保存在系统用户配置目录下的 `basr/setting
 | `content_opacity` | 0.94；只影响正文背景，不降低文字不透明度 |
 | `composer_enter_behavior` | 默认 `send`：Enter 发送；`newline`：Enter 换行、Ctrl+Enter 发送（macOS 也支持 Cmd+Enter） |
 | `background` | 默认 `blurred`；`auto` 沿用外部主题背景策略，或 `opaque` / `transparent` / `blurred` |
+| `language` | `zh-CN` 简体中文（默认），`en-US` 英文；保存后立即切换 |
 | `theme_source` | 默认 `desktop`；`builtin` 完全不读取桌面主题和字体，使用内置主题再叠加显式偏好 |
 | `theme_mode` | 默认 `desktop` 尊重 Zed 选择；`system` 跟随窗口系统模式，`light` / `dark` 固定模式 |
 | `theme_file` | 外部 Zed 主题文件路径；相对路径以偏好文件所在目录为基准 |
@@ -482,7 +520,7 @@ SDK 升为 3.3.0，启用 `schemars`、`unstable` 和 `unstable_protocol_v2`，
 | 可用命令 | 已支持：`available_commands_update` | Slash commands 列表、描述、过滤和键盘补全；目录保存在会话快照，不受历史裁剪影响 |
 | 会话配置 | 已支持：`config_option_update` | Select 和 Bool 控件及当前值、更新请求与错误；分组选项摊平显示，未知控件类型不提供编辑器 |
 | 会话信息 | 已支持：`session_info_update` | 标题与 Agent 的 RFC3339 更新时间；单独保存 Agent 时间，后续 daemon 事件不覆盖；省略保持、Null 清空，无效时间保留上次值 |
-| 使用量 | 已支持：`usage_update` | 收到数据后显示输入区工具栏 16px 环形指示器，达到 85% 使用警告色；悬停显示百分比与 k/M 简写；点击展开精确用量、窗口容量、剩余 tokens 和可选累计费用／币种，打开期间随事件更新 |
+| 使用量 | 已支持：`usage_update` | 收到数据后显示输入区工具栏 16px 环形指示器，达到 85% 使用警告色；悬停显示百分比和简写用量／容量；点击展开精确用量、窗口容量、剩余词元 和可选累计费用／币种，打开期间随事件更新 |
 | 即时通知 | 已支持：标准 `notice` | 信息／警告／错误 banner、标题与可选说明，可关闭；仅实时接收，不写历史，断线或切换会话后不重放 |
 | 上下文压缩 | 已支持：`compaction_update` / `compaction_summary_chunk` | 按 ID 原位更新状态、错误和可展开富内容摘要；支持增量、整体替换、Null 清空和历史回放 |
 
@@ -600,6 +638,9 @@ nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-pan
 nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel files
 nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel thoughts
 nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel tool-details
+nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel turn-navigation --window
+nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel turn-navigation-hover --window
+nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel turn-navigation-many
 nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel completed
 nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel reply-preview
 # 加 --window 查看完整窗口布局

@@ -286,7 +286,7 @@ fn acp_and_markdown_data_images_decode_once_and_failed_images_have_visible_fallb
             let errors = &cache.read(cx).errors;
             assert_eq!(errors.len(), 1);
             for (key, message) in errors {
-                assert!(message.starts_with("图片无法加载"));
+                assert!(message.starts_with("图片加载失败"));
                 assert!(!message.contains("data:"));
                 assert!(window.find(format!("image-error-{id}-{key}")).visible());
             }
@@ -406,7 +406,7 @@ fn delayed_http_image_remeasures_markdown_and_http_decode_failures_are_visible(
             let errors = &cache.read(cx).errors;
             assert_eq!(errors.len(), 1);
             for (key, message) in errors {
-                assert!(message.starts_with("图片无法加载"));
+                assert!(message.starts_with("图片加载失败"));
                 assert!(!message.contains("private response details"));
                 assert!(!message.contains("https://"));
                 assert!(window.find(format!("image-error-{id}-{key}")).visible());

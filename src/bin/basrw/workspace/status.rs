@@ -1,7 +1,7 @@
 use super::*;
 use gpui_kit::component::spinner::Spinner;
 
-const ACTIVITY_ICON_SIZE: f32 = 16.;
+const ACTIVITY_ICON_SIZE: f32 = crate::ui::ICON;
 
 /// Share the same motion and sizing across running activity indicators.
 pub(super) fn activity_icon(
@@ -60,13 +60,19 @@ impl Workspace {
 
     pub(super) fn connection_indicator(&self, id: &'static str, cx: &App) -> Button {
         let (label, color) = match self.connection_status() {
-            ConnectionStatus::Connecting => ("正在连接…", cx.theme().warning),
-            ConnectionStatus::Connected => ("已连接", cx.theme().success),
-            ConnectionStatus::Disconnected => ("连接已断开", cx.theme().danger),
+            ConnectionStatus::Connecting => {
+                (crate::i18n::tr!("status-connecting"), cx.theme().warning)
+            }
+            ConnectionStatus::Connected => {
+                (crate::i18n::tr!("status-connected"), cx.theme().success)
+            }
+            ConnectionStatus::Disconnected => {
+                (crate::i18n::tr!("status-disconnected"), cx.theme().danger)
+            }
         };
         let unread = self.has_unread_reply();
         let label = if unread {
-            format!("{label} · 有未读回复")
+            crate::i18n::tr!("status-with-unread", label = (label).to_string())
         } else {
             label.to_owned()
         };
@@ -74,11 +80,7 @@ impl Workspace {
             .ghost()
             .xsmall()
             .accessibility_label(label.clone())
-            .tooltip(format!(
-                "{label} · {}\n{}",
-                self.server,
-                self.stream_label()
-            ))
+            .tooltip(label)
             .child(
                 div()
                     .relative()
@@ -104,7 +106,8 @@ impl Workspace {
     }
 
     pub(super) fn activity_label(&self) -> Option<String> {
-        let active = self.creating
+        let active = self.paste_pending
+            || self.creating
             || self.working()
             || !self.approvals.is_empty()
             || !self.elicitation_panels.is_empty()

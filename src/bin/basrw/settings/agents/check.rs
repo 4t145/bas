@@ -58,23 +58,23 @@ impl Status {
 
     pub(crate) fn label(&self) -> &'static str {
         match self {
-            Self::Checking => "正在检查程序…",
-            Self::Connecting => "正在检测…",
-            Self::Authenticating => "正在认证…",
-            Self::Installed(_) => "程序可用 · 未检测",
-            Self::Connected(_) => "检测通过",
-            Self::AuthenticationRequired { .. } => "需要认证",
-            Self::Missing(_) => "未找到可执行文件",
-            Self::Failed(_) => "检测失败",
+            Self::Checking => crate::i18n::tr!("agent-checking-program"),
+            Self::Connecting => crate::i18n::tr!("agent-checking"),
+            Self::Authenticating => crate::i18n::tr!("auth-progress"),
+            Self::Installed(_) => crate::i18n::tr!("agent-installed-unchecked"),
+            Self::Connected(_) => crate::i18n::tr!("agent-check-passed"),
+            Self::AuthenticationRequired { .. } => crate::i18n::tr!("auth-required"),
+            Self::Missing(_) => crate::i18n::tr!("agent-program-missing"),
+            Self::Failed(_) => crate::i18n::tr!("agent-check-failed"),
         }
     }
 
     pub(crate) fn check_label(&self) -> &'static str {
         match self {
-            Self::Checking | Self::Connecting => "正在检测…",
-            Self::Authenticating => "重新检测",
-            Self::Installed(_) => "检测",
-            _ => "重新检测",
+            Self::Checking | Self::Connecting => crate::i18n::tr!("agent-checking"),
+            Self::Authenticating => crate::i18n::tr!("agent-check-again"),
+            Self::Installed(_) => crate::i18n::tr!("agent-check"),
+            _ => crate::i18n::tr!("agent-check-again"),
         }
     }
 }
@@ -102,14 +102,14 @@ impl Service {
                 request(server, spec, connect, settings_path),
             )
             .await
-            .unwrap_or_else(|_| Err("检测超时；请确认本机 basrd 和 Agent 可正常启动。".into()));
+            .unwrap_or_else(|_| Err(crate::i18n::tr!("agent-check-timeout").into()));
             let _ = send.send(result.unwrap_or_else(Status::Failed));
         }));
         async move {
             let _task = task;
             receive
                 .await
-                .unwrap_or_else(|_| Status::Failed("检测任务已结束，请重试。".into()))
+                .unwrap_or_else(|_| Status::Failed(crate::i18n::tr!("agent-check-ended").into()))
         }
     }
 }
@@ -122,20 +122,25 @@ pub(crate) async fn verified_client(
 ) -> Result<Client, String> {
     // Local settings must never launch a command on a remotely configured daemon.
     if !server.ip().is_loopback() {
-        return Err("当前连接的是远端服务；本页只管理本机配置。请连接本机 basrd 后检测。".into());
+        return Err(crate::i18n::tr!("agent-check-local").into());
     }
     let mut client = Client::connect_at(server)
         .await
-        .map_err(|_| format!("无法连接本机 basrd（{server}），请先启动服务。"))?;
+        .map_err(|_| crate::i18n::tr!("service-connect-failed", server = (server).to_string()))?;
     let response = client
         .list_agent_catalog(pb::ListAgentCatalogRequest { refresh: false })
         .await
-        .map_err(|error| format!("无法核对 daemon 配置：{}", error.message()))?
+        .map_err(|error| {
+            crate::i18n::tr!(
+                "service-config-failed",
+                error = (error.message()).to_string()
+            )
+        })?
         .into_inner();
     let catalog: basr::management::Catalog = serde_json::from_slice(&response.catalog_json)
-        .map_err(|_| "daemon 的目录格式无效。".to_owned())?;
+        .map_err(|_| crate::i18n::tr!("agent-catalog-invalid").to_owned())?;
     if !super::installation::settings_match(&catalog, settings_path) {
-        return Err("本机 basrd 使用另一份配置文件；请核对 --settings 路径后重试。".into());
+        return Err(crate::i18n::tr!("agent-config-mismatch").into());
     }
     Ok(client)
 }
@@ -173,14 +178,13 @@ async fn request(
             }
             Err(error) => {
                 return Err(match error.code() {
-                    tonic::Code::Unimplemented => {
-                        "当前 basrd 不支持 ACP 检测，请先升级 daemon。".into()
-                    }
+                    tonic::Code::Unimplemented => crate::i18n::tr!("agent-check-upgrade").into(),
                     tonic::Code::FailedPrecondition | tonic::Code::NotFound => {
-                        "本机 basrd 尚未加载这份配置；请检查配置路径或 --agents 覆盖，再重新检测。"
-                            .into()
+                        crate::i18n::tr!("agent-config-unloaded").into()
                     }
-                    _ => format!("检测失败：{}", error.message()),
+                    _ => {
+                        crate::i18n::tr!("agent-check-error", error = (error.message()).to_string())
+                    }
                 });
             }
         }
@@ -197,12 +201,9 @@ pub(crate) fn decode_response(response: pb::CheckAgentResponse) -> Result<Status
         pb::AgentCheckStatus::AuthenticationRequired => {
             let initialization = response
                 .initialization
-                .ok_or_else(|| {
-                    "Agent 要求认证，但没有返回认证方式；请升级 daemon 或按工具文档登录。"
-                        .to_owned()
-                })?
+                .ok_or_else(|| crate::i18n::tr!("auth-methods-missing").to_owned())?
                 .decode::<serde_json::Value>()
-                .map_err(|_| "Agent 认证信息格式无效。".to_owned())?;
+                .map_err(|_| crate::i18n::tr!("auth-invalid-info").to_owned())?;
             Status::AuthenticationRequired {
                 program: response.resolved_program,
                 methods: authentication_methods(initialization, response.authentication_error)?,
@@ -222,7 +223,7 @@ fn authentication_methods(
     let error = error
         .map(|payload| payload.decode::<serde_json::Value>())
         .transpose()
-        .map_err(|_| "Agent 认证响应格式无效。".to_owned())?;
+        .map_err(|_| crate::i18n::tr!("auth-invalid-response").to_owned())?;
     basr::authentication::methods(&initialization, error.as_ref())
-        .map_err(|error| format!("Agent 认证信息无效：{error}"))
+        .map_err(|error| crate::i18n::tr!("auth-info-error", error = (error).to_string()))
 }

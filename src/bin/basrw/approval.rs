@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use basr::{acp, model::PendingPermission};
 use gpui_kit::{
     AnyElement, Context, SharedString, Window,
-    component::{ActiveTheme, Disableable, Sizable, button::*},
+    component::{ActiveTheme, Disableable, button::*},
     div,
     prelude::*,
     px,
@@ -95,11 +95,10 @@ impl Panel {
                     acp::PermissionOptionKind::AllowOnce | acp::PermissionOptionKind::AllowAlways
                 );
                 choices = choices.child(
-                    Button::new(SharedString::from(format!(
+                    crate::ui::action_button(SharedString::from(format!(
                         "permission-{id}-{}",
                         option.option_id
                     )))
-                    .small()
                     .label(option.name.clone())
                     .when(allow, |button| button.primary())
                     .disabled(disabled)
@@ -111,10 +110,9 @@ impl Panel {
             let id = request_id.clone();
             let handler = decide.clone();
             choices = choices.child(
-                Button::new(SharedString::from(format!("permission-cancel-{id}")))
-                    .small()
+                crate::ui::action_button(SharedString::from(format!("permission-cancel-{id}")))
                     .ghost()
-                    .label("取消请求")
+                    .label(crate::i18n::tr!("approval-cancel"))
                     .disabled(disabled)
                     .on_click(cx.listener(move |owner, _, window, cx| {
                         handler(
@@ -140,11 +138,11 @@ impl Panel {
                     .border_color(cx.theme().warning)
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(crate::ui::SMALL)
                             .text_color(cx.theme().warning)
-                            .child("等待工具审批"),
+                            .child(crate::i18n::tr!("approval-waiting")),
                     )
-                    .child(div().text_sm().child(title))
+                    .child(div().text_size(crate::ui::SMALL).child(title))
                     .when(!details.is_empty(), |card| {
                         card.child(
                             div()
@@ -153,7 +151,7 @@ impl Panel {
                                 )))
                                 .max_h(px(DETAILS_HEIGHT))
                                 .overflow_y_scroll()
-                                .text_xs()
+                                .text_size(crate::ui::SMALL)
                                 .child(details),
                         )
                     })
@@ -161,9 +159,9 @@ impl Panel {
                     .when(disabled, |card| {
                         card.child(
                             div()
-                                .text_xs()
+                                .text_size(crate::ui::SMALL)
                                 .text_color(cx.theme().muted_foreground)
-                                .child("正在提交审批…"),
+                                .child(crate::i18n::tr!("approval-submitting")),
                         )
                     }),
             );
@@ -171,7 +169,7 @@ impl Panel {
         panel
             .children(self.error.iter().map(|error| {
                 div()
-                    .text_sm()
+                    .text_size(crate::ui::SMALL)
                     .text_color(cx.theme().danger)
                     .child(error.clone())
             }))
@@ -199,10 +197,10 @@ fn details(request: &acp::RequestPermissionRequest) -> String {
                 }
             }
             acp::ToolCallContent::Diff(diff) => {
-                parts.push(format!(
-                    "{}\n修改后：\n{}",
-                    diff.path.display(),
-                    diff.new_text
+                parts.push(crate::i18n::tr!(
+                    "diff-modified",
+                    path = (diff.path.display()).to_string(),
+                    content = (diff.new_text).to_string()
                 ));
             }
             _ => {}

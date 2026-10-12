@@ -8,15 +8,18 @@ fn recent_time_uses_compact_units_and_handles_clock_skew() {
     for (elapsed, expected) in [
         (0, "刚刚"),
         (MINUTE_MILLIS - 1, "刚刚"),
-        (MINUTE_MILLIS, "1m"),
-        (HOUR_MILLIS - 1, "59m"),
-        (HOUR_MILLIS, "1h"),
-        (DAY_MILLIS - 1, "23h"),
-        (DAY_MILLIS, "1d"),
-        (3 * DAY_MILLIS, "3d"),
+        (MINUTE_MILLIS, "1 分钟"),
+        (HOUR_MILLIS - 1, "59 分钟"),
+        (HOUR_MILLIS, "1 小时"),
+        (DAY_MILLIS - 1, "23 小时"),
+        (DAY_MILLIS, "1 天"),
+        (3 * DAY_MILLIS, "3 天"),
     ] {
         assert_eq!(
-            recent_time(Timestamp::from_millis(now.millis() - elapsed), now),
+            crate::i18n::visible_text(&recent_time(
+                Timestamp::from_millis(now.millis() - elapsed),
+                now
+            )),
             expected
         );
     }

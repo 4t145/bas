@@ -363,7 +363,7 @@ fn checking_and_login_are_independent_and_only_checking_records_a_probe_result(
             Some("检测")
         );
         assert!(window.try_find("authentication-method-0").is_none());
-        assert!(!page.read(cx).check_detail(&spec).contains("上次检测结果"));
+        assert!(!page.read(cx).check_detail(&spec).contains("上次检测"));
         window.click("agents-registry-check-codex", cx);
         window.render_frame(cx);
         assert_eq!(
@@ -389,11 +389,8 @@ fn checking_and_login_are_independent_and_only_checking_records_a_probe_result(
         assert!(window.try_find("authentication-method-0").is_none());
         let page = page.read(cx);
         assert!(page.checks[&spec.id].completed_at.is_some());
-        assert!(page.check_detail(&spec).contains("上次检测结果"));
-        assert!(
-            page.check_detail(&spec)
-                .contains("程序启动正常，可以开始对话")
-        );
+        assert!(page.check_detail(&spec).contains("上次检测"));
+        assert!(page.check_detail(&spec).contains("已就绪，可以开始对话"));
         assert!(
             cx.global::<crate::settings::AgentChanges>()
                 .select
@@ -563,7 +560,7 @@ fn grpc_stream_ending_without_completion_enables_retry(cx: &mut TestAppContext) 
         assert!(
             page.read(cx).operations["codex"]
                 .message
-                .contains("安装未完成")
+                .contains("安装中断")
         );
         assert!(window.try_find("agents-install-cancel-codex").is_none());
         assert!(window.try_find("agents-install-codex").is_some());
@@ -613,7 +610,7 @@ fn a_changed_remote_service_rejects_install_and_clears_busy(cx: &mut TestAppCont
         assert!(
             page.read(cx).operations["codex"]
                 .message
-                .contains("daemon 所在主机")
+                .contains("服务所在主机")
         );
     });
     assert!(
@@ -745,7 +742,7 @@ fn old_daemon_empty_unimplemented_authentication_reports_restart_instead_of_blan
         let Some(check::Status::Failed(message)) = page.status(&spec) else {
             panic!("the unsupported RPC must produce a visible failure");
         };
-        assert!(message.contains("不支持交互认证"));
+        assert!(message.contains("使用交互认证"));
         assert!(message.contains("重启 basrd"));
         assert!(message.contains("重新检测"));
         assert!(!page.status(&spec).expect("authentication status").busy());

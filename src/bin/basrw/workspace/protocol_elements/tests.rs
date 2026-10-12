@@ -14,7 +14,10 @@ fn cancelled_plan_entries_are_not_counted_as_completed() {
             acp2::PlanEntryStatus::Cancelled,
         ),
     ];
-    assert_eq!(plan_progress(&entries), "计划 · 1/2 完成");
+    assert_eq!(
+        crate::i18n::visible_text(&plan_progress(&entries)),
+        "计划 · 1/2 已完成"
+    );
 }
 
 #[test]

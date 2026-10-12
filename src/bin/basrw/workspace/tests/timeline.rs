@@ -207,9 +207,19 @@ fn activity_groups_fold_together_and_late_updates_keep_the_answer_visible(cx: &m
             window.render_frame(cx);
             let toggle = format!("expand-{activity}");
             assert_eq!(
-                window.find(toggle.clone()).label(),
+                window
+                    .find(toggle.clone())
+                    .label()
+                    .map(crate::i18n::visible_text)
+                    .as_deref(),
                 Some("1 次思考 · 2 次工具调用 · 1 个执行中"),
             );
+            for kind in ["thoughts", "tools", "running"] {
+                let segment = window.find(format!("activity-{kind}-{activity}")).bounds();
+                let header = window.find(toggle.clone()).bounds();
+                assert!(segment.left() >= header.left() && segment.right() <= header.right());
+                assert!(segment.top() >= header.top() && segment.bottom() <= header.bottom());
+            }
             assert!(window.try_find("tool-read").is_none());
             assert!(window.find(answer.clone()).visible());
             let collapsed_height = window.find(activity.clone()).bounds().size.height;
@@ -243,8 +253,18 @@ fn activity_groups_fold_together_and_late_updates_keep_the_answer_visible(cx: &m
         });
         window.render_frame(cx);
         assert_eq!(
-            window.find(format!("expand-{activity}")).label(),
+            window
+                .find(format!("expand-{activity}"))
+                .label()
+                .map(crate::i18n::visible_text)
+                .as_deref(),
             Some("1 次思考 · 2 次工具调用 · 1 个失败"),
+        );
+        assert!(window.find(format!("activity-failed-{activity}")).visible());
+        assert!(
+            window
+                .try_find(format!("activity-running-{activity}"))
+                .is_none()
         );
         assert!(window.find(answer).visible());
         assert_eq!(fixture.view.read(cx).list.item_count(), 3);
@@ -521,4 +541,87 @@ fn thought_footer_copy_only_appears_on_hover_and_keeps_the_thought_open(cx: &mut
         assert!(fixture.view.read(cx).expanded.contains(&thought_id));
     })
     .expect("thought footer copy");
+}
+
+#[gpui_kit::test]
+fn user_message_cards_share_edges_and_clear_the_navigation_rail_in_both_modes(
+    cx: &mut TestAppContext,
+) {
+    let fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    let ids = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            fixture.view.update(cx, |view, cx| {
+                for (index, update) in [
+                    basr::acp::SessionUpdate::UserMessageChunk(basr::acp::ContentChunk::new(
+                        "短消息".into(),
+                    )),
+                    basr::acp::SessionUpdate::AgentMessageChunk(basr::acp::ContentChunk::new(
+                        "回复".into(),
+                    )),
+                    basr::acp::SessionUpdate::UserMessageChunk(basr::acp::ContentChunk::new(
+                        "较长的消息需要正确换行并保持两侧留白。".repeat(6).into(),
+                    )),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    view.update(
+                        Update::Event {
+                            epoch: view.epoch,
+                            event: Event::new(
+                                meta.id,
+                                Cursor::from_raw(index as u64 + 1),
+                                EventKind::Acp(update),
+                            ),
+                        },
+                        window,
+                        cx,
+                    );
+                }
+                view.composer_expanded = false;
+                view.conversation
+                    .as_ref()
+                    .unwrap()
+                    .items
+                    .iter()
+                    .map(Item::id)
+                    .collect::<Vec<_>>()
+            })
+        })
+        .expect("mixed message lengths");
+    cx.run_until_parked();
+    for compact in [false, true] {
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            fixture.view.update(cx, |view, cx| {
+                view.compact = compact;
+                view.output_open = true;
+                view.resize_window(window, cx);
+            });
+            window.resize(size(px(if compact { 420. } else { 760. }), px(800.)));
+            window.bounds_changed(cx);
+            fixture
+                .view
+                .read(cx)
+                .list
+                .scroll_to(gpui_kit::ListOffset::default());
+            window.render_frame(cx);
+            let first = window.find(format!("message-surface-{}", ids[0])).bounds();
+            let last = window.find(format!("message-surface-{}", ids[2])).bounds();
+            let rail = window.find("turn-navigation").bounds();
+            let body = window
+                .find(if compact {
+                    "agent-output"
+                } else {
+                    "thread-body"
+                })
+                .bounds();
+            assert_eq!(first.left(), last.left());
+            assert_eq!(first.right(), last.right());
+            assert_eq!(first.left() - body.left(), px(chat::THREAD_BODY_PADDING));
+            assert_eq!(rail.left() - first.right(), px(chat::THREAD_BODY_PADDING));
+        })
+        .expect("consistent message gutters");
+    }
 }

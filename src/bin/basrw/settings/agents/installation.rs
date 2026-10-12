@@ -122,14 +122,14 @@ impl Service {
                 serde_json::from_slice(&response.catalog_json).map_err(|error| error.to_string())
             })
             .await
-            .unwrap_or_else(|_| Err("读取 Agent 目录超时，请重试。".into()));
+            .unwrap_or_else(|_| Err(crate::i18n::tr!("catalog-timeout").into()));
             let _ = send.send(result);
         }));
         async move {
             let _task = task;
             receive
                 .await
-                .unwrap_or_else(|_| Err("Agent 目录任务已结束。".into()))
+                .unwrap_or_else(|_| Err(crate::i18n::tr!("catalog-ended").into()))
         }
     }
 
@@ -139,7 +139,7 @@ impl Service {
         let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
             let result = async {
                 if !server.ip().is_loopback() {
-                    return Err("请在 daemon 所在主机安装 Agent。".into());
+                    return Err(crate::i18n::tr!("agent-install-remote").into());
                 }
                 let mut client = Client::connect_at(server)
                     .await
@@ -162,7 +162,7 @@ impl Service {
                         return Ok(());
                     }
                 }
-                Err("安装未完成；请刷新目录后重试。".to_owned())
+                Err(crate::i18n::tr!("agent-install-incomplete").to_owned())
             }
             .await;
             if let Err(error) = result {
@@ -181,7 +181,7 @@ impl Service {
         let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
             let result = async {
                 if !server.ip().is_loopback() {
-                    return Err("请在 daemon 所在主机移除 Agent。".into());
+                    return Err(crate::i18n::tr!("agent-remove-remote").into());
                 }
                 let mut client = Client::connect_at(server)
                     .await
@@ -199,7 +199,7 @@ impl Service {
             let _task = task;
             receive
                 .await
-                .unwrap_or_else(|_| Err("移除任务已结束。".into()))
+                .unwrap_or_else(|_| Err(crate::i18n::tr!("agent-remove-ended").into()))
         }
     }
 }
@@ -227,10 +227,10 @@ fn matches_query(entry: &Entry, query: &str) -> bool {
 
 fn status_label(entry: &Entry) -> &'static str {
     match entry.status {
-        Status::NotInstalled => "未安装",
-        Status::Installed => "已安装",
-        Status::Missing => "配置的程序不可用",
-        Status::Unsupported => "此平台暂不支持安装",
+        Status::NotInstalled => crate::i18n::tr!("agent-not-installed"),
+        Status::Installed => crate::i18n::tr!("agent-installed"),
+        Status::Missing => crate::i18n::tr!("agent-program-unavailable"),
+        Status::Unsupported => crate::i18n::tr!("agent-platform-unsupported"),
     }
 }
 
@@ -282,7 +282,8 @@ impl Agents {
                     Ok(catalog) => page.apply_catalog(catalog, service.local(), cx),
                     Err(error) => {
                         page.local_editable = false;
-                        page.message = format!("无法读取 daemon 的 Agent 目录：{error}");
+                        page.message =
+                            crate::i18n::tr!("catalog-load-error", error = (error).to_string());
                     }
                 }
                 cx.notify();
@@ -301,7 +302,10 @@ impl Agents {
             if !self.dirty(cx) {
                 match self.store.load() {
                     Ok(document) => self.document = Some(document),
-                    Err(error) => self.message = format!("读取本机配置失败：{error}"),
+                    Err(error) => {
+                        self.message =
+                            crate::i18n::tr!("settings-load-error", error = (error).to_string())
+                    }
                 }
             }
             let specs = self.catalog();
@@ -318,10 +322,9 @@ impl Agents {
             }
         } else {
             self.message = if local {
-                "daemon 使用的配置文件与本机设置不同。目录可以查看；请让 basrw 与 basrd 使用相同的 --settings 路径后再编辑或安装。".into()
+                crate::i18n::tr!("catalog-config-mismatch").into()
             } else {
-                "正在查看远端 daemon 的 Agent 目录。安装、移除和认证需在 daemon 所在主机完成。"
-                    .into()
+                crate::i18n::tr!("catalog-remote").into()
             };
         }
     }
@@ -361,9 +364,13 @@ impl Agents {
                 };
                 let _ = page.update(cx, |page, cx| {
                     let message = match &update {
-                        Ok(operation) if operation.complete => "安装完成".into(),
+                        Ok(operation) if operation.complete => {
+                            crate::i18n::tr!("agent-install-done").into()
+                        }
                         Ok(operation) => operation.message.clone(),
-                        Err(error) => format!("安装失败：{error}"),
+                        Err(error) => {
+                            crate::i18n::tr!("agent-install-error", error = (error).to_string())
+                        }
                     };
                     if let Some(operation) = page.operations.get_mut(&key) {
                         operation.message = message;
@@ -393,8 +400,7 @@ impl Agents {
                     && operation.busy
                 {
                     operation.busy = false;
-                    operation.message =
-                        "安装连接已结束，尚未收到完成结果。请刷新目录后重试。".into();
+                    operation.message = crate::i18n::tr!("agent-install-disconnected").into();
                 }
                 page.refresh_registry(false, cx);
                 cx.notify();
@@ -403,7 +409,7 @@ impl Agents {
         self.operations.insert(
             id,
             Operation {
-                message: "正在准备安装…".into(),
+                message: crate::i18n::tr!("agent-install-preparing").into(),
                 busy: true,
                 _task: Some(task),
             },
@@ -415,7 +421,7 @@ impl Agents {
         if let Some(operation) = self.operations.get_mut(id) {
             operation._task.take();
             operation.busy = false;
-            operation.message = "已取消，正在刷新安装状态。".into();
+            operation.message = crate::i18n::tr!("agent-install-cancelled").into();
         }
         self.refresh_registry(false, cx);
         cx.notify();
@@ -436,8 +442,10 @@ impl Agents {
                 if let Some(operation) = page.operations.get_mut(&key) {
                     operation.busy = false;
                     operation.message = match result {
-                        Ok(()) => "已移除安装和启动配置；已有会话仍保留。".into(),
-                        Err(error) => format!("移除失败：{error}"),
+                        Ok(()) => crate::i18n::tr!("agent-removed").into(),
+                        Err(error) => {
+                            crate::i18n::tr!("agent-remove-error", error = (error).to_string())
+                        }
                     };
                 }
                 page.notify_agent_change(None, cx);
@@ -448,7 +456,7 @@ impl Agents {
         self.operations.insert(
             id,
             Operation {
-                message: "正在移除…".into(),
+                message: crate::i18n::tr!("agent-removing").into(),
                 busy: true,
                 _task: Some(task),
             },
@@ -484,7 +492,7 @@ impl Agents {
             .items_center()
             .flex_shrink_0()
             .gap_2()
-            .text_xs()
+            .text_size(crate::ui::SMALL)
             .text_color(palette.muted)
             .child(div().child(format!("ID: {}", entry.id)))
             .when(!repository.is_empty(), |links| {
@@ -493,7 +501,7 @@ impl Agents {
                         .ghost()
                         .xsmall()
                         .icon(IconName::Github)
-                        .tooltip("Repository")
+                        .tooltip(crate::i18n::tr!("agent-repository"))
                         .text_color(palette.muted)
                         .on_click(move |_, _, cx| cx.open_url(&repository)),
                 )
@@ -504,7 +512,10 @@ impl Agents {
                         .ghost()
                         .xsmall()
                         .icon(IconName::Scale)
-                        .tooltip(format!("License: {}", entry.license))
+                        .tooltip(crate::i18n::tr!(
+                            "agent-license",
+                            license = (entry.license).to_string()
+                        ))
                         .text_color(palette.muted)
                         .disabled(license.is_empty())
                         .on_click(move |_, _, cx| cx.open_url(&license)),
@@ -528,7 +539,7 @@ impl Agents {
         let action = if busy {
             let id = entry.id.clone();
             super::button(format!("agents-install-cancel-{}", entry.id))
-                .label("取消")
+                .label(crate::i18n::tr!("action-cancel"))
                 .on_click(cx.listener(move |this, _, _, cx| this.cancel_install(&id, cx)))
         } else if entry.source == Source::Registry
             && (matches!(entry.status, Status::NotInstalled | Status::Missing) || update)
@@ -538,7 +549,11 @@ impl Agents {
                 !self.managed_allowed(cx) || any_busy || entry.status == Status::Unsupported;
             super::button(format!("agents-install-{}", entry.id))
                 .primary()
-                .label(if update { "更新" } else { "安装" })
+                .label(if update {
+                    crate::i18n::tr!("action-update")
+                } else {
+                    crate::i18n::tr!("action-install")
+                })
                 .icon(IconName::Download)
                 .when(!disabled, |button| {
                     button
@@ -552,14 +567,17 @@ impl Agents {
             let embedded = spec.kind == basr::config::agent::Kind::Embedded;
             super::button(format!("agents-registry-check-{}", entry.id))
                 .label(if embedded {
-                    "开始对话"
+                    crate::i18n::tr!("agent-start-chat")
                 } else {
-                    status.map_or("检测", super::check::Status::check_label)
+                    status.map_or(
+                        crate::i18n::tr!("agent-check"),
+                        super::check::Status::check_label,
+                    )
                 })
                 .tooltip(if embedded {
-                    "使用内置后端开始对话。".into()
+                    crate::i18n::tr!("agent-start-chat")
                 } else {
-                    self.check_detail(&spec)
+                    crate::i18n::tr!("agent-check-help")
                 })
                 .text_color(palette.accent)
                 .disabled(
@@ -599,7 +617,7 @@ impl Agents {
                         Button::new(format!("agents-registry-start-chat-{}", entry.id))
                             .ghost()
                             .xsmall()
-                            .label("开始对话")
+                            .label(crate::i18n::tr!("agent-start-chat"))
                             .text_color(palette.accent)
                             .disabled(!self.local_editable || self.dirty(cx))
                             .on_click(
@@ -613,7 +631,7 @@ impl Agents {
                     Button::new(format!("agents-remove-{}", entry.id))
                         .ghost()
                         .xsmall()
-                        .label("移除")
+                        .label(crate::i18n::tr!("action-remove"))
                         .disabled(!self.managed_allowed(cx) || any_busy)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.remove_managed(remove.clone(), cx)
@@ -631,9 +649,12 @@ impl Agents {
             .as_ref()
             .is_some_and(|spec| self.authentications.contains_key(&spec.id));
         let status_label = if entry.source == Source::Embedded {
-            "内置可用"
+            crate::i18n::tr!("agent-builtin-ready")
         } else {
-            status.map_or("已安装 · 未检测", super::check::Status::label)
+            status.map_or(
+                crate::i18n::tr!("agent-installed-unchecked"),
+                super::check::Status::label,
+            )
         };
         let check_detail = entry.spec.as_ref().map(|spec| self.check_detail(spec));
         let operation = self.operations.get(&entry.id);
@@ -650,7 +671,7 @@ impl Agents {
             .or_else(|| {
                 (!entry.message.is_empty()).then(|| {
                     if entry.status == Status::Installed && entry.source == Source::Registry {
-                        "安装完成".into()
+                        crate::i18n::tr!("agent-install-done").into()
                     } else {
                         entry.message.clone()
                     }
@@ -690,14 +711,14 @@ impl Agents {
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .text_sm()
+                                    .text_size(crate::ui::SMALL)
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(entry.name.clone()),
                             )
                             .when(!entry.version.is_empty(), |title| {
                                 title.child(
                                     div()
-                                        .text_xs()
+                                        .text_size(crate::ui::SMALL)
                                         .text_color(palette.muted)
                                         .child(entry.version.clone()),
                                 )
@@ -711,12 +732,11 @@ impl Agents {
                                         div()
                                             .id(format!("agents-registry-status-{}", entry.id))
                                             .test_support()
-                                            .text_xs()
+                                            .text_size(crate::ui::SMALL)
                                             .text_color(palette.accent)
                                             .child(status_label),
                                         check_detail.clone().unwrap_or_else(|| {
-                                            "点击「检测」检查程序是否能正常启动、是否需要登录。"
-                                                .into()
+                                            crate::i18n::tr!("agent-check-help").into()
                                         }),
                                     ))
                                 },
@@ -732,7 +752,7 @@ impl Agents {
                     .items_center()
                     .gap_2()
                     .min_w_0()
-                    .text_xs()
+                    .text_size(crate::ui::SMALL)
                     .child(
                         div()
                             .min_w_0()
@@ -748,7 +768,7 @@ impl Agents {
                     div()
                         .id(format!("agents-operation-{}", entry.id))
                         .test_support()
-                        .text_xs()
+                        .text_size(crate::ui::SMALL)
                         .text_color(palette.accent)
                         .min_w_0()
                         .child(detail),
@@ -796,12 +816,16 @@ impl Agents {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(div().text_xl().child("ACP Registry"))
+                            .child(
+                                div()
+                                    .text_size(crate::ui::TITLE)
+                                    .child(crate::i18n::tr!("catalog-title")),
+                            )
                             .child(
                                 Button::new("agents-registry-learn-more")
                                     .ghost()
                                     .xsmall()
-                                    .label("了解更多")
+                                    .label(crate::i18n::tr!("action-learn-more"))
                                     .text_color(palette.accent)
                                     .icon(IconName::ExternalLink)
                                     .on_click(|_, _, cx| cx.open_url(REGISTRY_URL)),
@@ -811,7 +835,7 @@ impl Agents {
                         Button::new("agents-configure")
                             .ghost()
                             .xsmall()
-                            .label("高级配置")
+                            .label(crate::i18n::tr!("agent-advanced"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.show_installation = false;
                                 this.scroll_to = Some(0);
@@ -834,7 +858,7 @@ impl Agents {
                             .appearance(false)
                             .cleanable(true)
                             .prefix(Icon::new(IconName::Search).small())
-                            .aria_label("搜索 ACP Agent"),
+                            .aria_label(crate::i18n::tr!("agent-search")),
                     ),
             )
             .child(
@@ -849,7 +873,7 @@ impl Agents {
                             .small()
                             .children([
                                 Button::new("agents-filter-all")
-                                    .label("全部")
+                                    .label(crate::i18n::tr!("filter-all"))
                                     .selected(self.registry_filter == Filter::All)
                                     .when(self.registry_filter == Filter::All, |button| {
                                         button
@@ -862,7 +886,7 @@ impl Agents {
                                         cx.notify();
                                     })),
                                 Button::new("agents-filter-installed")
-                                    .label("已安装")
+                                    .label(crate::i18n::tr!("agent-installed"))
                                     .selected(self.registry_filter == Filter::Installed)
                                     .when(self.registry_filter == Filter::Installed, |button| {
                                         button
@@ -875,7 +899,7 @@ impl Agents {
                                         cx.notify();
                                     })),
                                 Button::new("agents-filter-not-installed")
-                                    .label("未安装")
+                                    .label(crate::i18n::tr!("agent-not-installed"))
                                     .selected(self.registry_filter == Filter::NotInstalled)
                                     .when(self.registry_filter == Filter::NotInstalled, |button| {
                                         button
@@ -895,9 +919,9 @@ impl Agents {
                             .xsmall()
                             .icon(IconName::RefreshCw)
                             .label(if self.registry_loading {
-                                "刷新中…"
+                                crate::i18n::tr!("catalog-refreshing")
                             } else {
-                                "刷新目录"
+                                crate::i18n::tr!("catalog-refresh")
                             })
                             .disabled(self.registry_loading)
                             .on_click(
@@ -940,7 +964,7 @@ impl Agents {
                 |panel, warning| {
                     panel.child(
                         div()
-                            .text_xs()
+                            .text_size(crate::ui::SMALL)
                             .text_color(cx.theme().muted_foreground)
                             .child(warning.clone()),
                     )
@@ -950,14 +974,14 @@ impl Agents {
                 panel.child(
                     div()
                         .py_4()
-                        .text_sm()
+                        .text_size(crate::ui::SMALL)
                         .text_color(cx.theme().muted_foreground)
                         .child(if self.registry_loading {
-                            "正在读取 Agent 目录…"
+                            crate::i18n::tr!("catalog-loading")
                         } else if self.registry.is_none() {
-                            "连接 basrd 后即可加载可安装的 Agent。"
+                            crate::i18n::tr!("catalog-connect")
                         } else {
-                            "没有匹配的 Agent。"
+                            crate::i18n::tr!("catalog-no-results")
                         }),
                 )
             })

@@ -140,7 +140,9 @@ impl Render for ActionStyleProbe {
 }
 
 #[gpui_kit::test]
-fn secondary_action_icons_brighten_on_hover_only_when_enabled(cx: &mut TestAppContext) {
+fn secondary_action_icons_are_subtle_until_hovered_and_keep_disabled_feedback(
+    cx: &mut TestAppContext,
+) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::theme::init_default(cx);

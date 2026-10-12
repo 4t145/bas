@@ -93,7 +93,7 @@ fn closed_connection_does_not_leave_deletion_pending(cx: &mut TestAppContext) {
         assert!(
             view.error
                 .as_deref()
-                .is_some_and(|error| error.contains("连接任务已停止"))
+                .is_some_and(|error| error.contains("请重新打开 BASR"))
         );
     });
 }

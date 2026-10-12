@@ -68,7 +68,10 @@ impl Conversation {
                     .entry(update.terminal_id.to_string())
                     .or_default();
                 if let Err(error) = terminal.apply_update(update) {
-                    return self.notice(format!("终端输出无效：{error}"));
+                    return self.notice(crate::i18n::tr!(
+                        "terminal-invalid-output",
+                        error = (error).to_string()
+                    ));
                 }
                 self.terminal_item(&update.terminal_id)
             }
@@ -78,7 +81,10 @@ impl Conversation {
                     .entry(chunk.terminal_id.to_string())
                     .or_default();
                 if let Err(error) = terminal.push_chunk(chunk) {
-                    return self.notice(format!("终端输出无效：{error}"));
+                    return self.notice(crate::i18n::tr!(
+                        "terminal-invalid-output",
+                        error = (error).to_string()
+                    ));
                 }
                 self.terminal_item(&chunk.terminal_id)
             }
@@ -161,7 +167,7 @@ impl Conversation {
             Ok(update) => self.apply_protocol_update(&update),
             Err(error) => {
                 tracing::warn!(%error, "cannot normalize protocol presentation update");
-                self.notice("无法显示 Agent 的协议更新")
+                self.notice(crate::i18n::tr!("protocol-update-invalid"))
             }
         }
     }

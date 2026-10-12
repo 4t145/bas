@@ -16,6 +16,14 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let interaction = fixture;
+        let fixture = match fixture {
+            "agent-hover" | "attachment-hint" => "usage",
+            "app-menu" | "thread-menu" => "tool-details",
+            "markdown-copy-hover" | "subtle-actions" => "markdown-actions",
+            "turn-navigation-hover" => "turn-navigation",
+            _ => fixture,
+        };
         let (commands, mut requests) = mpsc::unbounded_channel();
         let (updates, events) = mpsc::channel(EVENT_BATCH);
         let mut view = Self::with_connection(
@@ -115,6 +123,35 @@ impl Workspace {
         view.stream = StreamState::Live;
         view.error = None;
         let mut conversation = Conversation::new(session.clone());
+        if matches!(fixture, "turn-navigation" | "turn-navigation-many") {
+            navigation_turns(
+                &mut conversation,
+                if fixture == "turn-navigation-many" {
+                    80
+                } else {
+                    3
+                },
+            );
+        }
+        if fixture == "markdown-actions" {
+            for (index, update) in [
+                acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(
+                    "请展示代码片段与表格。".into(),
+                )),
+                acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                    include_str!("markdown/assets/copy-actions.md").into(),
+                )),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                conversation.apply(Event::new(
+                    session.id,
+                    Cursor::from_raw(index as u64 + 1),
+                    EventKind::Acp(update),
+                ));
+            }
+        }
         if matches!(fixture, "usage" | "usage-details" | "usage-hover") {
             conversation.apply(Event::new(
                 session.id,
@@ -228,6 +265,7 @@ impl Workspace {
                 )),
                 acp::SessionUpdate::ToolCall(
                     acp::ToolCall::new("search", "WebSearch for hooks")
+                        .kind(acp::ToolKind::Search)
                         .status(acp::ToolCallStatus::Completed)
                         .raw_input(serde_json::json!({
                             "type": "webSearch",
@@ -240,6 +278,7 @@ impl Workspace {
                 ),
                 acp::SessionUpdate::ToolCall(
                     acp::ToolCall::new("long-task", "Running long task in /project")
+                        .kind(acp::ToolKind::Execute)
                         .status(acp::ToolCallStatus::InProgress)
                         .raw_input(serde_json::json!({
                             "command": command,
@@ -302,6 +341,18 @@ impl Workspace {
                 view.expanded.insert("tool-multiline".into());
             }
         }
+        if fixture == "thread-feedback" {
+            for (index, update) in feedback_updates().into_iter().enumerate() {
+                let cursor = if matches!(update, acp::SessionUpdate::Notice(_)) {
+                    Cursor::START
+                } else {
+                    Cursor::from_raw(index as u64 + 1)
+                };
+                conversation.apply(Event::new(session.id, cursor, EventKind::Acp(update)));
+            }
+            let first = conversation.items[1].id();
+            view.expanded.insert(format!("activity-{first}"));
+        }
         view.list.reset(conversation.rows.len());
         view.list.set_follow_mode(FollowMode::Normal);
         view.list.scroll_to(gpui_kit::ListOffset::default());
@@ -322,6 +373,10 @@ impl Workspace {
                 | "multiline"
                 | "multiline-hover"
                 | "tool-details"
+                | "thread-feedback"
+                | "markdown-actions"
+                | "turn-navigation"
+                | "turn-navigation-many"
         );
         if matches!(fixture, "connecting" | "disconnected") {
             view.connected = false;
@@ -350,7 +405,8 @@ impl Workspace {
             })
             .detach();
         }
-        let auto_open = match fixture {
+        let auto_open = match interaction {
+            "app-menu" => Some("app-menu"),
             "menus" => Some("config-model"),
             "agent-menu" => Some("agent-picker"),
             "picker" => Some("add-attachment"),
@@ -374,11 +430,64 @@ impl Workspace {
             })
             .detach();
         }
-        let hover = match fixture {
+        if interaction == "thread-menu" {
+            cx.spawn_in(window, async move |view, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(700))
+                    .await;
+                use gpui_kit::test::TestWindowExt;
+                let session = view
+                    .read_with(cx, |view, _| view.active.expect("preview session"))
+                    .expect("preview view");
+                let _ = cx.update(|window, cx| {
+                    window.right_click(SharedString::from(format!("session-{session}")), cx)
+                });
+            })
+            .detach();
+        }
+        if fixture == "markdown-actions" {
+            let interaction = interaction.to_owned();
+            let reply = view
+                .conversation
+                .as_ref()
+                .expect("preview conversation")
+                .items
+                .last()
+                .expect("preview reply")
+                .id();
+            cx.spawn_in(window, async move |_, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(700))
+                    .await;
+                use gpui_kit::test::TestWindowExt;
+                let start = include_str!("markdown/assets/copy-actions.md")
+                    .match_indices("```bash")
+                    .nth(1)
+                    .expect("second code block")
+                    .0;
+                let _ = cx.update(|window, cx| {
+                    if interaction == "subtle-actions" {
+                        window.hover(SharedString::from(format!("message-actions-{reply}")), cx);
+                    } else {
+                        window.hover(("markdown-code-block", start), cx);
+                        if interaction == "markdown-copy-hover" {
+                            window
+                                .within(("markdown-code-block", start))
+                                .hover("copy-markdown-code", cx);
+                        }
+                    }
+                });
+            })
+            .detach();
+        }
+        let hover = match interaction {
+            "agent-hover" => Some("agent-picker".to_owned()),
+            "attachment-hint" => Some("add-attachment".to_owned()),
             "reply-preview" => Some("completed-reply".to_owned()),
             "attachment-preview" => hover_attachment,
             "multiline-hover" => Some("tool-command-tool-multiline".to_owned()),
             "usage-hover" => Some("session-usage".to_owned()),
+            "turn-navigation-hover" => Some("turn-marker-0".to_owned()),
             _ => None,
         };
         if let Some(hover) = hover {
@@ -392,6 +501,35 @@ impl Workspace {
             .detach();
         }
         view
+    }
+}
+
+fn navigation_turns(conversation: &mut Conversation, count: usize) {
+    let session = conversation.session.id;
+    let mut cursor = 0;
+    for number in 1..=count {
+        let turn = TurnId::new();
+        for kind in [
+            EventKind::TurnStarted { turn },
+            EventKind::Acp(acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(
+                format!("第 {number} 轮：检查会话布局与快捷跳转。").into(),
+            ))),
+            EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                if number == 2 {
+                    "这是一段较长的回复。\n\n".repeat(40)
+                } else {
+                    "已检查消息卡片、工具详情和侧边快捷入口。\n\n卡片左右留白一致，工具详情先展示输入，再展示输出。".into()
+                }
+                .into(),
+            ))),
+            EventKind::TurnFinished {
+                turn,
+                result: Ok(acp::PromptResponse::new(StopReason::EndTurn)),
+            },
+        ] {
+            cursor += 1;
+            conversation.apply(Event::new(session, Cursor::from_raw(cursor), kind));
+        }
     }
 }
 
@@ -442,4 +580,57 @@ fn image_events() -> Vec<EventKind> {
         });
     }
     events
+}
+
+fn feedback_updates() -> Vec<acp::SessionUpdate> {
+    use acp::*;
+    vec![
+        SessionUpdate::UserMessageChunk(ContentChunk::new(
+            "检查工作区配置，并核对相关文档。".into(),
+        )),
+        SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+            "先检查本地文件，再核对外部文档。".into(),
+        )),
+        SessionUpdate::ToolCall(
+            ToolCall::new("config", "读取工作区配置")
+                .kind(ToolKind::Read)
+                .status(ToolCallStatus::Completed)
+                .raw_input(serde_json::json!({"path": "/project/config.toml"}))
+                .raw_output(serde_json::json!("配置已读取")),
+        ),
+        SessionUpdate::ToolCall(
+            ToolCall::new("docs", "检索文档")
+                .kind(ToolKind::Fetch)
+                .status(ToolCallStatus::Failed)
+                .raw_input(serde_json::json!({"url": "https://example.com/docs"}))
+                .raw_output(serde_json::json!("连接超时")),
+        ),
+        SessionUpdate::CompactionUpdate(
+            CompactionUpdate::new("summary", CompactionStatus::Completed)
+                .summary(vec!["已保留配置检查结果与待核对的文档地址。".into()]),
+        ),
+        SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            "配置检查已完成。文档服务暂时不可用，可以稍后重试。".into(),
+        )),
+        SessionUpdate::PlanUpdate(PlanUpdate::new(PlanUpdateContent::items(
+            "review",
+            vec![
+                PlanEntry::new(
+                    "检查工作区配置",
+                    PlanEntryPriority::High,
+                    PlanEntryStatus::Completed,
+                ),
+                PlanEntry::new(
+                    "核对文档",
+                    PlanEntryPriority::Medium,
+                    PlanEntryStatus::Pending,
+                ),
+            ],
+        ))),
+        SessionUpdate::Notice(
+            Notice::new(NoticeSeverity::Warning, "文档服务暂时不可用")
+                .description("本地检查结果已保留。"),
+        ),
+        SessionUpdate::UsageUpdate(UsageUpdate::new(42_000, 200_000)),
+    ]
 }

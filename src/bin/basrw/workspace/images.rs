@@ -202,7 +202,7 @@ fn frame(id: &str, cache: &Entity<Cache>, content: AnyElement, cx: &App) -> Div 
             div()
                 .id(SharedString::from(format!("image-error-{id}-{key}")))
                 .test_support()
-                .text_sm()
+                .text_size(crate::ui::SMALL)
                 .text_color(cx.theme().muted_foreground)
                 .child(message.clone())
         }))
@@ -261,25 +261,34 @@ fn resolve(
         Ok(url) if url.scheme() == "file" => url
             .to_file_path()
             .map(Resource::from)
-            .map_err(|_| ImageCacheError::Asset("文件图片地址不是本地路径".into())),
-        Ok(_) => Err(ImageCacheError::Asset("不支持的图片地址协议".into())),
+            .map_err(|_| ImageCacheError::Asset(crate::i18n::tr!("image-local-path").into())),
+        Ok(_) => Err(ImageCacheError::Asset(
+            crate::i18n::tr!("image-protocol").into(),
+        )),
         Err(url::ParseError::RelativeUrlWithoutBase) => {
             let path = std::path::Path::new(uri.as_ref());
             let base = if path.is_absolute() {
                 std::path::Path::new("/")
             } else {
-                directory
-                    .ok_or_else(|| ImageCacheError::Asset("相对图片地址缺少工作目录".into()))?
+                directory.ok_or_else(|| {
+                    ImageCacheError::Asset(crate::i18n::tr!("image-no-directory").into())
+                })?
             };
             let url = url::Url::from_directory_path(base)
-                .map_err(|_| ImageCacheError::Asset("图片工作目录不是绝对路径".into()))?
+                .map_err(|_| {
+                    ImageCacheError::Asset(crate::i18n::tr!("image-directory-relative").into())
+                })?
                 .join(uri.as_ref())
-                .map_err(|_| ImageCacheError::Asset("图片地址无效".into()))?;
+                .map_err(|_| {
+                    ImageCacheError::Asset(crate::i18n::tr!("image-invalid-address").into())
+                })?;
             url.to_file_path()
                 .map(Resource::from)
-                .map_err(|_| ImageCacheError::Asset("无法解析图片路径".into()))
+                .map_err(|_| ImageCacheError::Asset(crate::i18n::tr!("image-invalid-path").into()))
         }
-        Err(_) => Err(ImageCacheError::Asset("图片地址无效".into())),
+        Err(_) => Err(ImageCacheError::Asset(
+            crate::i18n::tr!("image-invalid-address").into(),
+        )),
     }
 }
 
@@ -291,7 +300,7 @@ fn decode_data_uri(uri: &str) -> Result<Image, ImageCacheError> {
     let (description, data) = uri
         .strip_prefix("data:")
         .and_then(|uri| uri.split_once(','))
-        .ok_or_else(|| ImageCacheError::Asset("内嵌图片地址无效".into()))?;
+        .ok_or_else(|| ImageCacheError::Asset(crate::i18n::tr!("image-invalid-data-url").into()))?;
     let mime = description
         .split(';')
         .next()
@@ -303,7 +312,7 @@ fn decode_data_uri(uri: &str) -> Result<Image, ImageCacheError> {
             matches!(mime.as_str(), "image/x-icon" | "image/vnd.microsoft.icon")
                 .then_some(ImageFormat::Ico)
         })
-        .ok_or_else(|| ImageCacheError::Asset("不支持的图片格式".into()))?;
+        .ok_or_else(|| ImageCacheError::Asset(crate::i18n::tr!("image-format").into()))?;
     let bytes = if description
         .split(';')
         .any(|part| part.eq_ignore_ascii_case("base64"))
@@ -315,7 +324,7 @@ fn decode_data_uri(uri: &str) -> Result<Image, ImageCacheError> {
         base64::engine::general_purpose::STANDARD
             .decode(&data)
             .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&data))
-            .map_err(|_| ImageCacheError::Asset("图片 Base64 数据无效".into()))?
+            .map_err(|_| ImageCacheError::Asset(crate::i18n::tr!("image-invalid-base64").into()))?
     } else {
         percent_decode(data)?
     };
@@ -338,7 +347,11 @@ fn percent_decode(data: &str) -> Result<Vec<u8>, ImageCacheError> {
         let low = bytes.next().and_then(|byte| char::from(byte).to_digit(16));
         match (high, low) {
             (Some(high), Some(low)) => decoded.push((high * 16 + low) as u8),
-            _ => return Err(ImageCacheError::Asset("图片地址的百分号编码无效".into())),
+            _ => {
+                return Err(ImageCacheError::Asset(
+                    crate::i18n::tr!("image-invalid-encoding").into(),
+                ));
+            }
         }
     }
     Ok(decoded)
@@ -347,10 +360,12 @@ fn percent_decode(data: &str) -> Result<Vec<u8>, ImageCacheError> {
 fn failure_message(error: &ImageCacheError) -> String {
     let detail = match error {
         ImageCacheError::BadStatus { status, .. } => format!("HTTP {status}"),
-        ImageCacheError::Io(_) => "无法读取本地文件".into(),
+        ImageCacheError::Io(_) => crate::i18n::tr!("image-read-failed").into(),
         ImageCacheError::Asset(message) => message.to_string(),
-        ImageCacheError::Image(_) | ImageCacheError::Usvg(_) => "图片数据无效".into(),
-        ImageCacheError::Other(_) => "加载失败".into(),
+        ImageCacheError::Image(_) | ImageCacheError::Usvg(_) => {
+            crate::i18n::tr!("image-invalid-data").into()
+        }
+        ImageCacheError::Other(_) => crate::i18n::tr!("load-failed").into(),
     };
-    format!("图片无法加载：{detail}")
+    crate::i18n::tr!("image-load-error", detail = (detail).to_string())
 }

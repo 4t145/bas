@@ -27,12 +27,17 @@ impl Workspace {
             .sum::<usize>()
             > MAX_TOTAL_BYTES
         {
-            return Some("附件总大小不能超过 16 MiB".into());
+            return Some(crate::i18n::tr!("attachment-total-limit").into());
         }
         references
             .iter()
             .find(|item| !item.attachment.supported(&capabilities))
-            .map(|item| format!("当前 Agent 不支持此附件类型：{}", item.attachment.name))
+            .map(|item| {
+                crate::i18n::tr!(
+                    "attachment-unsupported",
+                    name = (item.attachment.name).to_string()
+                )
+            })
     }
 
     fn choose_attachments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -47,7 +52,7 @@ impl Workspace {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("添加文件或图片".into()),
+            prompt: Some(crate::i18n::tr!("attachment-add").into()),
         });
         cx.spawn_in(window, async move |view, cx| {
             let result = async {
@@ -65,7 +70,10 @@ impl Workspace {
                 match result {
                     Ok(attachments) => this.add_attachments(session, attachments, window, cx),
                     Err(error) if this.active == Some(session) => {
-                        this.error = Some(format!("添加附件失败：{error:#}"))
+                        this.error = Some(crate::i18n::tr!(
+                            "attachment-add-error",
+                            error = format!("{:#}", error)
+                        ))
                     }
                     Err(_) => {}
                 }
@@ -102,7 +110,10 @@ impl Workspace {
                 match result {
                     Ok(attachments) => this.add_attachments(session, attachments, window, cx),
                     Err(error) if this.active == Some(session) => {
-                        this.error = Some(format!("添加附件失败：{error:#}"))
+                        this.error = Some(crate::i18n::tr!(
+                            "attachment-add-error",
+                            error = format!("{:#}", error)
+                        ))
                     }
                     Err(_) => {}
                 }
@@ -141,7 +152,10 @@ impl Workspace {
             .find(|attachment| !attachment.supported(&capabilities))
         {
             if self.active == Some(session) {
-                self.error = Some(format!("当前 Agent 不支持此附件类型：{}", attachment.name));
+                self.error = Some(crate::i18n::tr!(
+                    "attachment-unsupported",
+                    name = (attachment.name).to_string()
+                ));
             }
             cx.notify();
             return;
@@ -167,7 +181,7 @@ impl Workspace {
             + attachments.iter().map(|item| item.bytes).sum::<usize>();
         if total > MAX_TOTAL_BYTES {
             if self.active == Some(session) {
-                self.error = Some("附件总大小不能超过 16 MiB".into());
+                self.error = Some(crate::i18n::tr!("attachment-total-limit").into());
             }
             cx.notify();
             return;
@@ -408,7 +422,7 @@ impl Workspace {
                 .timer(std::time::Duration::from_secs(3));
             let result = match select(Box::pin(read), Box::pin(timeout)).await {
                 Either::Left((result, _)) => result,
-                Either::Right(_) => Err("读取剪贴板超时".into()),
+                Either::Right(_) => Err(crate::i18n::tr!("clipboard-timeout").into()),
             };
             let _ = view.update_in(cx, |this, window, cx| {
                 this.finish_paste(target, result, fallback, window, cx);
@@ -451,7 +465,12 @@ impl Workspace {
                 tracing::debug!(%error, "using GPUI clipboard fallback");
                 self.apply_clipboard(crate::clipboard::Contents::from_item(fallback), window, cx);
             }
-            Err(error) => self.error = Some(format!("粘贴失败：{error}")),
+            Err(error) => {
+                self.error = Some(crate::i18n::tr!(
+                    "clipboard-paste-error",
+                    error = (error).to_string()
+                ))
+            }
         }
         cx.notify();
     }
@@ -466,13 +485,18 @@ impl Workspace {
         if !contents.paths.is_empty() {
             self.drop_attachments(contents.paths, window, cx);
         } else if !contents.images.is_empty() && !self.prompt_capabilities().image {
-            self.error = Some("当前 Agent 不支持图片输入".into());
+            self.error = Some(crate::i18n::tr!("attachment-image-unsupported").into());
         } else if let Some(session) = self.active {
             let result: anyhow::Result<Vec<_>> =
                 contents.images.iter().map(Attachment::image).collect();
             match result {
                 Ok(attachments) => self.add_attachments(session, attachments, window, cx),
-                Err(error) => self.error = Some(format!("粘贴图片失败：{error:#}")),
+                Err(error) => {
+                    self.error = Some(crate::i18n::tr!(
+                        "clipboard-image-error",
+                        error = format!("{:#}", error)
+                    ))
+                }
             }
         }
         if let Some(text) = contents.text.filter(|text| !text.is_empty()) {
@@ -494,7 +518,7 @@ impl Workspace {
             .ghost()
             .xsmall()
             .icon(IconName::Plus)
-            .tooltip("在光标处插入文件或图片 · Ctrl V 粘贴图片")
+            .tooltip(crate::i18n::tr!("attachment-add"))
             .disabled(self.active.is_none() || busy)
             .on_click(cx.listener(|this, _, window, cx| this.choose_attachments(window, cx)))
     }
@@ -507,7 +531,7 @@ fn load_paths(paths: Vec<PathBuf>) -> anyhow::Result<Vec<Attachment>> {
         let attachment = Attachment::load(&path)?;
         total += attachment.bytes;
         if total > MAX_TOTAL_BYTES {
-            anyhow::bail!("附件总大小不能超过 16 MiB");
+            anyhow::bail!(crate::i18n::tr!("attachment-total-limit"));
         }
         attachments.push(attachment);
     }

@@ -118,7 +118,14 @@ fn compact_auth_button_stays_inside_window_and_opens_local_agent_settings(cx: &m
         );
         assert!(button.bounds().bottom() <= px(80.));
         assert!(button.bounds().left() >= px(0.));
-        assert!(fixture.view.read(cx).send_hint(cx).contains("需要认证"));
+        assert!(
+            fixture
+                .view
+                .read(cx)
+                .authentication_hint()
+                .expect("authentication message")
+                .contains("认证")
+        );
         window.click("agent-authenticate", cx);
     })
     .expect("local auth entry");
@@ -157,6 +164,10 @@ fn remote_auth_shows_remote_instructions_and_agent_switch_clears_waiting(cx: &mu
     cx.update_window(message, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("message-window").visible());
+        let body = window.find("application-message-body");
+        let instructions = body.label().expect("remote instructions");
+        assert!(instructions.contains("192.0.2.1:7337"));
+        assert!(instructions.contains("F5"));
         window.click("message-close", cx);
     })
     .expect("remote notice");

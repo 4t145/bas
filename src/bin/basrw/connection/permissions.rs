@@ -28,7 +28,11 @@ async fn open(
         }),
     )
     .await
-    .unwrap_or_else(|_| Err(tonic::Status::deadline_exceeded(REQUEST_TIMEOUT_MESSAGE)))
+    .unwrap_or_else(|_| {
+        Err(tonic::Status::deadline_exceeded(crate::i18n::tr!(
+            "connection-request-timeout"
+        )))
+    })
     .map(tonic::Response::into_inner)
 }
 
@@ -49,11 +53,16 @@ async fn watch_permissions(
             Ok(mut stream) => loop {
                 let snapshot = match stream.message().await {
                     Ok(Some(snapshot)) => snapshot,
-                    Ok(None) => break "审批连接已关闭，待审批请求已取消。".to_owned(),
-                    Err(error) => break format!("审批连接中断，待审批请求已取消：{error}"),
+                    Ok(None) => break crate::i18n::tr!("approval-closed").to_owned(),
+                    Err(error) => {
+                        break crate::i18n::tr!(
+                            "approval-disconnected",
+                            error = (error).to_string()
+                        );
+                    }
                 };
                 if snapshot.session != session.to_string() {
-                    break "审批数据属于其他会话，已断开审批连接。".to_owned();
+                    break crate::i18n::tr!("approval-wrong-session").to_owned();
                 }
                 let pending = snapshot
                     .pending
@@ -62,7 +71,9 @@ async fn watch_permissions(
                     .collect::<Result<Vec<PendingPermission>, _>>();
                 let pending = match pending {
                     Ok(pending) => pending,
-                    Err(error) => break format!("无效的工具审批数据：{error}"),
+                    Err(error) => {
+                        break crate::i18n::tr!("approval-invalid", error = (error).to_string());
+                    }
                 };
                 if updates
                     .send(Update::Permissions { epoch, pending })
@@ -79,16 +90,16 @@ async fn watch_permissions(
                 ) =>
             {
                 let message = if status.code() == Code::Unimplemented {
-                    "当前 basrd 不支持交互审批，请升级并重启服务。".into()
+                    crate::i18n::tr!("approval-upgrade").into()
                 } else {
-                    format!("无法订阅工具审批：{status}")
+                    crate::i18n::tr!("approval-subscribe-failed", status = (status).to_string())
                 };
                 let _ = updates
                     .send(Update::PermissionUnavailable { epoch, message })
                     .await;
                 return;
             }
-            Err(error) => format!("无法连接工具审批服务：{error}"),
+            Err(error) => crate::i18n::tr!("approval-connect-failed", error = (error).to_string()),
         };
         if updates
             .send(Update::PermissionUnavailable {

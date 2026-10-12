@@ -373,7 +373,10 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
             view.read(cx).status(&spec),
             Some(super::super::check::Status::Failed(_))
         ));
-        assert_eq!(view.read(cx).check_detail(&spec), "认证方式和结果见下方。");
+        assert_eq!(
+            view.read(cx).check_detail(&spec),
+            "选择认证方式以开始对话。"
+        );
 
         view.update(cx, |page, cx| {
             page.operations.insert(

@@ -60,7 +60,10 @@ impl Form<Entity<InputState>> {
     fn new(window: &mut Window, cx: &mut Context<Agents>) -> Self {
         Self {
             id: cx.new(|cx| InputState::new(window, cx)),
-            program: cx.new(|cx| InputState::new(window, cx).placeholder("可执行文件的绝对路径")),
+            program: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(crate::i18n::tr!("agent-program-placeholder"))
+            }),
             args: cx.new(|cx| InputState::new(window, cx).placeholder("[\"acp\"]")),
             grace: cx.new(|cx| InputState::new(window, cx)),
         }
@@ -84,17 +87,17 @@ impl Form<Entity<InputState>> {
         if !embedded {
             rows.push((
                 "agents-program",
-                "可执行文件（名称或绝对路径）",
+                crate::i18n::tr!("agent-program-label"),
                 &self.program,
             ));
             rows.push((
                 "agents-args",
-                "参数（JSON 字符串数组，例如 [\"含 空格的参数\"]）",
+                crate::i18n::tr!("agent-args-label"),
                 &self.args,
             ));
         }
         if connected {
-            rows.push(("agents-grace", "取消等待时间（毫秒）", &self.grace));
+            rows.push(("agents-grace", crate::i18n::tr!("agent-grace"), &self.grace));
         }
         rows
     }
@@ -122,21 +125,21 @@ fn values(spec: &AgentSpec) -> Form<String> {
 
 #[derive(Debug, thiserror::Error)]
 enum DraftError {
-    #[error("尚未读取配置")]
+    #[error("{}", crate::i18n::tr!("settings-not-loaded"))]
     NotLoaded,
-    #[error("请先选择或添加 Agent")]
+    #[error("{}", crate::i18n::tr!("agent-select-required"))]
     NotSelected,
-    #[error("未保存的 Agent 无需删除；请取消编辑")]
+    #[error("{}", crate::i18n::tr!("agent-draft-discard"))]
     UnsavedDeletion,
-    #[error("参数必须是 JSON 字符串数组：{0}")]
+    #[error("{}", crate::i18n::tr!("agent-invalid-args", error = .0.to_string()))]
     Arguments(#[source] serde_json::Error),
-    #[error("取消等待时间必须是正整数毫秒：{0}")]
+    #[error("{}", crate::i18n::tr!("agent-invalid-grace", error = .0.to_string()))]
     Grace(#[source] std::num::ParseIntError),
     #[error("{0}")]
     Validation(#[from] ValidationError),
     #[error("{0}")]
     Store(#[from] basr::config::Error),
-    #[error("请连接使用当前配置文件的本机 basrd，再编辑 Agent 配置。")]
+    #[error("{}", crate::i18n::tr!("agent-local-required"))]
     ReadOnly,
 }
 
@@ -172,9 +175,25 @@ pub(super) struct Section {
 }
 
 impl Agents {
+    pub(super) fn localize(&self, window: &mut Window, cx: &mut Context<Self>) {
+        for (input, placeholder) in [
+            (&self.registry_search, crate::i18n::tr!("agent-search")),
+            (
+                &self.form.program,
+                crate::i18n::tr!("agent-program-placeholder"),
+            ),
+        ] {
+            input.update(cx, |input, cx| {
+                input.set_placeholder(placeholder, window, cx)
+            });
+        }
+        cx.notify();
+    }
+
     pub(super) fn new(store: Store, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let form = Form::new(window, cx);
-        let registry_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 Agent…"));
+        let registry_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr!("agent-search")));
         let mut subscriptions: Vec<_> = form
             .fields()
             .into_iter()
@@ -259,7 +278,7 @@ impl Agents {
             self.start_check(spec, true, cx);
             Some(index)
         } else {
-            self.message = "本机设置中没有这个 Agent；请确认当前连接的 daemon 与配置文件。".into();
+            self.message = crate::i18n::tr!("agent-config-absent").into();
             cx.notify();
             None
         }
@@ -283,7 +302,9 @@ impl Agents {
                 spec.id.clone(),
                 Check {
                     spec,
-                    status: check::Status::Failed("本机服务检测未启用。".into()),
+                    status: check::Status::Failed(
+                        crate::i18n::tr!("agent-check-unavailable").into(),
+                    ),
                     completed_at: Some(Instant::now()),
                     _task: None,
                 },
@@ -291,7 +312,7 @@ impl Agents {
             return;
         };
         if !self.local_editable {
-            self.message = "当前 Agent 目录仅供查看；请连接使用当前配置文件的本机 basrd。".into();
+            self.message = crate::i18n::tr!("agent-catalog-readonly").into();
             cx.notify();
             return;
         }
@@ -352,10 +373,10 @@ impl Agents {
 
     fn check_detail(&self, spec: &AgentSpec) -> String {
         if self.authentications.contains_key(&spec.id) {
-            return "认证方式和结果见下方。".into();
+            return crate::i18n::tr!("agent-auth-help").into();
         }
         if spec.kind == Kind::Embedded {
-            return "内置 Agent 已就绪，可以直接开始对话。".into();
+            return crate::i18n::tr!("agent-builtin-help").into();
         }
         let check = self
             .checks
@@ -364,34 +385,33 @@ impl Agents {
         let age = check.and_then(|check| check.completed_at).map(|at| {
             let seconds = at.elapsed().as_secs();
             if seconds < 60 {
-                "刚刚".into()
+                crate::i18n::tr!("time-just-now").into()
             } else {
-                format!("约 {} 分钟前", seconds / 60)
+                crate::i18n::tr!("time-minutes-ago", count = seconds / 60)
             }
         });
-        let previous = format!(
-            "上次检测结果（{}）",
-            age.as_deref().unwrap_or("本次打开设置时")
+        let previous = crate::i18n::tr!(
+            "agent-last-check",
+            time = (age
+                .as_deref()
+                .unwrap_or(crate::i18n::tr!("time-settings-open")))
+            .to_string()
         );
         match check.map(|check| &check.status) {
-            Some(check::Status::Installed(_)) => {
-                "已找到 Agent 程序。点击「检测」检查是否能正常启动、是否需要认证。".into()
-            }
+            Some(check::Status::Installed(_)) => crate::i18n::tr!("agent-check-help").into(),
             Some(check::Status::Connected(_)) => {
-                format!("{previous}：程序启动正常，可以开始对话。")
+                crate::i18n::tr!("agent-check-ready", previous = (previous).to_string())
             }
             Some(check::Status::AuthenticationRequired { .. }) => {
-                format!("{previous}：需要认证。请先完成认证，再开始对话。")
+                crate::i18n::tr!("agent-check-signin", previous = (previous).to_string())
             }
             Some(check::Status::Missing(message) | check::Status::Failed(message)) => {
                 format!("{previous}：{message}")
             }
-            Some(check::Status::Authenticating) => "正在等待认证完成，随后会自动重新检测。".into(),
-            Some(check::Status::Checking) => "正在查找 Agent 程序，确认是否已安装。".into(),
-            Some(check::Status::Connecting) => {
-                "正在检查 Agent 是否能正常启动、是否需要认证。".into()
-            }
-            None => "点击「检测」检查程序是否能正常启动、是否需要认证。".into(),
+            Some(check::Status::Authenticating) => crate::i18n::tr!("agent-auth-recheck").into(),
+            Some(check::Status::Checking) => crate::i18n::tr!("agent-locating").into(),
+            Some(check::Status::Connecting) => crate::i18n::tr!("agent-testing").into(),
+            None => crate::i18n::tr!("agent-check-help").into(),
         }
     }
 
@@ -426,7 +446,7 @@ impl Agents {
             .collect();
         sections.push(Section {
             id: "settings-agents-add".to_owned(),
-            title: "添加 Agent".to_owned(),
+            title: crate::i18n::tr!("agent-add").to_owned(),
         });
         sections
     }
@@ -439,7 +459,7 @@ impl Agents {
 
     fn reload(&mut self, cx: &mut Context<Self>) {
         if self.dirty(cx) {
-            self.message = "有未保存草稿；请先保存或取消编辑，再重新加载。".into();
+            self.message = crate::i18n::tr!("agent-save-before-reload").into();
         } else {
             match self.store.load() {
                 Ok(document) => {
@@ -457,7 +477,10 @@ impl Agents {
                         }
                     }
                 }
-                Err(error) => self.message = format!("读取失败：{error}"),
+                Err(error) => {
+                    self.message =
+                        crate::i18n::tr!("settings-load-error", error = (error).to_string())
+                }
             }
         }
         cx.notify();
@@ -471,9 +494,9 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         if !self.local_editable {
-            self.message = "当前连接的 daemon 与本机配置文件不匹配，不能编辑。".into();
+            self.message = crate::i18n::tr!("agent-edit-mismatch").into();
         } else if self.dirty(cx) {
-            self.message = "请先保存或取消当前草稿，再选择其他 Agent。".into();
+            self.message = crate::i18n::tr!("agent-save-before-switch").into();
         } else {
             self.show_installation = false;
             let form = values(&spec);
@@ -553,7 +576,7 @@ impl Agents {
                 self.selected = None;
                 self.draft = None;
                 self.deleting = false;
-                self.message = "已保存本机配置。".into();
+                self.message = crate::i18n::tr!("settings-saved").into();
                 self.notify_agent_change(None, cx);
                 let catalog = self.catalog();
                 self.checks
@@ -570,9 +593,7 @@ impl Agents {
                 }
             }
             Err(error) => {
-                self.message = format!(
-                    "未保存，草稿已保留：{error}。若文件已被外部修改，请取消编辑后重新加载。"
-                );
+                self.message = crate::i18n::tr!("agent-save-error", error = (error).to_string());
             }
         }
         cx.notify();
@@ -582,9 +603,9 @@ impl Agents {
 /// One-line description of how a backend is driven.
 fn summary(spec: &AgentSpec) -> String {
     match (spec.kind, spec.command()) {
-        (Kind::Embedded, _) => "embedded · 内置 echo 后端，无需外部程序".to_owned(),
+        (Kind::Embedded, _) => crate::i18n::tr!("agent-embedded-description").to_owned(),
         (Kind::Acp, Some(command)) => format!("acp · {command}"),
-        (Kind::Acp, None) => "acp · 缺少启动命令".to_owned(),
+        (Kind::Acp, None) => crate::i18n::tr!("agent-command-missing").to_owned(),
     }
 }
 
@@ -611,13 +632,13 @@ impl Agents {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_lg()
+                                    .text_size(crate::ui::HEADING)
                                     .text_color(cx.theme().foreground)
                                     .child(title),
                             )
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(crate::ui::SMALL)
                                     .text_color(cx.theme().muted_foreground)
                                     .child(description),
                             ),
@@ -653,16 +674,19 @@ impl Agents {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .text_sm()
+                    .text_size(crate::ui::SMALL)
                     .when(!has_authentication, |summary| {
                         summary.child(
                             div()
                                 .id(format!("agents-status-{index}"))
                                 .test_support()
                                 .child(if spec.kind == Kind::Embedded {
-                                    "内置可用"
+                                    crate::i18n::tr!("agent-builtin-ready")
                                 } else {
-                                    status.map_or("未检测", check::Status::label)
+                                    status.map_or(
+                                        crate::i18n::tr!("agent-unchecked"),
+                                        check::Status::label,
+                                    )
                                 }),
                         )
                     })
@@ -673,7 +697,12 @@ impl Agents {
             .when(spec.kind == Kind::Acp, |row| {
                 row.child(
                     button(format!("agents-check-{index}"))
-                        .label(status.map_or("检测", check::Status::check_label))
+                        .label(
+                            status.map_or(
+                                crate::i18n::tr!("agent-check"),
+                                check::Status::check_label,
+                            ),
+                        )
                         .disabled(busy || self.dirty(cx) || !self.local_editable)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.start_check(probe.clone(), true, cx)
@@ -683,7 +712,7 @@ impl Agents {
             .when(connected, |row| {
                 row.child(
                     button(format!("agents-start-chat-{index}"))
-                        .label("开始对话")
+                        .label(crate::i18n::tr!("agent-start-chat"))
                         .disabled(!self.local_editable)
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.begin_chat(chat.clone(), cx)),
@@ -692,7 +721,7 @@ impl Agents {
             })
             .child(
                 button(gpui_kit::SharedString::from(format!("agents-edit-{index}")))
-                    .label("高级配置")
+                    .label(crate::i18n::tr!("agent-advanced"))
                     .disabled(!self.local_editable)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit(edit.clone(), Some(index), window, cx)
@@ -718,34 +747,40 @@ impl Agents {
             .flex()
             .flex_col()
             .gap_4()
-            .when(!embedded && !connected, |form| form.child(
-                div().id("agents-connection-help").test_support().text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("填写支持 ACP 的程序路径和启动参数，再保存并检测。检测发现需要认证时会显示 Agent 提供的登录方式；也可通过安装目录选择 Agent。"),
-            ))
-            .children(self.form.rows(embedded, connected).into_iter().map(
-                |(id, label, input)| {
+            .when(!embedded && !connected, |form| {
+                form.child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(div().text_sm().child(label))
-                        .child(
-                            div()
-                                .id(id)
-                                .test_support()
-                                .child(Input::new(input).disabled(self.deleting)),
-                        )
-                },
-            ))
+                        .id("agents-connection-help")
+                        .test_support()
+                        .text_size(crate::ui::SMALL)
+                        .text_color(cx.theme().muted_foreground)
+                        .child(crate::i18n::tr!("agent-custom-help")),
+                )
+            })
+            .children(
+                self.form
+                    .rows(embedded, connected)
+                    .into_iter()
+                    .map(|(id, label, input)| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_size(crate::ui::SMALL).child(label))
+                            .child(
+                                div()
+                                    .id(id)
+                                    .test_support()
+                                    .child(Input::new(input).disabled(self.deleting)),
+                            )
+                    }),
+            )
             .when(self.deleting, |form| {
                 form.child(
                     div()
-                        .text_sm()
+                        .text_size(crate::ui::SMALL)
                         .text_color(cx.theme().muted_foreground)
-                        .child(
-                            "待移除配置：确认后仅从 Agent 目录移除，不删除或停止任何会话；不能移除最后一个 Agent。",
-                        ),
+                        .child(crate::i18n::tr!("agent-remove-confirm-help")),
                 )
             })
             .child(
@@ -756,29 +791,28 @@ impl Agents {
                     .child(
                         button("agents-save")
                             .label(if self.deleting {
-                                "确认移除配置"
+                                crate::i18n::tr!("agent-remove-confirm")
                             } else if connected {
-                                "保存配置"
+                                crate::i18n::tr!("agent-save-config")
                             } else {
-                                "保存并检测"
+                                crate::i18n::tr!("agent-save-check")
                             })
                             .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                     )
                     .child(
                         button("agents-cancel")
-                            .label("取消编辑")
+                            .label(crate::i18n::tr!("action-cancel-edit"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.draft = None;
                                 this.selected = None;
                                 this.deleting = false;
-                                this.message =
-                                    "已丢弃草稿，磁盘未改变；可重新加载外部修改。".into();
+                                this.message = crate::i18n::tr!("agent-edit-cancelled").into();
                                 cx.notify();
                             })),
                     )
                     .child(
                         button("agents-delete")
-                            .label("标记删除")
+                            .label(crate::i18n::tr!("agent-mark-remove"))
                             .disabled(self.selected.is_none() || self.deleting)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.deleting = true;
@@ -798,7 +832,7 @@ impl Agents {
             .child(
                 div().flex().child(
                     button("agents-add-custom")
-                        .label("添加自定义 ACP")
+                        .label(crate::i18n::tr!("agent-add-custom"))
                         .disabled(self.document.is_none() || !self.local_editable)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.edit(AgentSpec::acp("", Command::new("", [])), None, window, cx)
@@ -810,12 +844,10 @@ impl Agents {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .text_sm()
+                    .text_size(crate::ui::SMALL)
                     .text_color(cx.theme().muted_foreground)
-                    .child("自定义后端使用支持 ACP 的程序路径与参数。ACP 检测由本机 basrd 执行。")
-                    .child(
-                        "认证沿用工具自己的登录状态和环境变量。握手成功不代表模型请求一定可用。",
-                    ),
+                    .child(crate::i18n::tr!("agent-custom-description"))
+                    .child(crate::i18n::tr!("agent-auth-description")),
             );
         if drafting {
             content = content.child(self.form_content(cx));
@@ -824,9 +856,9 @@ impl Agents {
             div().flex().child(
                 button("agents-installation-toggle")
                     .label(if self.show_installation {
-                        "收起安装目录"
+                        crate::i18n::tr!("catalog-collapse")
                     } else {
-                        "安装 Agent…"
+                        crate::i18n::tr!("agent-install-action")
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.show_installation = !this.show_installation;
@@ -866,23 +898,30 @@ impl Render for Agents {
                         .items_center()
                         .justify_between()
                         .gap_3()
-                        .child(div().text_xl().child("Agent 高级配置"))
+                        .child(
+                            div()
+                                .text_size(crate::ui::TITLE)
+                                .child(crate::i18n::tr!("agent-advanced-title")),
+                        )
                         .child(
                             button("agents-installation-help")
-                                .label("安装 Agent…")
+                                .label(crate::i18n::tr!("agent-install-action"))
                                 .on_click(cx.listener(|this, _, _, cx| this.open_installation(cx))),
                         )
                         .child(
                             button("agents-reload")
-                                .label("重新加载配置")
+                                .label(crate::i18n::tr!("settings-reload"))
                                 .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
                         ),
                 )
                 .child(
                     div()
-                        .text_xs()
+                        .text_size(crate::ui::SMALL)
                         .text_color(cx.theme().muted_foreground)
-                        .child(format!("配置文件：{}", self.store.path().display())),
+                        .child(crate::i18n::tr!(
+                            "settings-file",
+                            path = (self.store.path().display()).to_string()
+                        )),
                 )
                 .into_any_element()
         };
@@ -897,7 +936,7 @@ impl Render for Agents {
                         Button::new("agents-add-custom")
                             .ghost()
                             .small()
-                            .label("添加自定义 ACP…")
+                            .label(crate::i18n::tr!("agent-add-custom"))
                             .disabled(self.document.is_none() || !self.local_editable)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.edit(
@@ -947,8 +986,8 @@ impl Render for Agents {
             let add = self.add_content(drafting, cx);
             content.push(self.card(
                 "agents-card-add".to_owned(),
-                "添加自定义 Agent".to_owned(),
-                "接入自己的 ACP 工具。".to_owned(),
+                crate::i18n::tr!("agent-add-custom").to_owned(),
+                crate::i18n::tr!("agent-custom-description").to_owned(),
                 add,
                 cx,
             ));
@@ -973,8 +1012,8 @@ impl Render for Agents {
                             div()
                                 .id("agents-dirty")
                                 .test_support()
-                                .text_xs()
-                                .child("尚有未保存的修改"),
+                                .text_size(crate::ui::SMALL)
+                                .child(crate::i18n::tr!("settings-unsaved")),
                         )
                     })
                     .when(!self.message.is_empty(), |header| {
@@ -982,7 +1021,7 @@ impl Render for Agents {
                             div()
                                 .id("agents-message")
                                 .test_support()
-                                .text_xs()
+                                .text_size(crate::ui::SMALL)
                                 .text_color(cx.theme().muted_foreground)
                                 .child(self.message.clone()),
                         )

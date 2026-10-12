@@ -3,7 +3,7 @@ use super::source;
 use anyhow::Result;
 pub(super) use basr::config::appearance::positive;
 pub(crate) use basr::config::appearance::{
-    Appearance as Preferences, Background, ComposerEnterBehavior, ThemeMode, ThemeSource,
+    Appearance as Preferences, Background, ComposerEnterBehavior, Language, ThemeMode, ThemeSource,
     ValidationError,
 };
 use gpui_kit::WindowBackgroundAppearance;
@@ -17,6 +17,7 @@ const CONTENT_FONT_SCALE: f32 = 0.875;
 const DEFAULT_CONTENT_OPACITY: f32 = 0.94;
 
 pub(super) struct Effective {
+    pub language: Language,
     pub desktop: source::Resolved,
     pub content_font_size: f32,
     pub content_line_height: f32,
@@ -59,6 +60,7 @@ pub(super) fn resolve(
         Background::Blurred => WindowBackgroundAppearance::Blurred,
     };
     Ok(Effective {
+        language: preferences.language,
         desktop,
         content_font_size,
         content_line_height: preferences

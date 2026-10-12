@@ -2,14 +2,17 @@ use super::*;
 use basr::acp::{SessionConfigOption, SessionConfigOptionCategory};
 
 #[test]
-fn boolean_tooltips_include_the_backend_name_current_state_and_description() {
+fn boolean_tooltips_describe_only_the_next_action() {
     let actual = SessionConfigOption::boolean("fast-mode", "Fast mode", false)
         .category(SessionConfigOptionCategory::ModelConfig)
         .description("1.5x speed, increased usage");
     assert_eq!(
-        config_option_hint(&actual),
-        "Fast mode · 关闭 · 1.5x speed, increased usage"
+        crate::i18n::visible_text(&config_option_hint(&actual)),
+        "开启Fast mode"
     );
     let enabled = SessionConfigOption::boolean("another-backend-option", "Backend feature", true);
-    assert_eq!(config_option_hint(&enabled), "Backend feature · 开启");
+    assert_eq!(
+        crate::i18n::visible_text(&config_option_hint(&enabled)),
+        "关闭Backend feature"
+    );
 }

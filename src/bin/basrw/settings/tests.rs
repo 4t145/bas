@@ -160,7 +160,7 @@ fn navigation_reveals_sections_and_search_filters_settings(cx: &mut TestAppConte
         );
         assert!(window.find("appearance-layout-card").bounds().top() < fonts.top());
         window.click("settings-search", cx);
-        window.input("UI 字体", cx);
+        window.input("界面字体", cx);
     })
     .expect("navigation");
     cx.update_window(window.into(), |_, window, cx| {
@@ -233,7 +233,7 @@ fn compact_settings_actions_render_and_persist_without_save(cx: &mut TestAppCont
             assert!(bounds.origin.x >= px(0.), "{id}");
             assert!(bounds.right() <= px(680.), "{id}");
             assert!(bounds.bottom() <= px(720.), "{id}");
-            assert_eq!(bounds.size.height, window.rem_size() * 1.5, "{id}");
+            assert_eq!(bounds.size.height, px(crate::ui::CONTROL), "{id}");
         }
         let input = window.find("appearance-opacity").bounds();
         let default = window.find("appearance-opacity-default").bounds();
@@ -277,7 +277,7 @@ fn unreadable_preferences_keep_reset_visible_but_inert(cx: &mut TestAppContext) 
         window.render_frame(cx);
         let reset = window.find("settings-reset");
         assert!(reset.visible());
-        assert_eq!(reset.label(), Some("恢复全部默认"));
+        assert_eq!(reset.label(), Some("重置外观设置"));
         window.hover("settings-reset", cx);
         window.render_frame(cx);
         window.click("settings-reset", cx);

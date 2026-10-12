@@ -34,25 +34,46 @@ impl Workspace {
             }
         }
         let mut summary = Vec::new();
+        let muted = cx.theme().muted_foreground;
         if thoughts > 0 {
-            summary.push(format!("{thoughts} 次思考"));
+            summary.push((
+                "thoughts",
+                IconName::Lightbulb,
+                crate::i18n::tr!("thought-count", thoughts = thoughts),
+                muted,
+            ));
         }
         if tools > 0 {
-            summary.push(format!("{tools} 次工具调用"));
+            summary.push((
+                "tools",
+                IconName::Wrench,
+                crate::i18n::tr!("tool-count", tools = tools),
+                muted,
+            ));
         }
         if running > 0 {
-            summary.push(format!("{running} 个执行中"));
+            summary.push((
+                "running",
+                IconName::Loader,
+                crate::i18n::tr!("running-count", running = running),
+                cx.theme().primary,
+            ));
         }
         if failed > 0 {
-            summary.push(format!("{failed} 个失败"));
+            summary.push((
+                "failed",
+                IconName::CircleX,
+                crate::i18n::tr!("failed-count", failed = failed),
+                cx.theme().danger,
+            ));
         }
         let expanded = self.expanded.contains(id);
         let key = id.to_owned();
-        let color = if failed > 0 {
-            cx.theme().danger
-        } else {
-            cx.theme().muted_foreground
-        };
+        let label = summary
+            .iter()
+            .map(|(_, _, label, _)| label.as_str())
+            .collect::<Vec<_>>()
+            .join(" · ");
         div()
             .flex()
             .flex_col()
@@ -64,33 +85,49 @@ impl Workspace {
                     .ghost()
                     .small()
                     .w_full()
-                    .text_color(color)
+                    .h_auto()
+                    .min_h(px(crate::ui::CONTROL))
+                    .py_1()
+                    .text_color(muted)
                     .icon(if expanded {
                         IconName::ChevronDown
                     } else {
                         IconName::ChevronRight
                     })
-                    .accessibility_label(summary.join(" · "))
+                    .accessibility_label(label)
                     .on_prepaint(self.track_content_header(id))
-                    .child(status::activity_icon(
-                        SharedString::from(format!("activity-status-{id}")),
-                        IconName::Lightbulb,
-                        color,
-                        activity_running,
-                    ))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .truncate()
-                            .child(summary.join(" · ")),
+                            .flex()
+                            .flex_wrap()
+                            .gap_x_3()
+                            .gap_y_1()
+                            .children(summary.into_iter().map(|(kind, icon, label, color)| {
+                                div()
+                                    .id(SharedString::from(format!("activity-{kind}-{id}")))
+                                    .test_support()
+                                    .role(gpui_kit::Role::Label)
+                                    .aria_label(label.clone())
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .text_size(crate::ui::SMALL)
+                                    .text_color(color)
+                                    .child(status::activity_icon(
+                                        format!("activity-icon-{kind}-{id}"),
+                                        icon,
+                                        color,
+                                        activity_running
+                                            && (kind == "running"
+                                                || (kind == "thoughts" && running == 0)),
+                                    ))
+                                    .child(label)
+                            })),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.expanded.remove(&key) {
-                            this.expanded.insert(key.clone());
-                        }
-                        this.list.remeasure_items(index..index + 1);
-                        cx.notify();
+                        this.toggle_content(&key, index, cx);
                     })),
             )
             .when(expanded, |group| {
@@ -137,35 +174,28 @@ impl Workspace {
             .gap_1()
             .text_color(cx.theme().muted_foreground)
             .child(
-                div()
-                    .id(SharedString::from(format!("expand-{id}")))
-                    .test_support()
+                Button::new(SharedString::from(format!("expand-{id}")))
+                    .ghost()
+                    .small()
+                    .w_full()
+                    .h(px(crate::ui::CONTROL))
+                    .text_color(cx.theme().muted_foreground)
+                    .accessibility_label(crate::i18n::tr!("thought-title"))
                     .on_prepaint(self.track_content_header(id))
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .cursor_pointer()
+                    .icon(if expanded {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
                     .child(status::activity_icon(
                         SharedString::from(format!("thought-status-{id}")),
                         IconName::Lightbulb,
                         cx.theme().muted_foreground,
                         streaming,
                     ))
-                    .child(caption("思考", cx).flex_1())
-                    .child(
-                        Icon::new(if expanded {
-                            IconName::ChevronUp
-                        } else {
-                            IconName::ChevronDown
-                        })
-                        .small(),
-                    )
+                    .child(caption(crate::i18n::tr!("thought-title"), cx).flex_1())
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.expanded.remove(&key) {
-                            this.expanded.insert(key.clone());
-                        }
-                        this.list.remeasure_items(index..index + 1);
-                        cx.notify();
+                        this.toggle_content(&key, index, cx);
                     })),
             )
             .when(expanded, |panel| {

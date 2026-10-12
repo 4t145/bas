@@ -35,7 +35,10 @@ fn composer_controls_stay_aligned_after_resize_font_change_and_cursor_movement(
             let body = window.find("thread-body").bounds();
             let status = window.find("conversation-status").bounds();
             assert_eq!(panel.left() - body.left(), px(chat::THREAD_BODY_PADDING));
-            assert_eq!(body.right() - panel.right(), px(24.));
+            assert_eq!(
+                body.right() - panel.right(),
+                px(crate::workspace::turn_navigation::RAIL_WIDTH + chat::THREAD_BODY_PADDING)
+            );
             assert_eq!(status.left(), panel.left());
             assert_eq!(status.right(), panel.right());
             let editor_bounds = window.find("composer-editor").bounds();
@@ -171,7 +174,8 @@ fn full_body_uses_shared_padding_for_initialization_history_and_composer(cx: &mu
                 window.render_frame(cx);
                 let body = window.find("thread-body").bounds();
                 let left = body.left() + px(chat::THREAD_BODY_PADDING);
-                let right = body.right() - px(24.);
+                let right = body.right()
+                    - px(crate::workspace::turn_navigation::RAIL_WIDTH + chat::THREAD_BODY_PADDING);
                 let region = if started {
                     "conversation-timeline"
                 } else {

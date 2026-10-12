@@ -6,6 +6,7 @@ fn target_invocation_keeps_argument_boundaries() {
     let output = directory.path().join("arguments");
     let shell = which::which("sh").expect("shell for fixture only");
     let invocation = Invocation {
+        language: crate::i18n::Language::Chinese,
         program: shell.clone(),
         args: vec![
             "-c".into(),
@@ -32,6 +33,7 @@ fn target_invocation_keeps_argument_boundaries() {
 #[test]
 fn agent_environment_is_inert_in_the_launcher_and_removed_from_target_payload() {
     let invocation = Invocation {
+        language: crate::i18n::Language::English,
         program: "/configured/agent".into(),
         args: vec!["--login".into()],
         env: BTreeMap::from([
@@ -61,6 +63,7 @@ fn agent_environment_is_inert_in_the_launcher_and_removed_from_target_payload() 
     let decoded: Invocation =
         serde_json::from_str(env[0].1.expect("payload").to_str().expect("JSON"))
             .expect("invocation");
+    assert_eq!(decoded.language, crate::i18n::Language::English);
     let agent_command = decoded.agent_command();
     let agent_env: std::collections::HashMap<_, _> = agent_command.get_envs().collect();
     assert_eq!(
@@ -110,6 +113,7 @@ fn helper_reports_the_actual_login_exit_code_and_launch_failure() {
     let shell = which::which("sh").expect("fixture shell");
     for code in [0, 23] {
         let invocation = Invocation {
+            language: crate::i18n::Language::Chinese,
             program: shell.clone(),
             args: vec!["-c".into(), format!("exit {code}")],
             env: BTreeMap::new(),
@@ -121,6 +125,7 @@ fn helper_reports_the_actual_login_exit_code_and_launch_failure() {
         );
     }
     let missing = Invocation {
+        language: crate::i18n::Language::Chinese,
         program: directory.path().join("missing-agent"),
         args: vec![],
         env: BTreeMap::new(),
@@ -149,8 +154,8 @@ async fn closed_terminal_without_helper_feedback_is_reported_promptly() {
         .await
         .expect("terminal exit must not wait for login timeout")
         .expect_err("terminal failed before starting login");
-    assert!(error.contains("退出码 7"));
-    assert!(error.contains("重新打开登录终端"));
+    assert!(crate::i18n::visible_text(&error).contains("退出码 7"));
+    assert!(error.contains("请重新打开"));
 }
 
 #[cfg(unix)]
@@ -174,8 +179,8 @@ async fn helper_failure_is_reported_while_terminal_remains_open() {
         .await
         .expect("feedback must arrive before the terminal closes")
         .expect_err("helper reported failed login");
-    assert!(error.contains("退出码 23"));
-    assert!(error.contains("登录终端中的错误信息"));
+    assert!(crate::i18n::visible_text(&error).contains("退出码 23"));
+    assert!(error.contains("查看终端后重试"));
     drop(acknowledgement);
 }
 

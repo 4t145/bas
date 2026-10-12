@@ -47,9 +47,9 @@ async fn run(
     let mut client = check::verified_client(service.address(), &path).await?;
     let saved = basr::config::Store::at(path)
         .load()
-        .map_err(|_| "无法核对 Agent 配置；请重新检测。".to_owned())?;
+        .map_err(|_| crate::i18n::tr!("auth-check-config").to_owned())?;
     if !saved.settings.daemon.agents.contains(&spec) {
-        return Err("Agent 配置已变化；请重新检测后再认证。".into());
+        return Err(crate::i18n::tr!("auth-config-changed").into());
     }
     let request = pb::AuthenticationInput {
         kind: Some(pb::authentication_input::Kind::Start(
@@ -65,21 +65,21 @@ async fn run(
     let (send, receive) = mpsc::channel(16);
     send.send(request)
         .await
-        .map_err(|_| "认证请求已结束。".to_owned())?;
+        .map_err(|_| crate::i18n::tr!("auth-ended").to_owned())?;
     let mut stream = client
         .authenticate_agent_interactive(tokio_stream::wrappers::ReceiverStream::new(receive))
         .await
-        .map_err(|error| rpc_error("无法开始认证", &error))?
+        .map_err(|error| rpc_error(crate::i18n::tr!("auth-start-failed"), &error))?
         .into_inner();
     loop {
         tokio::select! {
             next = input.recv() => {
                 let Some(next) = next else { return Ok(()); };
-                send.send(next).await.map_err(|_| "认证连接已关闭。".to_owned())?;
+                send.send(next).await.map_err(|_| crate::i18n::tr!("auth-connection-closed").to_owned())?;
             }
             next = stream.message() => {
-                let event = next.map_err(|error| rpc_error("认证失败", &error))?
-                    .ok_or_else(|| "认证未完成，连接已关闭；可重新检测后重试。".to_owned())?;
+                let event = next.map_err(|error| rpc_error(crate::i18n::tr!("auth-failed"), &error))?
+                    .ok_or_else(|| crate::i18n::tr!("auth-disconnected").to_owned())?;
                 let complete = matches!(event.kind, Some(pb::authentication_event::Kind::Check(_)));
                 if events.unbounded_send(Ok(event)).is_err() { return Ok(()); }
                 if complete { return Ok(()); }
@@ -90,13 +90,14 @@ async fn run(
 
 fn rpc_error(action: &str, error: &tonic::Status) -> String {
     if error.code() == tonic::Code::Unimplemented {
-        return "当前运行的 basrd 不支持交互认证。更新后请重启 basrd 服务，再重新检测。".into();
+        return crate::i18n::tr!("auth-upgrade").into();
     }
     let message = error.message().trim();
     if message.is_empty() {
-        format!(
-            "{action}（{:?}）：服务未返回详细原因，请重新检测后重试。",
-            error.code()
+        crate::i18n::tr!(
+            "auth-rpc-error",
+            action = (action).to_string(),
+            code = format!("{:?}", error.code())
         )
     } else {
         format!("{action}：{message}")
@@ -121,6 +122,6 @@ pub(super) fn terminal(
     async move {
         receive
             .await
-            .unwrap_or_else(|_| Err("认证终端任务已结束。".into()))
+            .unwrap_or_else(|_| Err(crate::i18n::tr!("auth-terminal-ended").into()))
     }
 }

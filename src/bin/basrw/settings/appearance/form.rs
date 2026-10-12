@@ -1,7 +1,9 @@
 use super::AppearancePage;
 use crate::theme::{
     self,
-    preferences::{Background, ComposerEnterBehavior, Preferences, ThemeMode, ThemeSource},
+    preferences::{
+        Background, ComposerEnterBehavior, Language, Preferences, ThemeMode, ThemeSource,
+    },
 };
 use gpui_kit::{
     App, AppContext, Context, Entity, Window,
@@ -9,6 +11,7 @@ use gpui_kit::{
 };
 
 pub(super) struct Form {
+    pub language: Entity<SelectState<Vec<Choice<Language>>>>,
     pub ui_font: Entity<SelectState<SearchableVec<FontChoice>>>,
     pub mono_font: Entity<SelectState<SearchableVec<FontChoice>>>,
     pub fallbacks: Entity<InputState>,
@@ -26,12 +29,26 @@ pub(super) struct Form {
 #[derive(Clone)]
 pub(super) struct Choice<T>(T);
 
+impl SelectItem for Choice<Language> {
+    type Value = Language;
+    fn title(&self) -> gpui_kit::SharedString {
+        match self.0 {
+            Language::Chinese => "简体中文",
+            Language::English => "English",
+        }
+        .into()
+    }
+    fn value(&self) -> &Language {
+        &self.0
+    }
+}
+
 impl SelectItem for Choice<ThemeSource> {
     type Value = ThemeSource;
     fn title(&self) -> gpui_kit::SharedString {
         match self.0 {
-            ThemeSource::Desktop => "Default · 桌面",
-            ThemeSource::Builtin => "内置",
+            ThemeSource::Desktop => crate::i18n::tr!("appearance-desktop"),
+            ThemeSource::Builtin => crate::i18n::tr!("appearance-builtin"),
         }
         .into()
     }
@@ -44,10 +61,10 @@ impl SelectItem for Choice<ThemeMode> {
     type Value = ThemeMode;
     fn title(&self) -> gpui_kit::SharedString {
         match self.0 {
-            ThemeMode::Desktop => "Default · 桌面",
-            ThemeMode::System => "系统",
-            ThemeMode::Light => "浅色",
-            ThemeMode::Dark => "深色",
+            ThemeMode::Desktop => crate::i18n::tr!("appearance-desktop"),
+            ThemeMode::System => crate::i18n::tr!("appearance-system"),
+            ThemeMode::Light => crate::i18n::tr!("appearance-light"),
+            ThemeMode::Dark => crate::i18n::tr!("appearance-dark"),
         }
         .into()
     }
@@ -60,10 +77,10 @@ impl SelectItem for Choice<Background> {
     type Value = Background;
     fn title(&self) -> gpui_kit::SharedString {
         match self.0 {
-            Background::Auto => "自动",
-            Background::Opaque => "不透明",
-            Background::Transparent => "透明",
-            Background::Blurred => "Default · 模糊",
+            Background::Auto => crate::i18n::tr!("appearance-auto"),
+            Background::Opaque => crate::i18n::tr!("appearance-opaque"),
+            Background::Transparent => crate::i18n::tr!("appearance-transparent"),
+            Background::Blurred => crate::i18n::tr!("appearance-blurred"),
         }
         .into()
     }
@@ -76,8 +93,8 @@ impl SelectItem for Choice<ComposerEnterBehavior> {
     type Value = ComposerEnterBehavior;
     fn title(&self) -> gpui_kit::SharedString {
         match self.0 {
-            ComposerEnterBehavior::Send => "Enter 发送",
-            ComposerEnterBehavior::Newline => "Enter 换行",
+            ComposerEnterBehavior::Send => crate::i18n::tr!("composer-enter-send"),
+            ComposerEnterBehavior::Newline => crate::i18n::tr!("composer-enter-newline"),
         }
         .into()
     }
@@ -88,17 +105,41 @@ impl SelectItem for Choice<ComposerEnterBehavior> {
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum DraftError {
-    #[error("{0}：请输入数字或留空继承")]
+    #[error("{}", crate::i18n::tr!("appearance-invalid-number", field = .0.to_string()))]
     Number(&'static str),
-    #[error("配置值无效：{0}")]
+    #[error("{}", validation_message(.0))]
     Invalid(#[from] theme::preferences::ValidationError),
+}
+
+fn validation_message(error: &theme::preferences::ValidationError) -> String {
+    use theme::preferences::ValidationError;
+    let label = |field| match field {
+        "ui_font_size" => crate::i18n::tr!("appearance-ui-size"),
+        "content_font_size" => crate::i18n::tr!("appearance-content-size"),
+        "content_line_height" => crate::i18n::tr!("appearance-line-height"),
+        "ui_font_family" => crate::i18n::tr!("appearance-ui-font"),
+        "mono_font_family" => crate::i18n::tr!("appearance-mono-font"),
+        "font_fallbacks" => crate::i18n::tr!("appearance-fallbacks"),
+        _ => crate::i18n::tr!("settings-appearance"),
+    };
+    match error {
+        ValidationError::Positive(field) => {
+            crate::i18n::tr!("appearance-positive", field = label(field))
+        }
+        ValidationError::Opacity => crate::i18n::tr!("appearance-opacity-range").into(),
+        ValidationError::Font(field) => {
+            crate::i18n::tr!("appearance-font-required", field = label(field))
+        }
+        ValidationError::ThemeFile => crate::i18n::tr!("appearance-path-required").into(),
+    }
 }
 
 impl Form {
     pub fn new(p: &Preferences, window: &mut Window, cx: &mut Context<AppearancePage>) -> Self {
         let mut input = |value: String| {
             cx.new(|cx| {
-                let mut input = InputState::new(window, cx).placeholder("留空继承");
+                let mut input = InputState::new(window, cx)
+                    .placeholder(crate::i18n::tr!("appearance-inherit-placeholder"));
                 input.set_value(value, window, cx);
                 input
             })
@@ -133,6 +174,12 @@ impl Form {
                     .as_ref()
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_default(),
+            ),
+            language: choice(
+                vec![Language::Chinese, Language::English],
+                p.language,
+                window,
+                cx,
             ),
             ui_font: font_choice(p.ui_font_family.clone(), window, cx),
             mono_font: font_choice(p.mono_font_family.clone(), window, cx),
@@ -186,6 +233,12 @@ impl Form {
                 .transpose()
         };
         let p = Preferences {
+            language: self
+                .language
+                .read(cx)
+                .selected_value()
+                .copied()
+                .unwrap_or_default(),
             ui_font_family: self
                 .ui_font
                 .read(cx)
@@ -203,10 +256,16 @@ impl Form {
                     v.split(',').map(|v| v.trim().to_owned()).collect()
                 }
             }),
-            ui_font_size: number(&self.ui_size, "UI 字号")?,
-            content_font_size: number(&self.content_size, "正文字号")?,
-            content_line_height: number(&self.line_height, "正文行高")?,
-            content_opacity: number(&self.opacity, "内容不透明度")?,
+            ui_font_size: number(&self.ui_size, crate::i18n::tr!("appearance-ui-size"))?,
+            content_font_size: number(
+                &self.content_size,
+                crate::i18n::tr!("appearance-content-size"),
+            )?,
+            content_line_height: number(
+                &self.line_height,
+                crate::i18n::tr!("appearance-line-height"),
+            )?,
+            content_opacity: number(&self.opacity, crate::i18n::tr!("appearance-opacity"))?,
             theme_file: optional(&self.theme_file).map(Into::into),
             theme_source: self
                 .source
@@ -273,7 +332,7 @@ impl SelectItem for FontChoice {
     type Value = Self;
     fn title(&self) -> gpui_kit::SharedString {
         match self {
-            Self::Default => "Default · 继承".into(),
+            Self::Default => crate::i18n::tr!("appearance-inherit").into(),
             Self::Named(name) => name.clone().into(),
         }
     }

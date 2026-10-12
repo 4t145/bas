@@ -3,7 +3,7 @@
 use gpui_kit::{
     App, AppContext, Bounds, Context, Global, KeyBinding, Render, TestSupportExt, Window,
     WindowBounds, WindowDecorations, WindowHandle, WindowOptions, actions,
-    component::{ActiveTheme, Root, StyledExt, TitleBar, button::*},
+    component::{ActiveTheme, Root, StyledExt, TitleBar},
     div,
     prelude::*,
     px, size,
@@ -18,8 +18,6 @@ pub(crate) const RELEASES_URL: &str = "https://github.com/4t145/basr/releases";
 const HOME_URL: &str = "https://github.com/4t145/basr";
 const WIDTH: f32 = 480.;
 const HEIGHT: f32 = 420.;
-const QUIT_NOTICE: &str =
-    "退出会丢失未发送的草稿和本地队列。后台已提交的任务会继续运行；不会取消任务或停止 basrd。";
 
 actions!(application, [OpenSettings, Quit]);
 
@@ -149,10 +147,10 @@ impl InfoWindow {
         match self {
             // [!todo] here we have product name `BASR`, witch should be a static value and easy to replace with
             // other name
-            Self::About => "关于 BASR",
-            Self::Quit => "退出 BASR？",
+            Self::About => crate::i18n::tr!("app-about"),
+            Self::Quit => crate::i18n::tr!("app-quit-title"),
             Self::Message => "BASR",
-            Self::Confirmation => "确认操作",
+            Self::Confirmation => crate::i18n::tr!("app-confirm"),
         }
     }
 
@@ -249,6 +247,8 @@ impl Host {
                 div()
                     .id("application-message-body")
                     .test_support()
+                    .role(gpui_kit::Role::Label)
+                    .aria_label(self.message.clone())
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -262,17 +262,17 @@ impl Host {
                     .justify_end()
                     .gap_3()
                     .child(
-                        Button::new("message-close")
+                        crate::ui::action_button("message-close")
                             .label(if matches!(self.kind, InfoWindow::Confirmation) {
-                                "取消"
+                                crate::i18n::tr!("action-cancel")
                             } else {
-                                "关闭"
+                                crate::i18n::tr!("action-close")
                             })
                             .on_click(|_, window, _| Self::close(window)),
                     )
                     .when(matches!(self.kind, InfoWindow::Confirmation), |row| {
                         row.child(
-                            Button::new("message-confirm")
+                            crate::ui::action_button("message-confirm")
                                 .label(self.confirm_label.clone())
                                 .on_click(
                                     cx.listener(|this, _, window, cx| this.confirm(window, cx)),
@@ -297,16 +297,16 @@ impl Host {
                     .child(branding::dimensional_logo().size_full()),
             )
             .child(format!("BASR {}", env!("CARGO_PKG_VERSION")))
-            .child(env!("CARGO_PKG_DESCRIPTION"))
-            .child("BASR 代码许可证：MIT")
+            .child(crate::i18n::tr!("app-description"))
+            .child(crate::i18n::tr!("app-license"))
             .child(
-                Button::new("about-home")
-                    .label("项目主页")
+                crate::ui::action_button("about-home")
+                    .label(crate::i18n::tr!("app-home"))
                     .on_click(|_, _, cx| cx.open_url(HOME_URL)),
             )
             .child(
-                Button::new("about-close")
-                    .label("关闭")
+                crate::ui::action_button("about-close")
+                    .label(crate::i18n::tr!("action-close"))
                     .on_click(|_, window, _| Self::close(window)),
             )
     }
@@ -317,21 +317,21 @@ impl Host {
             .flex_col()
             .gap_6()
             .p_6()
-            .child("确定退出 BASR？")
-            .child(QUIT_NOTICE)
+            .child(crate::i18n::tr!("app-quit-question"))
+            .child(crate::i18n::tr!("app-quit-notice"))
             .child(
                 div()
                     .flex()
                     .justify_end()
                     .gap_3()
                     .child(
-                        Button::new("quit-cancel")
-                            .label("取消")
+                        crate::ui::action_button("quit-cancel")
+                            .label(crate::i18n::tr!("action-cancel"))
                             .on_click(|_, window, _| Self::close(window)),
                     )
                     .child(
-                        Button::new("quit-confirm")
-                            .label("退出 BASR")
+                        crate::ui::action_button("quit-confirm")
+                            .label(crate::i18n::tr!("app-quit"))
                             .on_click(|_, _, cx| {
                                 settings_window::flush_pending(cx);
                                 cx.quit();
@@ -342,7 +342,11 @@ impl Host {
 }
 
 impl Render for Host {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if matches!(self.kind, InfoWindow::About | InfoWindow::Quit) {
+            self.title = self.kind.title().into();
+            window.set_window_title(&self.title);
+        }
         div()
             .id(match self.kind {
                 InfoWindow::About => "about-window",

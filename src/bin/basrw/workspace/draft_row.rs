@@ -22,7 +22,7 @@ impl Workspace {
         self.new_draft_metadata
             .get(&self.selected_directory)
             .and_then(|draft| draft.title.clone())
-            .unwrap_or_else(|| "新 thread".into())
+            .unwrap_or_else(|| crate::i18n::tr!("session-new").into())
     }
 
     pub(super) fn discard_new_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -125,7 +125,7 @@ impl Workspace {
                                     div()
                                         .min_w_0()
                                         .truncate()
-                                        .text_sm()
+                                        .text_size(crate::ui::SMALL)
                                         .child(self.draft_title()),
                                 )
                             }),
@@ -137,7 +137,7 @@ impl Workspace {
                             .h(px(layout::ICON_BUTTON_SIZE))
                             .flex()
                             .items_center()
-                            .text_xs()
+                            .text_size(crate::ui::SMALL)
                             .text_color(cx.theme().muted_foreground)
                             .child(thread_row::recent_time(updated_at, now)),
                     )
@@ -158,8 +158,8 @@ impl Workspace {
                                     SharedString::from(format!("rename-draft-{index}")),
                                     IconName::Pencil,
                                 )
-                                .accessibility_label("修改标题")
-                                .tooltip("修改标题")
+                                .accessibility_label(crate::i18n::tr!("session-rename"))
+                                .tooltip(crate::i18n::tr!("session-rename"))
                                 .disabled(disabled)
                                 .on_click(cx.listener(
                                     |this, _, window, cx| {
@@ -173,8 +173,8 @@ impl Workspace {
                                     SharedString::from(format!("discard-draft-{index}")),
                                     IconName::Trash,
                                 )
-                                .accessibility_label("废弃草稿")
-                                .tooltip("废弃草稿")
+                                .accessibility_label(crate::i18n::tr!("draft-discard"))
+                                .tooltip(crate::i18n::tr!("draft-discard"))
                                 .disabled(disabled)
                                 .on_click(cx.listener(
                                     |this, _, window, cx| {
@@ -217,7 +217,7 @@ impl Workspace {
             let discard_owner = owner.clone();
             let discard_directory = directory.clone();
             menu.item(
-                PopupMenuItem::new("修改标题")
+                PopupMenuItem::new(crate::i18n::tr!("session-rename"))
                     .icon(IconName::Pencil)
                     .disabled(disabled)
                     .on_click(move |_, window, cx| {
@@ -234,7 +234,7 @@ impl Workspace {
                     }),
             )
             .item(
-                PopupMenuItem::new("废弃草稿")
+                PopupMenuItem::new(crate::i18n::tr!("draft-discard"))
                     .icon(IconName::Trash)
                     .disabled(disabled)
                     .on_click(move |_, window, cx| {

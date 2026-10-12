@@ -18,13 +18,15 @@ pub(super) fn legacy_diff(diff: &acp::Diff) -> String {
                 .header(&path, &path)
                 .to_string();
             if patch.is_empty() {
-                format!("{path}\n\n未检测到文本变化")
+                format!("{path}\n\n{}", crate::i18n::tr!("diff-unchanged"))
             } else {
                 format!("{path}\n\n{}", code_block("diff", &patch))
             }
         }
+        // Markdown fences must stay outside Fluent's bidi-isolated placeables.
         None => format!(
-            "{path}\n\n修改后：\n\n{}",
+            "{path}\n\n{}\n\n{}",
+            crate::i18n::tr!("diff-after"),
             code_block("text", &diff.new_text)
         ),
     }

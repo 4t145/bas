@@ -212,13 +212,15 @@ impl Conversation {
                     .filter(|reply| reply.index >= self.turn_start);
                 let notice = match result.map(|response| response.stop_reason) {
                     Ok(StopReason::EndTurn) => None,
-                    Ok(StopReason::Cancelled) => self.notice("本轮已停止"),
+                    Ok(StopReason::Cancelled) => self.notice(crate::i18n::tr!("turn-stopped")),
                     Ok(StopReason::MaxTokens | StopReason::MaxTurnRequests) => {
-                        self.notice("本轮达到输出或请求上限")
+                        self.notice(crate::i18n::tr!("turn-limit"))
                     }
-                    Ok(StopReason::Refusal) => self.notice("Agent 拒绝了本轮请求"),
-                    Err(error) => self.notice(format!("本轮执行失败：{error}")),
-                    _ => self.notice("本轮已结束"),
+                    Ok(StopReason::Refusal) => self.notice(crate::i18n::tr!("turn-refused")),
+                    Err(error) => {
+                        self.notice(crate::i18n::tr!("turn-failed", error = (error).to_string()))
+                    }
+                    _ => self.notice(crate::i18n::tr!("turn-ended")),
                 };
                 changed.or(notice)
             }
@@ -228,7 +230,10 @@ impl Conversation {
             EventKind::Failed { message } => {
                 self.foreground_state = Some(acp2::StateUpdate::Idle(acp2::IdleStateUpdate::new()));
                 let changed = self.seal();
-                let notice = self.notice(format!("Agent 已断开：{message}"));
+                let notice = self.notice(crate::i18n::tr!(
+                    "agent-disconnected",
+                    message = (message).to_string()
+                ));
                 changed.or(notice)
             }
         }

@@ -253,7 +253,9 @@ fn selecting_an_existing_normalized_folder_keeps_one_workspace_and_both_drafts(
 }
 
 #[gpui_kit::test]
-fn remote_workspace_choice_is_visible_and_disabled(cx: &mut TestAppContext) {
+fn workspace_choices_offer_the_local_folder_and_escape_preserves_the_draft(
+    cx: &mut TestAppContext,
+) {
     let mut fixture = fixture(cx);
     let existing = session();
     attach(&fixture, existing.clone(), cx);
@@ -272,12 +274,10 @@ fn remote_workspace_choice_is_visible_and_disabled(cx: &mut TestAppContext) {
     cx.update_window(menu, |_, window, cx| {
         window.render_frame(cx);
         let local = window.within("popup-menu").find(0usize);
-        let remote = window.within("popup-menu").find(1usize);
         assert!(local.visible());
-        assert_eq!(local.label(), Some("本地文件夹…"));
-        assert!(remote.visible());
-        assert_eq!(remote.label(), Some("远程工作区（稍后支持）"));
-        window.within("popup-menu").click(1usize, cx);
+        assert_eq!(local.label(), Some("选择文件夹…"));
+        assert!(window.within("popup-menu").try_find(1usize).is_none());
+        window.press("escape", cx);
     })
     .expect("remote workspace choice cannot be activated");
     cx.executor().run_until_parked();

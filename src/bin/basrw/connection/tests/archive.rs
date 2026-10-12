@@ -36,7 +36,7 @@ async fn old_daemon_archive_is_actionable_and_never_deletes() {
     else {
         panic!("old daemon must report unsupported archive");
     };
-    assert!(error.contains("升级服务入口并重启"));
-    assert!(error.contains("清空内存会话"));
-    assert!(error.contains("会话未删除"));
+    assert!(error.contains("升级并重启 basrd"));
+    assert!(error.contains("清除内存模式的会话"));
+    assert!(error.contains("归档"));
 }

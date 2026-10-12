@@ -56,6 +56,44 @@ fn read(fixture: &Fixture) -> Preferences {
 }
 
 #[gpui_kit::test]
+fn language_selection_saves_and_updates_existing_controls(cx: &mut TestAppContext) {
+    if !crate::i18n::isolated_language_test(
+        "settings::appearance::tests::language_selection_saves_and_updates_existing_controls",
+    ) {
+        return;
+    }
+    use crate::i18n::Language;
+    let fixture = fixture(cx, builtin());
+    let select = cx.update(|cx| fixture.view.read(cx).form.language.clone());
+    for (language, placeholder) in [
+        (Language::English, "Automatic"),
+        (Language::Chinese, "自动"),
+    ] {
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            select.update(cx, |select, cx| {
+                select.set_selected_value(&language, window, cx);
+                cx.emit(SelectEvent::Confirm(Some(language)));
+            });
+        })
+        .expect("select interface language");
+        cx.run_until_parked();
+        assert_eq!(read(&fixture).language, language);
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let form = &fixture.view.read(cx).form;
+            assert_eq!(crate::i18n::language(), language);
+            assert_eq!(form.language.entity_id(), select.entity_id());
+            assert_eq!(
+                form.ui_size.read(cx).presentation().placeholder().as_ref(),
+                placeholder
+            );
+        })
+        .expect("language applies without replacing the controls");
+    }
+}
+
+#[gpui_kit::test]
 fn text_edits_debounce_flush_and_reject_invalid_values(cx: &mut TestAppContext) {
     let fixture = fixture(cx, builtin());
     cx.update_window(fixture.window.into(), |_, window, cx| {
@@ -86,7 +124,7 @@ fn text_edits_debounce_flush_and_reject_invalid_values(cx: &mut TestAppContext) 
                 .content_size
                 .update(cx, |input, cx| input.set_value("-2", window, cx));
             page.flush_pending(window, cx);
-            assert!(page.message.contains("未应用"));
+            assert!(page.message.contains("请检查设置"));
         });
     })
     .expect("invalid input");
@@ -157,7 +195,7 @@ fn font_default_can_be_chosen_with_the_real_searchable_dropdown(cx: &mut TestApp
     cx.executor().run_until_parked();
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
-        window.input("Default", cx);
+        window.input("自动", cx);
     })
     .expect("search font dropdown");
     cx.executor().run_until_parked();
@@ -213,7 +251,7 @@ fn external_reload_updates_clean_controls_but_preserves_dirty_conflicts(cx: &mut
         fixture.view.update(cx, |page, cx| {
             assert_eq!(page.form.ui_size.read(cx).value(), "24");
             page.flush_pending(window, cx);
-            assert!(page.message.contains("外部修改"));
+            assert!(page.message.contains("其他位置修改"));
         });
         assert_eq!(Theme::global(cx).font_size, px(27.));
     })
@@ -224,6 +262,7 @@ fn external_reload_updates_clean_controls_but_preserves_dirty_conflicts(cx: &mut
 #[gpui_kit::test]
 fn all_fields_round_trip_and_default_is_applied_immediately(cx: &mut TestAppContext) {
     let expected = Preferences {
+        language: crate::i18n::Language::Chinese,
         ui_font_family: Some("UI custom".into()),
         mono_font_family: Some("Mono custom".into()),
         font_fallbacks: Some(vec!["Fallback A".into()]),
@@ -262,7 +301,7 @@ fn message_enter_setting_persists_and_reopens_with_the_saved_choice(cx: &mut Tes
     let fixture = fixture(cx, builtin());
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |page, cx| {
-            page.query = "消息输入框".into();
+            page.query = "Enter".into();
             cx.notify();
         });
         window.render_frame(cx);

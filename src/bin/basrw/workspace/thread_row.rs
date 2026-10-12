@@ -17,13 +17,13 @@ const DAY_MILLIS: u64 = 24 * HOUR_MILLIS;
 pub(super) fn recent_time(updated_at: Timestamp, now: Timestamp) -> String {
     let elapsed = now.millis().saturating_sub(updated_at.millis());
     if elapsed < MINUTE_MILLIS {
-        "刚刚".into()
+        crate::i18n::tr!("time-just-now").into()
     } else if elapsed < HOUR_MILLIS {
-        format!("{}m", elapsed / MINUTE_MILLIS)
+        crate::i18n::tr!("time-minutes", count = elapsed / MINUTE_MILLIS)
     } else if elapsed < DAY_MILLIS {
-        format!("{}h", elapsed / HOUR_MILLIS)
+        crate::i18n::tr!("time-hours", count = elapsed / HOUR_MILLIS)
     } else {
-        format!("{}d", elapsed / DAY_MILLIS)
+        crate::i18n::tr!("time-days", count = elapsed / DAY_MILLIS)
     }
 }
 
@@ -51,12 +51,12 @@ impl RowStatus {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Starting => "启动中",
-            Self::Working => "运行中",
-            Self::Unread => "有未读回复",
-            Self::Idle => "就绪",
-            Self::Failed => "失败",
-            Self::Stopped => "已停止",
+            Self::Starting => crate::i18n::tr!("status-starting"),
+            Self::Working => crate::i18n::tr!("status-running"),
+            Self::Unread => crate::i18n::tr!("status-unread"),
+            Self::Idle => crate::i18n::tr!("status-ready"),
+            Self::Failed => crate::i18n::tr!("status-failed"),
+            Self::Stopped => crate::i18n::tr!("status-stopped"),
         }
     }
 
@@ -176,7 +176,11 @@ impl Workspace {
                             .when(editing, |title| title.child(self.render_title_editor(cx)))
                             .when(!editing, |row| {
                                 row.child(
-                                    div().min_w_0().truncate().text_sm().child(title(session)),
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(crate::ui::SMALL)
+                                        .child(title(session)),
                                 )
                             })
                             .when(pinned && !editing, |title| {
@@ -193,7 +197,7 @@ impl Workspace {
                                 div()
                                     .id(SharedString::from(format!("thread-time-{id}")))
                                     .test_support()
-                                    .text_xs()
+                                    .text_size(crate::ui::SMALL)
                                     .text_color(cx.theme().muted_foreground)
                                     .child(recent_time(
                                         session.agent_updated_at.unwrap_or(session.updated_at),
@@ -229,8 +233,8 @@ impl Workspace {
                                     SharedString::from(format!("rename-{id}")),
                                     IconName::Pencil,
                                 )
-                                .accessibility_label("修改标题")
-                                .tooltip("修改标题")
+                                .accessibility_label(crate::i18n::tr!("session-rename"))
+                                .tooltip(crate::i18n::tr!("session-rename"))
                                 .disabled(disabled)
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
@@ -259,8 +263,8 @@ impl Workspace {
             return self.archive_button(session, "archive", cx);
         }
         layout::icon_button(SharedString::from(format!("discard-{id}")), IconName::Trash)
-            .accessibility_label("废弃草稿")
-            .tooltip("废弃尚未开始的 thread 和草稿")
+            .accessibility_label(crate::i18n::tr!("draft-discard"))
+            .tooltip(crate::i18n::tr!("draft-discard"))
             .disabled(
                 !self.connected
                     || self.archive_pending.contains(&id)
@@ -305,9 +309,9 @@ impl Workspace {
                 let read_owner = owner.clone();
                 menu.item(
                     PopupMenuItem::new(if pinned {
-                        "取消置顶"
+                        crate::i18n::tr!("session-unpin")
                     } else {
-                        "置顶 thread"
+                        crate::i18n::tr!("session-pin")
                     })
                     .icon(IconName::Pin)
                     .on_click(move |_, window, cx| {
@@ -316,22 +320,24 @@ impl Workspace {
                         });
                     }),
                 )
-                .item(PopupMenuItem::new("重命名").disabled(disabled).on_click(
-                    move |_, window, cx| {
-                        menus::in_parent(parent, window, cx, |window, cx| {
-                            let _ = rename_owner.update(cx, |this, cx| {
-                                this.begin_sidebar_rename(id, window, cx);
+                .item(
+                    PopupMenuItem::new(crate::i18n::tr!("session-rename"))
+                        .disabled(disabled)
+                        .on_click(move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |window, cx| {
+                                let _ = rename_owner.update(cx, |this, cx| {
+                                    this.begin_sidebar_rename(id, window, cx);
+                                });
                             });
-                        });
-                    },
-                ))
+                        }),
+                )
                 .item(
                     PopupMenuItem::new(if draft {
-                        "废弃草稿"
+                        crate::i18n::tr!("draft-discard")
                     } else if archived {
-                        "恢复 thread"
+                        crate::i18n::tr!("session-restore")
                     } else {
-                        "归档 thread"
+                        crate::i18n::tr!("session-archive")
                     })
                     .icon(if draft {
                         IconName::Trash
@@ -353,17 +359,19 @@ impl Workspace {
                 )
                 .when(state == RowStatus::Unread, |menu| {
                     menu.item(
-                        PopupMenuItem::new("标为已读").on_click(move |_, window, cx| {
-                            menus::in_parent(parent, window, cx, |_, cx| {
-                                let _ =
-                                    read_owner.update(cx, |this, cx| this.mark_thread_read(id, cx));
-                            });
-                        }),
+                        PopupMenuItem::new(crate::i18n::tr!("session-mark-read")).on_click(
+                            move |_, window, cx| {
+                                menus::in_parent(parent, window, cx, |_, cx| {
+                                    let _ = read_owner
+                                        .update(cx, |this, cx| this.mark_thread_read(id, cx));
+                                });
+                            },
+                        ),
                     )
                 })
                 .separator()
                 .item(
-                    PopupMenuItem::new("删除 thread…")
+                    PopupMenuItem::new(crate::i18n::tr!("session-delete"))
                         .disabled(disabled)
                         .on_click(move |_, window, cx| {
                             menus::in_parent(parent, window, cx, |window, cx| {

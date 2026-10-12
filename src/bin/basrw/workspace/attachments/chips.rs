@@ -67,7 +67,7 @@ impl Workspace {
                                 } else {
                                     IconName::File
                                 })
-                                .size(px(12.))
+                                .size(px(crate::ui::SMALL_ICON))
                                 .flex_shrink_0(),
                             )
                             .child(div().min_w_0().truncate().child(label))
@@ -91,7 +91,11 @@ impl Workspace {
                             })
                             .when(!image, |chip| {
                                 chip.hoverable_tooltip(move |window, cx| {
-                                    crate::tooltip::view(name.clone(), window, cx)
+                                    crate::tooltip::view(
+                                        crate::i18n::tr!("attachment-select", name = name.as_str()),
+                                        window,
+                                        cx,
+                                    )
                                 })
                             })
                             .into_any_element();

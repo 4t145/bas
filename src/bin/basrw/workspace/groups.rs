@@ -53,13 +53,13 @@ pub(super) fn name(directory: Option<&Path>) -> String {
                 .to_string_lossy()
                 .into_owned()
         })
-        .unwrap_or_else(|| "默认 workspace".into())
+        .unwrap_or_else(|| crate::i18n::tr!("workspace-default").into())
 }
 
 pub(super) fn path_label(directory: Option<&Path>) -> String {
     directory
         .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "basrd 默认目录".into())
+        .unwrap_or_else(|| crate::i18n::tr!("workspace-default-directory").into())
 }
 
 pub(super) fn normalize(path: &Path) -> PathBuf {

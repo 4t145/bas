@@ -3,6 +3,8 @@ use gpui_kit::{IntoElement, RenderOnce};
 
 use super::*;
 
+mod actions;
+
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
 
@@ -72,25 +74,16 @@ pub(super) fn view(state: &Entity<TextViewState>, _: &App) -> MarkdownView {
 }
 
 impl RenderOnce for MarkdownView {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let hover =
-            window.use_keyed_state(("markdown-hover", self.state.entity_id()), cx, |_, _| false);
-        let hovered = *hover.read(cx);
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         div()
             .id(("markdown", self.state.entity_id()))
             .w_full()
             .min_w_0()
-            .on_hover(move |hovered, _, cx| {
-                hover.update(cx, |value, cx| {
-                    *value = *hovered;
-                    cx.notify();
-                });
-            })
-            .child(text_view(&self.state, hovered, cx))
+            .child(text_view(&self.state, cx))
     }
 }
 
-fn text_view(state: &Entity<TextViewState>, hovered: bool, cx: &App) -> TextView {
+fn text_view(state: &Entity<TextViewState>, cx: &App) -> TextView {
     let font_size = theme::content_font_size(cx);
     TextView::new(state)
         .style(markdown_style(cx))
@@ -101,30 +94,8 @@ fn text_view(state: &Entity<TextViewState>, hovered: bool, cx: &App) -> TextView
         .scrollable(false)
         .selection_format(SelectionFormat::Plain)
         .w_full()
-        .code_block_actions(move |block, _, cx| {
-            let source = block.code().to_string();
-            message_actions::action_button("copy-markdown-code", IconName::Copy, cx)
-                // The native toolbar has its own background. A zero-sized
-                // hidden action also hides that frame until the document is hovered.
-                .when(!hovered, |button| button.size(px(0.)).invisible())
-                .accessibility_label("复制代码")
-                .tooltip("复制代码")
-                .on_click(move |_, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(source.clone()));
-                })
-        })
-        .table_actions(move |table, _, cx| {
-            let source = table.markdown.clone();
-            div().flex().justify_end().child(
-                message_actions::action_button("copy-markdown-table", IconName::Copy, cx)
-                    .when(!hovered, |button| button.invisible())
-                    .accessibility_label("复制 Markdown 表格")
-                    .tooltip("复制 Markdown 表格")
-                    .on_click(move |_, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(source.clone()));
-                    }),
-            )
-        })
+        .code_block_actions(actions::code)
+        .table_actions(actions::table)
         .on_link_click(|url, _, _, cx| {
             if url.starts_with("https://")
                 || url.starts_with("http://")
@@ -171,6 +142,7 @@ fn markdown_style(cx: &App) -> TextViewStyle {
                 .p_2()
                 .border_1()
                 .rounded_md()
+                .overflow_hidden()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().foreground.opacity(0.025))
                 .text_size(font_size)

@@ -95,7 +95,7 @@ fn method_clicks_keep_agent_names_and_begin_without_a_confirmation_window(cx: &m
         assert!(window.find("authentication-error").visible());
         let panel = authentication.read(cx);
         assert_eq!(panel.status_label(), "认证未完成");
-        assert_eq!(panel.message, "认证服务未启用，请重新打开 BASR。");
+        assert_eq!(panel.message, "请重新打开 BASR 以启用认证。");
         assert!(matches!(panel.status, Status::Failed(_)));
     })
     .expect("method actions");

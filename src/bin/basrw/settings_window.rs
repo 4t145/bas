@@ -65,7 +65,7 @@ pub(crate) fn open(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
             ..TitleBar::window_options()
         },
         |window, cx| {
-            window.set_window_title("设置 — BASR");
+            window.set_window_title(crate::i18n::tr!("settings-window-title"));
             let host = cx.new(|cx| Host::new(window, cx));
             settings = Some(host.read(cx).settings.downgrade());
             cx.new(|cx| Root::new(host, window, cx))
@@ -150,7 +150,8 @@ impl Host {
 }
 
 impl Render for Host {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        window.set_window_title(crate::i18n::tr!("settings-window-title"));
         div()
             .id("settings-window")
             .test_support()
@@ -164,7 +165,7 @@ impl Render for Host {
             .on_action(cx.listener(|this, _: &CloseWindow, window, cx| this.close(window, cx)))
             .child(
                 TitleBar::new()
-                    .child("设置 — BASR")
+                    .child(crate::i18n::tr!("settings-window-title"))
                     .on_close_window(cx.listener(|this, _, window, cx| this.close(window, cx))),
             )
             .child(div().flex_1().min_h_0().child(self.settings.clone()))

@@ -141,7 +141,7 @@ fn application_menu_groups_labels_and_resolves_real_shortcut_hints(cx: &mut Test
             window.render_frame(cx);
             let items = [
                 (0, "关于 BASR"),
-                (1, "查看更新"),
+                (1, "查看发布记录"),
                 (3, "设置"),
                 (5, "退出 BASR"),
             ];
@@ -190,7 +190,11 @@ fn application_menu_groups_labels_and_resolves_real_shortcut_hints(cx: &mut Test
             if compact {
                 let content = window.find("popup-menu").bounds();
                 assert!(content.bottom() <= window.bounds().size.height);
-                assert!(window.bounds().size.height - content.bottom() <= px(3.));
+                let shadow = px(menus::SHADOW_PADDING);
+                assert_eq!(content.left(), shadow);
+                assert_eq!(window.bounds().size.width - content.right(), shadow);
+                let bottom = window.bounds().size.height - content.bottom();
+                assert!(bottom >= shadow && bottom <= shadow + px(1.));
             }
             window.press("escape", cx);
         })

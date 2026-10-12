@@ -45,8 +45,8 @@ impl Render for StructuredMarkdown {
                     .test_support()
                     .w_full()
                     .overflow_hidden()
-                    .child(text_view(&self.state, true, cx).code_block_actions(
-                        move |block, _, _| {
+                    .child(
+                        text_view(&self.state, cx).code_block_actions(move |block, _, _| {
                             let id = if block.code().contains("nested-code") {
                                 "nested-code-probe"
                             } else {
@@ -65,8 +65,8 @@ impl Render for StructuredMarkdown {
                                 .id(id)
                                 .test_support()
                                 .size(px(1.))
-                        },
-                    )),
+                        }),
+                    ),
             )
     }
 }
@@ -140,6 +140,7 @@ fn structured_markdown_keeps_nested_blocks_and_copies_a_complete_table(cx: &mut 
             }
             assert!(selected.find("nested-code") < selected.find("root-code"));
         });
+        window.hover("markdown-table-actions", cx);
         window.click("copy-markdown-table", cx);
         let copied = cx
             .read_from_clipboard()
@@ -180,65 +181,104 @@ impl Render for CopyDocuments {
     }
 }
 
+const COPY_CODE: &str = "printf '中文'\n  echo ready";
+const COPY_MARKDOWN: &str = include_str!("assets/copy-actions.md");
+
+fn code_starts(markdown: &str) -> Vec<usize> {
+    markdown
+        .match_indices("```bash")
+        .map(|(start, _)| start)
+        .collect()
+}
+
+fn assert_code_hover(window: &mut Window, starts: &[usize], active: Option<(usize, usize)>) {
+    for document in 0..2 {
+        for &start in starts {
+            assert_eq!(
+                window
+                    .within(format!("copy-document-{document}"))
+                    .within(("markdown-code-block", start))
+                    .find("copy-markdown-code")
+                    .visible(),
+                active == Some((document, start)),
+                "each block owns its hover, including identical and nested code: document={document}, start={start}"
+            );
+        }
+    }
+}
+
 #[gpui_kit::test]
-fn code_and_table_copy_actions_follow_document_hover_and_keep_copy_content(
-    cx: &mut TestAppContext,
-) {
-    const CODE: &str = "printf '中文'\n  echo ready";
-    let markdown = format!(
-        "Example\n\n```bash\n{CODE}\n```\n\n| Name | Value |\n| :--- | ---: |\n| `code` | **text** |"
-    );
+fn copy_actions_are_local_to_each_block_and_preserve_selection(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         theme::init_default(cx);
     });
     let states = cx.update(|cx| {
         [
-            cx.new(|cx| TextViewState::markdown(&markdown, cx)),
-            cx.new(|cx| TextViewState::markdown(&markdown, cx)),
+            cx.new(|cx| TextViewState::markdown(COPY_MARKDOWN, cx)),
+            cx.new(|cx| TextViewState::markdown(COPY_MARKDOWN, cx)),
         ]
     });
-    let window = cx.open_window(size(px(840.), px(900.)), |_, _| CopyDocuments {
-        states: states.clone(),
+    let window = cx.open_window(size(px(840.), px(1200.)), |window, cx| {
+        let documents = cx.new(|_| CopyDocuments {
+            states: states.clone(),
+        });
+        Root::new(documents, window, cx)
     });
     cx.run_until_parked();
+    let starts = code_starts(COPY_MARKDOWN);
+    assert_eq!(starts.len(), 3);
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
-        for index in 0..2 {
-            let document = format!("copy-document-{index}");
-            for action in ["copy-markdown-code", "copy-markdown-table"] {
-                assert!(!window.within(document.clone()).find(action).visible());
-            }
-        }
-        for hovered in 0..2 {
-            let document = format!("copy-document-{hovered}");
-            window.hover(document.clone(), cx);
-            for index in 0..2 {
-                for action in ["copy-markdown-code", "copy-markdown-table"] {
-                    assert_eq!(
-                        window
-                            .within(format!("copy-document-{index}"))
-                            .find(action)
-                            .visible(),
-                        index == hovered,
-                        "hover stays scoped to its document"
+        assert_code_hover(window, &starts, None);
+        let height = window.find("copy-document-0").bounds().size.height;
+        for document in 0..2 {
+            let scope = format!("copy-document-{document}");
+            for &start in &starts {
+                let block = window
+                    .within(scope.clone())
+                    .find(("markdown-code-block", start))
+                    .bounds();
+                // Test the body and padding, away from the copy button.
+                for position in [
+                    block.center(),
+                    block.origin + gpui_kit::point(px(3.), px(3.)),
+                ] {
+                    window.simulate_mouse_move(position, cx);
+                    window.render_frame(cx);
+                    assert_code_hover(window, &starts, Some((document, start)));
+                    assert!(
+                        !window
+                            .within(scope.clone())
+                            .find("copy-markdown-table")
+                            .visible()
                     );
+                    assert_eq!(window.find("copy-document-0").bounds().size.height, height);
                 }
+                window
+                    .within(scope.clone())
+                    .within(("markdown-code-block", start))
+                    .click("copy-markdown-code", cx);
+                assert_eq!(
+                    cx.read_from_clipboard()
+                        .expect("copied code")
+                        .text()
+                        .as_deref(),
+                    Some(COPY_CODE)
+                );
+                assert_code_hover(window, &starts, Some((document, start)));
             }
-            let height = window.find(document.clone()).bounds().size.height;
             window
-                .within(document.clone())
-                .click("copy-markdown-code", cx);
-            assert_eq!(
-                cx.read_from_clipboard()
-                    .expect("copied code")
-                    .text()
-                    .as_deref(),
-                Some(CODE)
+                .within(scope.clone())
+                .hover("markdown-table-actions", cx);
+            assert_code_hover(window, &starts, None);
+            assert!(
+                !window
+                    .within(format!("copy-document-{}", 1 - document))
+                    .find("copy-markdown-table")
+                    .visible()
             );
-            window
-                .within(document.clone())
-                .click("copy-markdown-table", cx);
+            window.within(scope).click("copy-markdown-table", cx);
             assert_eq!(
                 cx.read_from_clipboard()
                     .expect("copied table")
@@ -246,19 +286,120 @@ fn code_and_table_copy_actions_follow_document_hover_and_keep_copy_content(
                     .as_deref(),
                 Some("| Name | Value |\n| :-- | --: |\n| `code` | **text** |")
             );
-            window.simulate_mouse_move(gpui_kit::point(px(0.), px(0.)), cx);
-            window.render_frame(cx);
-            assert_eq!(window.find(document.clone()).bounds().size.height, height);
-            for action in ["copy-markdown-code", "copy-markdown-table"] {
-                assert!(!window.within(document.clone()).find(action).visible());
-            }
         }
+        window.simulate_mouse_move(gpui_kit::point(px(0.), px(0.)), cx);
+        window.render_frame(cx);
+        assert_code_hover(window, &starts, None);
+        assert_eq!(window.find("copy-document-0").bounds().size.height, height);
+        let first = window
+            .within("copy-document-0")
+            .find(("markdown-code-block", starts[0]))
+            .bounds();
+        let last = window
+            .within("copy-document-0")
+            .find(("markdown-code-block", starts[2]))
+            .bounds();
+        window.drag(
+            first.origin + gpui_kit::point(px(9.), px(9.)),
+            last.bottom_right() - gpui_kit::point(px(10.), px(10.)),
+            cx,
+        );
+        let selection = states[0].read(cx).selected_text();
+        assert_eq!(
+            selection.matches("中文").count(),
+            3,
+            "drag across code blocks keeps all blocks: {selection:?}"
+        );
+        assert!(selection.contains("Between") && selection.contains("Nested"));
         states[0].update(cx, |state, cx| {
             state.select_all(cx);
             let selected = state.selected_text();
-            assert!(selected.contains(CODE));
+            assert_eq!(selected.matches(COPY_CODE).count(), 3);
             assert!(selected.contains("Name") && selected.contains("text"));
         });
     })
-    .expect("hover-only Markdown actions");
+    .expect("independent Markdown actions");
+}
+
+#[gpui_kit::test]
+fn code_actions_follow_streamed_content_and_replacement(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        theme::init_default(cx);
+    });
+    let initial = "```bash\necho first\n```\n\n```bash\necho par";
+    let states = cx.update(|cx| {
+        [
+            cx.new(|cx| TextViewState::markdown(initial, cx)),
+            cx.new(|cx| TextViewState::markdown("Other reply", cx)),
+        ]
+    });
+    let window = cx.open_window(size(px(420.), px(900.)), |window, cx| {
+        let documents = cx.new(|_| CopyDocuments {
+            states: states.clone(),
+        });
+        Root::new(documents, window, cx)
+    });
+    cx.run_until_parked();
+    let second = code_starts(initial)[1];
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window
+            .within("copy-document-0")
+            .hover(("markdown-code-block", second), cx);
+        states[0].update(cx, |state, cx| {
+            state.push_str("tial\n```\n\n```bash\necho third\n```", cx)
+        });
+    })
+    .expect("stream append");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window
+            .within("copy-document-0")
+            .within(("markdown-code-block", second))
+            .click("copy-markdown-code", cx);
+        assert_eq!(
+            cx.read_from_clipboard()
+                .expect("streamed code")
+                .text()
+                .as_deref(),
+            Some("echo partial")
+        );
+        assert!(
+            !window
+                .within("copy-document-0")
+                .within(("markdown-code-block", 0usize))
+                .find("copy-markdown-code")
+                .visible()
+        );
+        states[0].update(cx, |state, cx| {
+            state.set_text("Replacement\n\n```bash\necho replaced\n```", cx)
+        });
+    })
+    .expect("replace document");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .within("copy-document-0")
+                .try_find(("markdown-code-block", second))
+                .is_none()
+        );
+        window
+            .within("copy-document-0")
+            .hover(("markdown-code-block", "Replacement\n\n".len()), cx);
+        window
+            .within("copy-document-0")
+            .click("copy-markdown-code", cx);
+        assert_eq!(
+            cx.read_from_clipboard()
+                .expect("replacement code")
+                .text()
+                .as_deref(),
+            Some("echo replaced")
+        );
+    })
+    .expect("copy replaced document");
 }

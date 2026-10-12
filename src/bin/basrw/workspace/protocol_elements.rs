@@ -15,7 +15,11 @@ fn plan_progress(entries: &[acp2::PlanEntry]) -> String {
         .iter()
         .filter(|entry| entry.status == acp2::PlanEntryStatus::Completed)
         .count();
-    format!("计划 · {completed}/{} 完成", entries.len())
+    crate::i18n::tr!(
+        "plan-progress",
+        completed = completed,
+        total = entries.len()
+    )
 }
 
 fn compaction_summary_blocks(summary: &[acp2::ContentBlock]) -> Vec<acp2::ContentBlock> {
@@ -68,22 +72,37 @@ impl Workspace {
                         .gap_1();
                     match &plan.plan {
                         acp2::PlanUpdateContent::Items(plan) => {
-                            panel = panel.child(caption(plan_progress(&plan.entries), cx));
+                            panel = panel.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        Icon::new(IconName::ListTodo)
+                                            .size(px(crate::ui::ICON))
+                                            .text_color(cx.theme().muted_foreground),
+                                    )
+                                    .child(caption(plan_progress(&plan.entries), cx)),
+                            );
                             for (index, entry) in plan.entries.iter().enumerate() {
                                 let (label, icon, color) = match &entry.status {
                                     acp2::PlanEntryStatus::Pending => (
-                                        "待完成".to_owned(),
+                                        crate::i18n::tr!("plan-pending").to_owned(),
                                         IconName::Circle,
                                         cx.theme().muted_foreground,
                                     ),
-                                    acp2::PlanEntryStatus::InProgress => {
-                                        ("进行中".to_owned(), IconName::Loader, cx.theme().primary)
-                                    }
-                                    acp2::PlanEntryStatus::Completed => {
-                                        ("已完成".to_owned(), IconName::Check, cx.theme().success)
-                                    }
+                                    acp2::PlanEntryStatus::InProgress => (
+                                        crate::i18n::tr!("status-running").to_owned(),
+                                        IconName::Loader,
+                                        cx.theme().primary,
+                                    ),
+                                    acp2::PlanEntryStatus::Completed => (
+                                        crate::i18n::tr!("status-completed").to_owned(),
+                                        IconName::Check,
+                                        cx.theme().success,
+                                    ),
                                     acp2::PlanEntryStatus::Cancelled => (
-                                        "已取消".to_owned(),
+                                        crate::i18n::tr!("status-cancelled").to_owned(),
                                         IconName::X,
                                         cx.theme().muted_foreground,
                                     ),
@@ -93,17 +112,23 @@ impl Workspace {
                                         cx.theme().muted_foreground,
                                     ),
                                     _ => (
-                                        "未知".to_owned(),
+                                        crate::i18n::tr!("status-unknown").to_owned(),
                                         IconName::CircleAlert,
                                         cx.theme().muted_foreground,
                                     ),
                                 };
                                 let priority = match &entry.priority {
-                                    acp2::PlanEntryPriority::High => "高优先级".to_owned(),
-                                    acp2::PlanEntryPriority::Medium => "中优先级".to_owned(),
-                                    acp2::PlanEntryPriority::Low => "低优先级".to_owned(),
+                                    acp2::PlanEntryPriority::High => {
+                                        crate::i18n::tr!("priority-high").to_owned()
+                                    }
+                                    acp2::PlanEntryPriority::Medium => {
+                                        crate::i18n::tr!("priority-medium").to_owned()
+                                    }
+                                    acp2::PlanEntryPriority::Low => {
+                                        crate::i18n::tr!("priority-low").to_owned()
+                                    }
                                     acp2::PlanEntryPriority::Other(priority) => priority.clone(),
-                                    _ => "未知优先级".to_owned(),
+                                    _ => crate::i18n::tr!("priority-unknown").to_owned(),
                                 };
                                 panel = panel.child(
                                     div()
@@ -138,39 +163,47 @@ impl Workspace {
                                             div()
                                                 .flex_1()
                                                 .min_w_0()
-                                                .text_sm()
+                                                .text_size(crate::ui::SMALL)
                                                 .child(entry.content.clone()),
                                         ),
                                 );
                             }
                         }
                         acp2::PlanUpdateContent::Markdown(plan) => {
-                            panel = panel.child(caption("计划", cx)).child(self.markdown(
-                                format!("{id}-markdown"),
-                                plan.content.clone(),
-                                PLAN_DOCUMENT_INDEX,
-                                cx,
-                            ));
+                            panel = panel
+                                .child(caption(crate::i18n::tr!("plan-title"), cx))
+                                .child(self.markdown(
+                                    format!("{id}-markdown"),
+                                    plan.content.clone(),
+                                    PLAN_DOCUMENT_INDEX,
+                                    cx,
+                                ));
                         }
                         acp2::PlanUpdateContent::File(plan) => {
                             let uri = plan.uri.clone();
-                            panel = panel.child(caption("计划文件", cx)).child(
-                                Button::new(SharedString::from(format!("{id}-file")))
-                                    .ghost()
-                                    .small()
-                                    .min_w_0()
-                                    .max_w_full()
-                                    .icon(IconName::File)
-                                    .label(uri.clone())
-                                    .tooltip("打开计划文件")
-                                    .on_click(move |_, _, cx| cx.open_url(&uri)),
-                            );
+                            panel = panel
+                                .child(caption(crate::i18n::tr!("plan-file"), cx))
+                                .child(
+                                    Button::new(SharedString::from(format!("{id}-file")))
+                                        .ghost()
+                                        .small()
+                                        .min_w_0()
+                                        .max_w_full()
+                                        .icon(IconName::File)
+                                        .label(uri.clone())
+                                        .tooltip(crate::i18n::tr!("plan-open"))
+                                        .on_click(move |_, _, cx| cx.open_url(&uri)),
+                                );
                         }
                         acp2::PlanUpdateContent::Other(plan) => {
-                            panel = panel.child(caption(format!("计划 · {}", plan.type_), cx));
+                            panel = panel.child(caption(
+                                crate::i18n::tr!("plan-type", type = (plan.type_).to_string()),
+                                cx,
+                            ));
                         }
                         _ => {
-                            panel = panel.child(caption("计划内容暂不支持预览", cx));
+                            panel = panel
+                                .child(caption(crate::i18n::tr!("plan-preview-unavailable"), cx));
                         }
                     }
                     panel
@@ -198,24 +231,28 @@ impl Workspace {
                 .children(notices.iter().map(|notice| {
                     let id = notice.id;
                     let (label, icon, color) = match &notice.notice.severity {
-                        acp2::NoticeSeverity::Info => {
-                            ("信息".to_owned(), IconName::Info, cx.theme().primary)
-                        }
+                        acp2::NoticeSeverity::Info => (
+                            crate::i18n::tr!("notice-info").to_owned(),
+                            IconName::Info,
+                            cx.theme().primary,
+                        ),
                         acp2::NoticeSeverity::Warning => (
-                            "警告".to_owned(),
+                            crate::i18n::tr!("notice-warning").to_owned(),
                             IconName::TriangleAlert,
                             cx.theme().warning,
                         ),
-                        acp2::NoticeSeverity::Error => {
-                            ("错误".to_owned(), IconName::CircleX, cx.theme().danger)
-                        }
+                        acp2::NoticeSeverity::Error => (
+                            crate::i18n::tr!("notice-error").to_owned(),
+                            IconName::CircleX,
+                            cx.theme().danger,
+                        ),
                         acp2::NoticeSeverity::Other(severity) => (
                             severity.clone(),
                             IconName::Info,
                             cx.theme().muted_foreground,
                         ),
                         _ => (
-                            "通知".to_owned(),
+                            crate::i18n::tr!("notice-title").to_owned(),
                             IconName::Info,
                             cx.theme().muted_foreground,
                         ),
@@ -225,7 +262,8 @@ impl Workspace {
                         .test_support()
                         .rounded_md()
                         .border_1()
-                        .border_color(color)
+                        .border_color(color.opacity(0.35))
+                        .bg(color.opacity(0.05))
                         .p_2()
                         .flex()
                         .items_start()
@@ -235,7 +273,7 @@ impl Workspace {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .text_sm()
+                                .text_size(crate::ui::SMALL)
                                 .child(
                                     div()
                                         .text_color(color)
@@ -256,8 +294,8 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(IconName::X)
-                            .accessibility_label("关闭通知")
-                            .tooltip("关闭通知")
+                            .accessibility_label(crate::i18n::tr!("notice-dismiss"))
+                            .tooltip(crate::i18n::tr!("notice-dismiss"))
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     if let Some(conversation) = &mut this.conversation {
@@ -281,32 +319,32 @@ impl Workspace {
     ) -> AnyElement {
         let (label, icon, color) = match &compaction.status {
             acp2::CompactionStatus::InProgress => (
-                "正在压缩上下文…".to_owned(),
+                crate::i18n::tr!("compaction-running").to_owned(),
                 IconName::Loader,
                 cx.theme().primary,
             ),
             acp2::CompactionStatus::Completed => (
-                "上下文压缩完成".to_owned(),
+                crate::i18n::tr!("compaction-completed").to_owned(),
                 IconName::Check,
                 cx.theme().success,
             ),
             acp2::CompactionStatus::Failed => (
-                "上下文压缩失败".to_owned(),
+                crate::i18n::tr!("compaction-failed").to_owned(),
                 IconName::CircleX,
                 cx.theme().danger,
             ),
             acp2::CompactionStatus::Cancelled => (
-                "上下文压缩已取消".to_owned(),
+                crate::i18n::tr!("compaction-cancelled").to_owned(),
                 IconName::X,
                 cx.theme().muted_foreground,
             ),
             acp2::CompactionStatus::Other(status) => (
-                format!("上下文压缩 · {status}"),
+                crate::i18n::tr!("compaction-status", status = (status).to_string()),
                 IconName::CircleAlert,
                 cx.theme().muted_foreground,
             ),
             _ => (
-                "上下文压缩".to_owned(),
+                crate::i18n::tr!("compaction-title").to_owned(),
                 IconName::CircleAlert,
                 cx.theme().muted_foreground,
             ),
@@ -332,6 +370,12 @@ impl Workspace {
                         IconName::ChevronRight
                     })
                     .accessibility_label(label.clone())
+                    .on_prepaint(self.track_content_header(id))
+                    .child(
+                        Icon::new(IconName::Archive)
+                            .size(px(crate::ui::ICON))
+                            .text_color(cx.theme().muted_foreground),
+                    )
                     .child(status::activity_icon(
                         format!("compaction-status-{id}"),
                         icon,
@@ -340,16 +384,12 @@ impl Workspace {
                     ))
                     .child(div().flex_1().text_color(color).child(label))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.expanded.remove(&key) {
-                            this.expanded.insert(key.clone());
-                        }
-                        this.list.remeasure_items(index..index + 1);
-                        cx.notify();
+                        this.toggle_content(&key, index, cx);
                     })),
             )
             .children(compaction.error.as_ref().map(|error| {
                 div()
-                    .text_sm()
+                    .text_size(crate::ui::SMALL)
                     .text_color(cx.theme().danger)
                     .child(error.clone())
             }))
@@ -368,7 +408,10 @@ impl Workspace {
                                     index,
                                     cx,
                                 ),
-                                Err(_) => caption("摘要内容暂不支持预览", cx).into_any_element(),
+                                Err(_) => {
+                                    caption(crate::i18n::tr!("summary-preview-unavailable"), cx)
+                                        .into_any_element()
+                                }
                             },
                         ),
                 )

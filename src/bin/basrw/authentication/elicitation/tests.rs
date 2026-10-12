@@ -147,7 +147,7 @@ fn accepting_url_waits_for_matching_completion_and_sends_no_form_content(cx: &mu
         assert!(panel.submitting && panel.accepted);
         assert!(!panel.completed_by(&json!({"elicitationId":"other"})));
         assert!(panel.completed_by(&json!({"elicitationId":"url-1"})));
-        assert!(panel.message.contains("等待 Agent"));
+        assert!(panel.message.contains("在浏览器中完成操作"));
     })
     .expect("URL acceptance is pending");
 }

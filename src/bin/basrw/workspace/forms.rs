@@ -1,7 +1,7 @@
 use super::*;
 use gpui_kit::component::menu::PopupMenuItem;
 
-pub(super) const TOOLBAR_AGENT_ICON_SIZE: f32 = 12.;
+pub(super) const TOOLBAR_AGENT_ICON_SIZE: f32 = crate::ui::SMALL_ICON;
 
 impl Workspace {
     fn title_slot(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -25,7 +25,7 @@ impl Workspace {
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_sm()
+                        .text_size(crate::ui::SMALL)
                         .cursor_pointer()
                         .child(
                             self.current()
@@ -70,7 +70,7 @@ impl Workspace {
                     })
                     .child(
                         layout::icon_button("sidebar-toggle", IconName::PanelLeft)
-                            .tooltip("Threads · Ctrl B")
+                            .tooltip(crate::i18n::tr!("sidebar-toggle"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)),
                             ),
@@ -82,7 +82,7 @@ impl Workspace {
                     .when(client_controls && controls.minimize, |row| {
                         row.child(
                             layout::icon_button("window-minimize", IconName::WindowMinimize)
-                                .tooltip("最小化窗口")
+                                .tooltip(crate::i18n::tr!("window-minimize"))
                                 .on_click(|_, window, _| window.minimize_window()),
                         )
                     })
@@ -97,9 +97,9 @@ impl Workspace {
                                 },
                             )
                             .tooltip(if window.is_maximized() {
-                                "还原窗口"
+                                crate::i18n::tr!("window-restore")
                             } else {
-                                "最大化窗口"
+                                crate::i18n::tr!("window-maximize")
                             })
                             .on_click(cx.listener(
                                 |this, _, window, _| {
@@ -114,7 +114,7 @@ impl Workspace {
                     .when(client_controls, |row| {
                         row.child(
                             layout::icon_button("window-close", IconName::WindowClose)
-                                .tooltip("关闭窗口")
+                                .tooltip(crate::i18n::tr!("window-close"))
                                 .on_click(
                                     cx.listener(|this, _, window, cx| {
                                         this.close_window(window, cx)
@@ -136,7 +136,7 @@ impl Workspace {
                             .child(
                                 div()
                                     .flex_1()
-                                    .child("已归档 · 历史已保留，恢复后可发送；当前任务仍可停止。"),
+                                    .child(crate::i18n::tr!("session-archived-help")),
                             )
                             .child(self.archive_button(session, "restore-archived", cx)),
                     )
@@ -150,7 +150,7 @@ impl Workspace {
         let directories: Vec<_> = groups.into_iter().map(|group| group.directory).collect();
         let selected = self.selected_directory.clone();
         let name = groups::name(selected.as_deref());
-        let hint = groups::path_label(selected.as_deref());
+        let hint = crate::i18n::tr!("workspace-choose");
         let view = cx.entity().downgrade();
         let parent = self.window;
         let button = Button::new("workspace-picker")
@@ -175,7 +175,7 @@ impl Workspace {
                         .min_w_0()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .text_sm()
+                        .text_size(crate::ui::SMALL)
                         .child(name),
                 )
             });
@@ -200,7 +200,7 @@ impl Workspace {
                     );
                 }
                 menu.separator().item(
-                    PopupMenuItem::new("添加 workspace…")
+                    PopupMenuItem::new(crate::i18n::tr!("workspace-add"))
                         .icon(IconName::Plus)
                         .on_click({
                             let view = view.clone();
@@ -226,12 +226,10 @@ impl Workspace {
             .map(|session| session.agent.to_string())
             .unwrap_or_else(|| self.selected_agent.clone());
         let disabled = !self.can_select_agent();
-        let hint = if disabled {
-            format!("Agent · {selected}")
-        } else if selected.is_empty() {
-            "选择或安装 Agent".into()
+        let hint = if selected.is_empty() {
+            crate::i18n::tr!("agent-choose").to_owned()
         } else {
-            format!("选择 Agent · {selected}")
+            crate::i18n::tr!("agent-current", agent = selected.as_str())
         };
         let view = cx.entity().downgrade();
         let metadata = self.agent_metadata.clone();
@@ -247,9 +245,13 @@ impl Workspace {
             })
             .flex_shrink_0()
             .disabled(disabled)
-            .accessibility_label(hint.clone())
+            .accessibility_label(if selected.is_empty() {
+                hint.to_owned()
+            } else {
+                crate::i18n::tr!("agent-current", agent = selected.as_str())
+            })
             .when(self.waiting_for_agent_selection, |button| {
-                button.label("选择 Agent")
+                button.label(crate::i18n::tr!("agent-choose"))
             })
             .child(
                 self.agent_icon("agent-picker-icon", &selected, cx)
@@ -316,13 +318,13 @@ impl Workspace {
                                 .id("agent-menu-install-label")
                                 .test_support()
                                 .role(gpui_kit::Role::Label)
-                                .aria_label("安装 Agent…")
+                                .aria_label(crate::i18n::tr!("agent-install-action"))
                                 .flex()
                                 .flex_1()
                                 .items_center()
                                 .gap_2()
                                 .child(Icon::new(IconName::Plus).size(px(AGENT_ICON_SIZE)))
-                                .child("安装 Agent…")
+                                .child(crate::i18n::tr!("agent-install-action"))
                         })
                         .on_click(move |_, window, cx| {
                             menus::in_parent(parent, window, cx, |window, cx| {
@@ -373,7 +375,7 @@ impl Workspace {
                     .ghost()
                     .xsmall()
                     .icon(IconName::Loader)
-                    .tooltip("正在初始化 Agent 选项和命令…"),
+                    .tooltip(crate::i18n::tr!("agent-initializing")),
             );
         }
         let Some(session) = self.current() else {
@@ -407,10 +409,7 @@ impl Workspace {
                         .find(|value| value.value == current)
                         .map(|value| value.name.clone())
                         .unwrap_or_else(|| current.to_string());
-                    let hint = option.description.as_ref().map_or_else(
-                        || option.name.clone(),
-                        |description| format!("{} · {description}", option.name),
-                    );
+                    let hint = crate::i18n::tr!("option-choose", name = option.name.as_str());
                     row = row.child(crate::tooltip::bounded(
                         SharedString::from(format!("config-hint-{}", option.id)),
                         self.menu_button(
@@ -467,7 +466,7 @@ impl Workspace {
                                 div()
                                     .id(SharedString::from(format!("config-label-{}", option.id)))
                                     .test_support()
-                                    .text_xs()
+                                    .text_size(crate::ui::SMALL)
                                     .text_color(if self.configuring.contains(&session) {
                                         cx.theme().muted_foreground
                                     } else {

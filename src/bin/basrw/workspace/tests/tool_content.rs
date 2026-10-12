@@ -116,7 +116,7 @@ fn empty_terminal_exit_keeps_raw_result_and_displays_command_and_directory(
 }
 
 #[gpui_kit::test]
-fn output_precedes_collapsed_input_and_sections_keep_their_state_during_stream_updates(
+fn collapsed_input_precedes_output_and_sections_keep_their_state_during_stream_updates(
     cx: &mut TestAppContext,
 ) {
     let fixture = fixture(cx);
@@ -147,8 +147,8 @@ fn output_precedes_collapsed_input_and_sections_keep_their_state_during_stream_u
         window.render_frame(cx);
         assert!(window.find("tool-output-tool-io").visible());
         assert!(window.try_find("tool-input-tool-io").is_none());
-        assert!(window.find("tool-output-section-tool-io").bounds().top()
-            < window.find("tool-input-section-tool-io").bounds().top());
+        assert!(window.find("tool-input-section-tool-io").bounds().bottom()
+            <= window.find("tool-output-section-tool-io").bounds().top());
         let output = fixture.view.read(cx).markdown.borrow()["tool-io-terminal-remote-io"]
             .state.clone();
         let entity = output.entity_id();
@@ -334,4 +334,96 @@ fn tool_header_leaves_vertical_room_for_descenders_at_different_font_sizes(
         }
     })
     .expect("tool header geometry");
+}
+
+#[gpui_kit::test]
+fn repeated_tool_disclosures_preserve_the_visible_header_and_resume_tail_on_request(
+    cx: &mut TestAppContext,
+) {
+    for grouped in [false, true] {
+        let fixture = fixture(cx);
+        let meta = session();
+        attach(&fixture, meta.clone(), cx);
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            fixture.view.update(cx, |view, cx| {
+                let mut updates = vec![
+                    basr::acp::SessionUpdate::UserMessageChunk(basr::acp::ContentChunk::new(
+                        "检查配置".into(),
+                    )),
+                    basr::acp::SessionUpdate::ToolCall(
+                        basr::acp::ToolCall::new("fold", "读取配置")
+                            .raw_input(serde_json::json!({"path": "/project/config.toml"}))
+                            .raw_output(serde_json::json!("result line\n\n".repeat(70)))
+                            .status(basr::acp::ToolCallStatus::Completed),
+                    ),
+                ];
+                if grouped {
+                    updates.insert(
+                        1,
+                        basr::acp::SessionUpdate::AgentThoughtChunk(basr::acp::ContentChunk::new(
+                            "检查当前配置".into(),
+                        )),
+                    );
+                }
+                for (index, update) in updates.into_iter().enumerate() {
+                    view.update(
+                        Update::Event {
+                            epoch: view.epoch,
+                            event: Event::new(
+                                meta.id,
+                                Cursor::from_raw(index as u64 + 1),
+                                EventKind::Acp(update),
+                            ),
+                        },
+                        window,
+                        cx,
+                    );
+                }
+                if grouped {
+                    let first = view.conversation.as_ref().unwrap().items[1].id();
+                    view.expanded.insert(format!("activity-{first}"));
+                }
+                view.composer_expanded = false;
+            });
+            window.render_frame(cx);
+            assert!(fixture.view.read(cx).list.is_following_tail());
+            let top = window.find("expand-tool-fold").bounds().top();
+            window.click("expand-tool-fold", cx);
+            window.render_frame(cx);
+            assert_eq!(window.find("expand-tool-fold").bounds().top(), top);
+            assert!(!fixture.view.read(cx).list.is_following_tail());
+        })
+        .expect("expanding the last tool preserves its header");
+        cx.run_until_parked();
+        for _ in 0..6 {
+            cx.update_window(fixture.window.into(), |_, window, cx| {
+                let top = window.find("expand-tool-fold").bounds().top();
+                for key in [
+                    "expand-input-open-tool-fold",
+                    "expand-input-open-tool-fold",
+                    "expand-output-closed-tool-fold",
+                    "expand-output-closed-tool-fold",
+                    "expand-tool-fold",
+                    "expand-tool-fold",
+                ] {
+                    window.click(key, cx);
+                    window.render_frame(cx);
+                    assert_eq!(
+                        window.find("expand-tool-fold").bounds().top(),
+                        top,
+                        "after {key}"
+                    );
+                }
+            })
+            .expect("repeated input, output and tool folding");
+            cx.run_until_parked();
+        }
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            assert!(!fixture.view.read(cx).list.is_following_tail());
+            window.click("turn-marker-end", cx);
+            window.render_frame(cx);
+            assert!(fixture.view.read(cx).list.is_following_tail());
+        })
+        .expect("explicit return to latest content resumes following");
+    }
 }

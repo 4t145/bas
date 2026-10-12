@@ -186,8 +186,10 @@ pub(super) fn watch(cx: &mut App) {
 }
 
 fn apply(effective: Effective, window: Option<&mut Window>, cx: &mut App) {
+    crate::i18n::set_language(effective.language);
     let mut resolved = effective.desktop;
     let mut config: ThemeConfig = resolved.config;
+    complete_highlight(&mut config);
     let fonts = cx.text_system().all_font_names();
     let preferred = config.font_family.take();
     config.font_family = preferred
@@ -261,8 +263,25 @@ fn apply(effective: Effective, window: Option<&mut Window>, cx: &mut App) {
     });
 }
 
+fn complete_highlight(config: &mut ThemeConfig) {
+    use gpui_kit::component::highlighter::HighlightTheme;
+    let fallback = if config.mode.is_dark() {
+        HighlightTheme::default_dark()
+    } else {
+        HighlightTheme::default_light()
+    };
+    match config.highlight.as_mut() {
+        None => config.highlight = Some(fallback.style.clone()),
+        Some(style) if style.syntax == Default::default() => {
+            style.syntax = fallback.style.syntax.clone();
+        }
+        Some(_) => {}
+    }
+}
+
 pub(super) fn font_style(cx: &App) -> gpui_kit::StyleRefinement {
     let mut style = gpui_kit::StyleRefinement::default();
+    style.text.font_size = Some(crate::ui::BODY.into());
     style.text.font_fallbacks = cx
         .try_global::<Appearance>()
         .map(|appearance| appearance.font_fallbacks.clone());

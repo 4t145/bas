@@ -18,7 +18,7 @@ fn clipboard_read_blocks_edits_and_send_then_falls_back_as_one_undoable_paste(
         assert!(fixture.commands.try_recv().is_err());
         assert_eq!(fixture.view.read(cx).composer.read(cx).value(), "draft");
         assert!(!fixture.view.read(cx).can_send(cx));
-        assert!(fixture.view.read(cx).send_hint(cx).contains("读取剪贴板"));
+        assert!(fixture.view.read(cx).send_hint(cx).starts_with("发送消息"));
         fixture.view.update(cx, |view, cx| {
             view.finish_paste(
                 target,
@@ -140,7 +140,7 @@ fn unsupported_clipboard_image_keeps_its_accompanying_text(cx: &mut TestAppConte
                 view.error
                     .as_deref()
                     .expect("image capability error")
-                    .contains("不支持图片")
+                    .contains("文本描述图片")
             );
         });
     })

@@ -26,16 +26,16 @@ impl Group {
     pub const ALL: [Self; 3] = [Self::Theme, Self::Fonts, Self::Layout];
     pub fn title(self) -> &'static str {
         match self {
-            Self::Theme => "主题",
-            Self::Fonts => "字体",
-            Self::Layout => "布局",
+            Self::Theme => crate::i18n::tr!("appearance-theme"),
+            Self::Fonts => crate::i18n::tr!("appearance-fonts"),
+            Self::Layout => crate::i18n::tr!("appearance-layout"),
         }
     }
     pub fn help(self) -> &'static str {
         match self {
-            Self::Theme => "主题来源、明暗模式与窗口背景。",
-            Self::Fonts => "界面与正文使用的字体和字号。",
-            Self::Layout => "正文行高、内容不透明度与消息输入行为。",
+            Self::Theme => crate::i18n::tr!("appearance-theme-help"),
+            Self::Fonts => crate::i18n::tr!("appearance-fonts-help"),
+            Self::Layout => crate::i18n::tr!("appearance-layout-help"),
         }
     }
     /// Navigation entry in the settings sidebar.
@@ -65,6 +65,7 @@ impl Group {
 
 #[derive(Clone, Copy)]
 enum Field {
+    Language,
     Source,
     Mode,
     Background,
@@ -79,7 +80,8 @@ enum Field {
     ComposerEnter,
 }
 impl Field {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 13] = [
+        Self::Language,
         Self::Source,
         Self::Mode,
         Self::Background,
@@ -95,6 +97,7 @@ impl Field {
     ];
     fn id(self) -> &'static str {
         match self {
+            Self::Language => "appearance-language",
             Self::Source => "appearance-source",
             Self::Mode => "appearance-mode",
             Self::Background => "appearance-background",
@@ -111,39 +114,42 @@ impl Field {
     }
     fn label(self) -> &'static str {
         match self {
-            Self::Source => "主题来源",
-            Self::Mode => "主题模式",
-            Self::Background => "窗口背景",
-            Self::ThemeFile => "外部主题文件",
-            Self::UiFont => "UI 字体",
-            Self::MonoFont => "等宽字体",
-            Self::Fallbacks => "回退字体",
-            Self::UiSize => "UI 字号",
-            Self::ContentSize => "正文字号",
-            Self::LineHeight => "正文行高",
-            Self::Opacity => "内容不透明度",
-            Self::ComposerEnter => "消息输入框 Enter",
+            Self::Language => crate::i18n::tr!("appearance-language"),
+            Self::Source => crate::i18n::tr!("appearance-source"),
+            Self::Mode => crate::i18n::tr!("appearance-mode"),
+            Self::Background => crate::i18n::tr!("appearance-background"),
+            Self::ThemeFile => crate::i18n::tr!("appearance-theme-file"),
+            Self::UiFont => crate::i18n::tr!("appearance-ui-font"),
+            Self::MonoFont => crate::i18n::tr!("appearance-mono-font"),
+            Self::Fallbacks => crate::i18n::tr!("appearance-fallbacks"),
+            Self::UiSize => crate::i18n::tr!("appearance-ui-size"),
+            Self::ContentSize => crate::i18n::tr!("appearance-content-size"),
+            Self::LineHeight => crate::i18n::tr!("appearance-line-height"),
+            Self::Opacity => crate::i18n::tr!("appearance-opacity"),
+            Self::ComposerEnter => crate::i18n::tr!("appearance-enter"),
         }
     }
     fn help(self) -> &'static str {
         match self {
-            Self::Source => "Default 跟随桌面；内置不读取外部主题",
-            Self::Mode => "选择浅色、深色或跟随桌面和系统",
-            Self::Background => "Default 使用模糊背景",
-            Self::ThemeFile => "相对配置目录或绝对路径；留空继承",
-            Self::UiFont => "搜索已安装字体；Default 继承桌面或内置字体",
-            Self::MonoFont => "用于代码；保留配置中的未安装字体",
-            Self::Fallbacks => "逗号分隔；留空继承，[] 不指定额外回退",
-            Self::UiSize | Self::ContentSize => "像素；留空继承",
-            Self::LineHeight => "字号倍数；留空继承",
-            Self::Opacity => "0–1；留空继承",
+            Self::Language => crate::i18n::tr!("appearance-language-help"),
+            Self::Source => crate::i18n::tr!("appearance-source-help"),
+            Self::Mode => crate::i18n::tr!("appearance-mode-help"),
+            Self::Background => crate::i18n::tr!("appearance-background-help"),
+            Self::ThemeFile => crate::i18n::tr!("appearance-theme-file-help"),
+            Self::UiFont => crate::i18n::tr!("appearance-ui-font-help"),
+            Self::MonoFont => crate::i18n::tr!("appearance-mono-font-help"),
+            Self::Fallbacks => crate::i18n::tr!("appearance-fallbacks-help"),
+            Self::UiSize | Self::ContentSize => crate::i18n::tr!("appearance-size-help"),
+            Self::LineHeight => crate::i18n::tr!("appearance-line-height-help"),
+            Self::Opacity => crate::i18n::tr!("appearance-opacity-help"),
             Self::ComposerEnter => {
-                "默认 Enter 发送；换行时用 Ctrl+Enter 发送，macOS 也支持 Cmd+Enter"
+                crate::i18n::tr!("appearance-enter-help")
             }
         }
     }
     fn group(self) -> Group {
         match self {
+            Self::Language => Group::Theme,
             Self::Source | Self::Mode | Self::Background | Self::ThemeFile => Group::Theme,
             Self::UiFont | Self::MonoFont | Self::Fallbacks | Self::UiSize | Self::ContentSize => {
                 Group::Fonts
@@ -153,7 +159,8 @@ impl Field {
     }
     fn matches(self, query: &str) -> bool {
         format!(
-            "外观 {} {} {}",
+            "{} {} {} {}",
+            crate::i18n::tr!("settings-appearance"),
             self.group().title(),
             self.label(),
             self.help()
@@ -182,7 +189,10 @@ impl AppearancePage {
     pub(super) fn new(editor: theme::Editor, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (document, message) = match editor.load() {
             Ok(document) => (Some(document), String::new()),
-            Err(error) => (None, format!("无法读取配置：{error:#}")),
+            Err(error) => (
+                None,
+                crate::i18n::tr!("settings-load-error", error = format!("{:#}", error)),
+            ),
         };
         let preferences = document
             .as_ref()
@@ -200,7 +210,23 @@ impl AppearancePage {
             pending: None,
             reload: false,
             subscriptions: Vec::new(),
-            _appearance: cx.observe_global::<theme::Appearance>(|this, cx| {
+            _appearance: cx.observe_global_in::<theme::Appearance>(window, |this, window, cx| {
+                for input in [
+                    &this.form.fallbacks,
+                    &this.form.ui_size,
+                    &this.form.content_size,
+                    &this.form.line_height,
+                    &this.form.opacity,
+                    &this.form.theme_file,
+                ] {
+                    input.update(cx, |input, cx| {
+                        input.set_placeholder(
+                            crate::i18n::tr!("appearance-inherit-placeholder"),
+                            window,
+                            cx,
+                        )
+                    });
+                }
                 this.reload = true;
                 cx.notify();
             }),
@@ -231,7 +257,12 @@ impl AppearancePage {
                         this.message = this
                             .candidate(cx)
                             .err()
-                            .map(|error| format!("未应用：{error}"))
+                            .map(|error| {
+                                crate::i18n::tr!(
+                                    "settings-apply-error",
+                                    error = (error).to_string()
+                                )
+                            })
                             .unwrap_or_default();
                         this.pending = Some(cx.spawn_in(window, async move |view, cx| {
                             cx.background_executor().timer(DEBOUNCE).await;
@@ -256,6 +287,7 @@ impl AppearancePage {
             };
         }
         select!(source);
+        select!(language);
         select!(mode);
         select!(background);
         select!(ui_font);
@@ -282,21 +314,22 @@ impl AppearancePage {
             return;
         }
         self.message = match self.candidate(cx) {
-            Err(error) => format!("未应用：{error}"),
+            Err(error) => crate::i18n::tr!("settings-apply-error", error = (error).to_string()),
             Ok(candidate) => match self.document.as_mut() {
-                None => "未应用：请修复配置文件后重新打开设置".into(),
+                None => crate::i18n::tr!("settings-fix-file").into(),
                 Some(document) => match self.editor.save(document, candidate, window, cx) {
-                    Ok(()) => "已保存并应用".into(),
+                    Ok(()) => crate::i18n::tr!("settings-applied").into(),
                     Err(error)
                         if matches!(
                             error.downcast_ref::<basr::config::Error>(),
                             Some(basr::config::Error::Conflict { .. })
                         ) =>
                     {
-                        "未应用：外观配置已被外部修改；当前输入保留，请重新打开设置后再修改。"
-                            .into()
+                        crate::i18n::tr!("settings-conflict").into()
                     }
-                    Err(error) => format!("未应用：{error:#}"),
+                    Err(error) => {
+                        crate::i18n::tr!("settings-apply-error", error = format!("{:#}", error))
+                    }
                 },
             },
         };
@@ -336,12 +369,20 @@ impl AppearancePage {
                 }
                 self.document = Some(document);
             }
-            Err(error) => self.message = format!("无法重载配置：{error:#}"),
+            Err(error) => {
+                self.message =
+                    crate::i18n::tr!("settings-reload-error", error = format!("{:#}", error))
+            }
         }
     }
 
     fn control(&self, field: Field, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         match field {
+            Field::Language => div()
+                .id(field.id())
+                .test_support()
+                .child(Select::new(&self.form.language))
+                .into_any_element(),
             Field::Source => Select::new(&self.form.source).into_any_element(),
             Field::Mode => Select::new(&self.form.mode).into_any_element(),
             Field::Background => Select::new(&self.form.background).into_any_element(),
@@ -351,10 +392,10 @@ impl AppearancePage {
                 .child(Select::new(&self.form.composer_enter))
                 .into_any_element(),
             Field::UiFont => Select::new(&self.form.ui_font)
-                .search_placeholder("搜索字体")
+                .search_placeholder(crate::i18n::tr!("appearance-search-font"))
                 .into_any_element(),
             Field::MonoFont => Select::new(&self.form.mono_font)
-                .search_placeholder("搜索字体")
+                .search_placeholder(crate::i18n::tr!("appearance-search-font"))
                 .into_any_element(),
             _ => {
                 let input = match field {
@@ -381,7 +422,7 @@ impl AppearancePage {
                     )
                     .child(
                         super::action_button(format!("{}-default", field.id()))
-                            .label("Default")
+                            .label(crate::i18n::tr!("action-reset"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 input.update(cx, |input, cx| input.set_value("", window, cx));
                                 this.flush_pending(window, cx);
@@ -414,7 +455,7 @@ impl AppearancePage {
                     .child(field.label())
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(crate::ui::SMALL)
                             .text_color(cx.theme().muted_foreground)
                             .child(field.help()),
                     ),
@@ -448,13 +489,13 @@ impl AppearancePage {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_lg()
+                                    .text_size(crate::ui::HEADING)
                                     .text_color(cx.theme().foreground)
                                     .child(group.title()),
                             )
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(crate::ui::SMALL)
                                     .text_color(cx.theme().muted_foreground)
                                     .child(group.help()),
                             ),
@@ -502,28 +543,35 @@ impl Render for AppearancePage {
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().text_xl().child("外观"))
             .child(
                 div()
-                    .text_sm()
+                    .text_size(crate::ui::TITLE)
+                    .child(crate::i18n::tr!("settings-appearance")),
+            )
+            .child(
+                div()
+                    .text_size(crate::ui::SMALL)
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!(
-                        "当前主题：{}",
-                        cx.global::<theme::Appearance>().name
+                    .child(crate::i18n::tr!(
+                        "appearance-current-theme",
+                        theme = (cx.global::<theme::Appearance>().name).to_string()
                     )),
             )
             .child(
                 div()
-                    .text_sm()
+                    .text_size(crate::ui::SMALL)
                     .text_color(cx.theme().muted_foreground)
-                    .child("更改自动保存并立即生效。Default 使用桌面或内置默认值。"),
+                    .child(crate::i18n::tr!("appearance-autosave")),
             );
         if let Some(path) = self.editor.theme_override() {
             header = header.child(
                 div()
-                    .text_sm()
+                    .text_size(crate::ui::SMALL)
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!("CLI --theme-file 优先：{}", path.display())),
+                    .child(crate::i18n::tr!(
+                        "appearance-theme-override",
+                        path = (path.display()).to_string()
+                    )),
             );
         }
         let body = div()
@@ -541,7 +589,7 @@ impl Render for AppearancePage {
                     div()
                         .id("settings-no-results")
                         .test_support()
-                        .child("没有匹配的设置。尝试其他名称或描述。"),
+                        .child(crate::i18n::tr!("settings-no-results")),
                 )
             })
             .children(
@@ -561,7 +609,11 @@ impl Render for AppearancePage {
                     .flex_shrink_0()
                     .border_t_1()
                     .border_color(cx.theme().border)
-                    .child(div().text_sm().child(self.message.clone()))
+                    .child(
+                        div()
+                            .text_size(crate::ui::SMALL)
+                            .child(self.message.clone()),
+                    )
                     .child(
                         div()
                             .flex()
@@ -571,13 +623,16 @@ impl Render for AppearancePage {
                             .child(
                                 div()
                                     .min_w_0()
-                                    .text_xs()
+                                    .text_size(crate::ui::SMALL)
                                     .truncate()
-                                    .child(format!("配置：{}", self.editor.path().display())),
+                                    .child(crate::i18n::tr!(
+                                        "settings-file",
+                                        path = (self.editor.path().display()).to_string()
+                                    )),
                             )
                             .child(
                                 super::action_button("settings-reset")
-                                    .label("恢复全部默认")
+                                    .label(crate::i18n::tr!("appearance-reset-all"))
                                     .disabled(self.document.is_none())
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.replace_form(&Preferences::default(), window, cx);

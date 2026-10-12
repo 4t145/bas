@@ -19,7 +19,7 @@ fn draft_title_is_saved_to_its_directory_before_switching_and_creation(cx: &mut 
             });
             view.new_thread(Some("/draft/b".into()), window, cx);
             assert!(view.title_edit.is_none());
-            assert_eq!(view.draft_title(), "新 thread");
+            assert_eq!(view.draft_title(), "新建会话");
             assert_eq!(
                 view.new_draft_metadata[&Some("/draft/a".into())]
                     .title

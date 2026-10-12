@@ -6,6 +6,7 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Appearance {
+    pub language: Language,
     pub ui_font_family: Option<String>,
     pub mono_font_family: Option<String>,
     pub font_fallbacks: Option<Vec<String>>,
@@ -18,6 +19,15 @@ pub struct Appearance {
     pub theme_source: ThemeSource,
     pub theme_mode: ThemeMode,
     pub theme_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Language {
+    #[default]
+    #[serde(rename = "zh-CN")]
+    Chinese,
+    #[serde(rename = "en-US")]
+    English,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

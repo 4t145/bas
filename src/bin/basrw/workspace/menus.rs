@@ -12,10 +12,9 @@ use gpui_kit::{
 
 use super::*;
 
-const MENU_WIDTH: f32 = 320.;
-const MENU_MAX_HEIGHT: f32 = 360.;
-const MENU_ROW_HEIGHT: f32 = 28.;
+use crate::ui::{MENU_MAX_HEIGHT, MENU_ROW_HEIGHT, MENU_WIDTH};
 const MENU_PADDING: f32 = 12.;
+pub(super) const SHADOW_PADDING: f32 = 12.;
 
 pub(super) type Builder = Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
 
@@ -35,6 +34,7 @@ struct MenuSurface {
 impl Render for MenuSurface {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .p(px(SHADOW_PADDING))
             .on_action(
                 cx.listener(|this, _: &crate::application::OpenSettings, _, cx| {
                     this.dismiss_for_action(cx);
@@ -105,7 +105,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if !self.compact {
-            return button.dropdown_menu(build).into_any_element();
+            return button
+                .dropdown_menu(move |menu, window, cx| crate::ui::menu(build(menu, window, cx)))
+                .into_any_element();
         }
         let bounds = Rc::new(Cell::new(Bounds::default()));
         let measured = bounds.clone();
@@ -174,7 +176,7 @@ impl Workspace {
         let screen = window
             .display(cx)
             .map(|display| display.bounds().size)
-            .unwrap_or(size(px(MENU_WIDTH), px(MENU_MAX_HEIGHT * 2.)));
+            .unwrap_or(size(px(MENU_WIDTH * 2.), px(MENU_MAX_HEIGHT * 2.)));
         let menu_size = size(
             px(MENU_WIDTH).min(screen.width * 0.8),
             px(rows as f32 * MENU_ROW_HEIGHT + MENU_PADDING)
@@ -183,11 +185,10 @@ impl Workspace {
         );
         let previous_focus = window.focused(cx);
         let content = PopupMenu::build(window, cx, |menu, window, cx| {
-            build(menu, window, cx)
-                .scrollable(true)
-                .min_w(menu_size.width - px(2.))
-                .max_w(menu_size.width - px(2.))
-                .max_h(menu_size.height - px(2.))
+            crate::ui::menu(build(menu, window, cx))
+                .min_w(menu_size.width)
+                .max_w(menu_size.width)
+                .max_h(menu_size.height)
         });
         let parent = window.window_handle();
         let menu = content.clone();
@@ -197,7 +198,7 @@ impl Workspace {
                 let surface = cx.new(|_| MenuSurface { content: menu });
                 cx.new(|cx| {
                     Root::new(surface, window, cx)
-                        .refine_style(&theme::font_style(cx))
+                        .refine_style(&theme::font_style(cx).bg(gpui_kit::transparent_black()))
                         .bordered(false)
                         .window_shadow_size(px(0.))
                 })
@@ -288,12 +289,15 @@ fn popup_options(
             constraint_adjustment: PopupConstraintAdjustment::FLIP_Y
                 | PopupConstraintAdjustment::SLIDE_X
                 | PopupConstraintAdjustment::SLIDE_Y,
-            offset: point(px(0.), px(-4.)),
+            offset: point(px(-SHADOW_PADDING), px(SHADOW_PADDING - 4.)),
             grab: true,
         }),
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
-            menu_size,
+            size(
+                menu_size.width + px(SHADOW_PADDING * 2.),
+                menu_size.height + px(SHADOW_PADDING * 2.),
+            ),
         ))),
         titlebar: None,
         is_resizable: false,

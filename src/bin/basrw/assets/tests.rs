@@ -17,6 +17,15 @@ fn registry_icons_are_embedded_and_render_visible_svg_pixels() {
         IconName::Search,
         IconName::RefreshCw,
         IconName::CornerLeftUp,
+        IconName::Wrench,
+        IconName::Terminal,
+        IconName::FileText,
+        IconName::FilePen,
+        IconName::Globe,
+        IconName::ListTodo,
+        IconName::Circle,
+        IconName::Clock,
+        IconName::X,
     ] {
         let path = icon.path();
         assert!(paths.contains(&path), "registered icon: {path}");

@@ -27,20 +27,30 @@ impl Attachment {
     /// # Errors
     /// Rejects unreadable, non-regular, or oversized files and invalid file URLs.
     pub fn load(path: &Path) -> Result<Self> {
-        let metadata =
-            fs::metadata(path).with_context(|| format!("无法读取 {}", path.display()))?;
+        let metadata = fs::metadata(path).with_context(|| {
+            crate::i18n::tr!("file-read-failed", path = (path.display()).to_string())
+        })?;
         if !metadata.is_file() {
-            bail!("请选择普通文件：{}", path.display());
+            bail!(crate::i18n::tr!(
+                "attachment-regular-file",
+                path = path.display().to_string()
+            ));
         }
         if metadata.len() > MAX_FILE_BYTES {
-            bail!("单个附件不能超过 8 MiB：{}", path.display());
+            bail!(crate::i18n::tr!(
+                "attachment-file-limit",
+                path = path.display().to_string()
+            ));
         }
         let mut data = Vec::new();
         fs::File::open(path)?
             .take(MAX_FILE_BYTES + 1)
             .read_to_end(&mut data)?;
         if data.len() as u64 > MAX_FILE_BYTES {
-            bail!("单个附件不能超过 8 MiB：{}", path.display());
+            bail!(crate::i18n::tr!(
+                "attachment-file-limit",
+                path = path.display().to_string()
+            ));
         }
         let bytes = data.len();
         let name = path
@@ -49,7 +59,7 @@ impl Attachment {
             .to_string_lossy()
             .into_owned();
         let uri = url::Url::from_file_path(path)
-            .map_err(|_| anyhow::anyhow!("附件路径必须是绝对路径"))?
+            .map_err(|_| anyhow::anyhow!(crate::i18n::tr!("attachment-absolute-path")))?
             .to_string();
         let mime = mime_guess::from_path(path).first_raw();
         let mime = mime.unwrap_or("application/octet-stream").to_owned();
@@ -86,7 +96,7 @@ impl Attachment {
             acp::ContentBlock::Resource(acp::EmbeddedResource::new(resource))
         };
         let label = if matches!(content, acp::ContentBlock::Image(_)) {
-            "Image".to_owned()
+            crate::i18n::tr!("attachment-image").to_owned()
         } else {
             compact_label(&name)
         };
@@ -105,13 +115,14 @@ impl Attachment {
     pub fn image(image: &gpui_kit::Image) -> Result<Self> {
         let bytes = image.bytes().len();
         if bytes as u64 > MAX_FILE_BYTES {
-            bail!("单个附件不能超过 8 MiB");
+            bail!(crate::i18n::tr!("attachment-size-limit"));
         }
-        let name = format!("图片.{}", image.format().extension());
+        let label = crate::i18n::tr!("attachment-image");
+        let name = format!("{label}.{}", image.format().extension());
         Ok(Self {
             id: uuid::Uuid::new_v4(),
-            mention: marker("Image"),
-            label: "Image".into(),
+            mention: marker(label),
+            label: label.into(),
             name,
             bytes,
             content: Arc::new(acp::ContentBlock::Image(acp::ImageContent::new(

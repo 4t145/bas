@@ -36,7 +36,7 @@ impl Agents {
                         && page.status(&expected).is_some_and(check::Status::connected)
                     {
                         page.authentications.remove(&expected.id);
-                        page.message = "认证完成，可以继续对话。".into();
+                        page.message = crate::i18n::tr!("auth-complete").into();
                         page.notify_agent_change(Some(expected.id.to_string()), cx);
                     }
                     cx.notify();
@@ -66,7 +66,7 @@ impl Agents {
             .flex_col()
             .gap_2()
             .when(self.dirty(cx) || !self.local_editable, |row| {
-                row.child("请先结束配置编辑，并连接使用当前配置文件的本机 daemon 后认证。")
+                row.child(crate::i18n::tr!("auth-finish-edit"))
             })
             .when(!self.dirty(cx) && self.local_editable, |row| {
                 row.child(panel.clone())

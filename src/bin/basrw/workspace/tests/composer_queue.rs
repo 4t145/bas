@@ -345,7 +345,7 @@ fn clipboard_keeps_text_alongside_images_and_when_the_agent_rejects_images(
             );
             if !image_supported {
                 assert_eq!(text, "图片说明");
-                assert_eq!(view.error.as_deref(), Some("当前 Agent 不支持图片输入"));
+                assert_eq!(view.error.as_deref(), Some("请改用文本描述图片内容。"));
             }
         })
         .expect("mixed clipboard window");

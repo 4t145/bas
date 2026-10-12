@@ -82,7 +82,7 @@ impl Authentication {
             return;
         }
         let Some(service) = cx.try_global::<check::Service>().cloned() else {
-            self.message = "认证服务未启用，请重新打开 BASR。".into();
+            self.message = crate::i18n::tr!("auth-unavailable").into();
             self.status = Status::Failed(self.message.clone());
             cx.emit(Completed(self.status.clone()));
             cx.notify();
@@ -104,7 +104,7 @@ impl Authentication {
         self.input = Some(input);
         self.status = Status::Authenticating;
         cx.emit(Completed(self.status.clone()));
-        self.message = "正在等待 Agent 的认证步骤…".into();
+        self.message = crate::i18n::tr!("auth-waiting").into();
         self.forms.clear();
         self._subscriptions.clear();
         let target = self.window;
@@ -161,12 +161,12 @@ impl Authentication {
                         self.methods = methods.clone();
                     }
                     if self.status.connected() {
-                        self.message = "认证完成，可以继续对话。".into();
+                        self.message = crate::i18n::tr!("auth-complete").into();
                         self.forms.clear();
                     } else {
                         self.message = match &self.status {
                             Status::Failed(message) | Status::Missing(message) => message.clone(),
-                            _ => "Agent 尚未确认认证完成，可重新选择认证方式。".into(),
+                            _ => crate::i18n::tr!("auth-unconfirmed").into(),
                         };
                     }
                     cx.emit(Completed(self.status.clone()));
@@ -175,7 +175,7 @@ impl Authentication {
                     let request = pending
                         .request
                         .as_ref()
-                        .ok_or_else(|| "Agent 未提供请求内容。".to_owned())
+                        .ok_or_else(|| crate::i18n::tr!("auth-empty-request").to_owned())
                         .and_then(|payload| {
                             payload
                                 .decode::<serde_json::Value>()
@@ -218,7 +218,7 @@ impl Authentication {
                                         .is_none_or(|send| send.send(input).is_err())
                                     {
                                         this.message =
-                                            "认证请求已经结束，请重新选择认证方式。".into();
+                                            crate::i18n::tr!("auth-request-ended").into();
                                     }
                                     cx.notify();
                                 },
@@ -226,7 +226,10 @@ impl Authentication {
                             self.forms.insert(request_id, panel);
                         }
                         Err(error) => {
-                            self.message = format!("无法显示 Agent 的请求：{error}");
+                            self.message = crate::i18n::tr!(
+                                "elicitation-display-error",
+                                error = (error).to_string()
+                            );
                         }
                     }
                 }
@@ -234,7 +237,7 @@ impl Authentication {
                     if let Ok(value) = payload.decode::<serde_json::Value>() {
                         self.forms
                             .retain(|_, panel| !panel.read(cx).completed_by(&value));
-                        self.message = "Agent 已确认外部认证完成，正在检查结果…".into();
+                        self.message = crate::i18n::tr!("auth-verifying").into();
                     }
                 }
                 Some(Kind::ElicitationCancelled(request_id)) => {
@@ -247,7 +250,7 @@ impl Authentication {
                     };
                     match result {
                         Ok(plan) if service.address().ip().is_loopback() => {
-                            self.message = "认证终端已打开，请按照终端提示完成认证。".into();
+                            self.message = crate::i18n::tr!("auth-terminal-open").into();
                             let request = service::terminal(&service.runtime(), plan);
                             let generation = self.generation;
                             self._terminal = Some(cx.spawn(async move |view, cx| {
@@ -259,13 +262,12 @@ impl Authentication {
                             }));
                         }
                         _ => {
-                            self.message =
-                                "无法执行这个认证终端，请在 daemon 所在主机认证。".into();
+                            self.message = crate::i18n::tr!("auth-remote-terminal").into();
                             self.cancel(cx);
                         }
                     }
                 }
-                None => self.message = "daemon 返回了无效的认证事件。".into(),
+                None => self.message = crate::i18n::tr!("auth-invalid-event").into(),
             },
         }
         cx.notify();
@@ -283,8 +285,7 @@ impl Authentication {
         let exit_code = match result {
             Ok(code) => {
                 if code != 0 {
-                    self.message =
-                        format!("认证失败（退出码 {code}）。请查看终端中的错误信息后重试。");
+                    self.message = crate::i18n::tr!("auth-exit-failed", code = (code).to_string());
                 }
                 code
             }
@@ -314,7 +315,7 @@ impl Authentication {
             program: String::new(),
             methods: self.methods.clone(),
         };
-        self.message = "认证已取消，草稿会保留。".into();
+        self.message = crate::i18n::tr!("auth-cancelled").into();
         cx.emit(Completed(self.status.clone()));
         cx.notify();
     }
@@ -323,12 +324,12 @@ impl Authentication {
 impl Authentication {
     fn status_label(&self) -> &'static str {
         match &self.status {
-            Status::Authenticating => "正在认证",
-            Status::Connected(_) => "认证完成",
-            Status::Failed(_) | Status::Missing(_) => "认证未完成",
-            Status::AuthenticationRequired { .. } => "需要认证",
-            Status::Checking | Status::Connecting => "正在读取认证方式",
-            Status::Installed(_) => "请选择认证方式",
+            Status::Authenticating => crate::i18n::tr!("auth-active"),
+            Status::Connected(_) => crate::i18n::tr!("auth-done"),
+            Status::Failed(_) | Status::Missing(_) => crate::i18n::tr!("auth-incomplete"),
+            Status::AuthenticationRequired { .. } => crate::i18n::tr!("auth-required"),
+            Status::Checking | Status::Connecting => crate::i18n::tr!("auth-loading-methods"),
+            Status::Installed(_) => crate::i18n::tr!("auth-choose-method"),
         }
     }
 }
@@ -351,7 +352,7 @@ impl Render for Authentication {
             .flex_col()
             .gap_3()
             .min_w_0()
-            .text_sm()
+            .text_size(crate::ui::SMALL)
             .child(
                 div()
                     .flex()
@@ -359,16 +360,19 @@ impl Render for Authentication {
                     .gap_2()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(crate::ui::SMALL)
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(format!("{} 认证", self.spec.id)),
+                            .child(crate::i18n::tr!(
+                                "auth-agent-title",
+                                agent = (self.spec.id).to_string()
+                            )),
                     )
                     .child(
                         div()
                             .id("authentication-state")
                             .test_support()
                             .flex_shrink_0()
-                            .text_xs()
+                            .text_size(crate::ui::SMALL)
                             .text_color(status_color)
                             .bg(cx.theme().muted)
                             .rounded_sm()
@@ -389,10 +393,14 @@ impl Render for Authentication {
                         .min_w_0()
                         .whitespace_normal()
                         .when(failed, |message| {
-                            message.text_sm().text_color(cx.theme().danger)
+                            message
+                                .text_size(crate::ui::SMALL)
+                                .text_color(cx.theme().danger)
                         })
                         .when(!failed, |message| {
-                            message.text_xs().text_color(cx.theme().foreground)
+                            message
+                                .text_size(crate::ui::SMALL)
+                                .text_color(cx.theme().foreground)
                         })
                         .child(crate::tooltip::wrap_tokens(&self.message)),
                 )
@@ -409,9 +417,9 @@ impl Render for Authentication {
                         .when(self.methods.is_empty(), |panel| {
                             panel.child(
                                 div()
-                                    .text_xs()
+                                    .text_size(crate::ui::SMALL)
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Agent 未提供可用的认证方式，请参考它的认证说明。"),
+                                    .child(crate::i18n::tr!("auth-no-methods")),
                             )
                         })
                         .children(self.methods.iter().enumerate().map(|(index, method)| {
@@ -442,7 +450,7 @@ impl Render for Authentication {
                                         div()
                                             .id(format!("authentication-description-{index}"))
                                             .test_support()
-                                            .text_xs()
+                                            .text_size(crate::ui::SMALL)
                                             .text_color(cx.theme().muted_foreground)
                                             .pl_2()
                                             .min_w_0()
@@ -453,7 +461,7 @@ impl Render for Authentication {
                                 .when_some(unsupported, |row, reason| {
                                     row.child(
                                         div()
-                                            .text_xs()
+                                            .text_size(crate::ui::SMALL)
                                             .text_color(cx.theme().muted_foreground)
                                             .pl_2()
                                             .child(crate::tooltip::wrap_tokens(&reason)),
@@ -468,7 +476,7 @@ impl Render for Authentication {
                     div().flex().child(
                         Button::new("authentication-cancel")
                             .small()
-                            .label("取消认证")
+                            .label(crate::i18n::tr!("auth-cancel"))
                             .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                     ),
                 )

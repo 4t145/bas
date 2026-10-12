@@ -47,7 +47,7 @@ async fn disconnected_approval_stream_reports_failure_without_a_successful_empty
     assert_eq!(pending_update(&mut events).await.len(), 1);
     let message = unavailable_update(&mut events).await;
     assert!(message.contains("审批连接中断"));
-    assert!(message.contains("待审批请求已取消"));
+    assert!(message.contains("请求已取消"));
     task.abort();
     let _ = task.await;
 }

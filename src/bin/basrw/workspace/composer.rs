@@ -38,9 +38,9 @@ impl Workspace {
             cx,
         )
         .tooltip(if self.composer_expanded {
-            "收起消息编辑器 · Alt Shift Escape"
+            crate::i18n::tr!("composer-collapse")
         } else {
-            "展开消息编辑器 · Alt Shift Escape"
+            crate::i18n::tr!("composer-expand")
         })
         .on_click(cx.listener(|this, _, window, cx| this.toggle_composer_expansion(window, cx)))
     }
@@ -105,13 +105,13 @@ impl Workspace {
         match self.composer_mode {
             Mode::Send => "Enter",
             Mode::Newline if cfg!(target_os = "macos") => "⌘ Enter",
-            Mode::Newline => "Ctrl Enter",
+            Mode::Newline => "Ctrl+Enter",
         }
     }
 
     pub(super) fn composer_newline_shortcut(&self) -> &'static str {
         match self.composer_mode {
-            Mode::Send => "Shift Enter",
+            Mode::Send => "Shift+Enter",
             Mode::Newline => "Enter",
         }
     }

@@ -1,9 +1,10 @@
 //! Window-bound hints for text supplied by agents, paths, and errors.
 
+use gpui_kit::base::StyledExt;
 use gpui_kit::{
-    AnyView, App, Div, IntoElement, ParentElement, SharedString, Stateful,
-    StatefulInteractiveElement, TestSupportExt, Window, component::tooltip::Tooltip, div,
-    prelude::*, px,
+    AnyView, App, Div, FontWeight, IntoElement, ParentElement, SharedString, Stateful,
+    StatefulInteractiveElement, TestSupportExt, Window, component::ActiveTheme,
+    component::tooltip::Tooltip, div, prelude::*, px,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -46,20 +47,39 @@ pub(crate) fn bounded(
 }
 
 pub(crate) fn view(text: impl Into<SharedString>, window: &mut Window, cx: &mut App) -> AnyView {
+    view_with_id("bounded-tooltip-content", text, window, cx)
+}
+
+pub(crate) fn view_with_id(
+    id: &'static str,
+    text: impl Into<SharedString>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyView {
     let viewport = window.viewport_size();
     let width = (f32::from(viewport.width) - EDGE_SPACE).clamp(1., MAX_WIDTH);
     let height = (f32::from(viewport.height) - EDGE_SPACE).clamp(1., MAX_HEIGHT);
-    let content = wrap_tokens(&text.into());
+    let text = text.into();
+    let content = wrap_tokens(&text);
+    let style = crate::theme::font_style(cx);
     Tooltip::element(move |_, _| {
         div()
-            .id("bounded-tooltip-content")
+            .id(id)
             .test_support()
+            .role(gpui_kit::Role::Label)
+            .aria_label(text.clone())
             .max_w(px((width - 16.).max(1.)))
             .max_h(px((height - 12.).max(1.)))
             .overflow_y_scroll()
+            .text_size(crate::ui::SMALL)
             .whitespace_normal()
             .child(content.clone())
     })
+    .refine_style(&style)
+    .font_family(cx.theme().font_family.clone())
+    .font_weight(FontWeight::NORMAL)
+    .text_size(crate::ui::SMALL)
+    .line_height(gpui_kit::TextStyle::default().line_height)
     .max_w(px(width))
     .max_h(px(height))
     .build(window, cx)

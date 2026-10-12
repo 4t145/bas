@@ -124,7 +124,7 @@ impl Workspace {
             .collect();
         let summary = prefix.split_whitespace().collect::<Vec<_>>().join(" ");
         let summary = if summary.is_empty() {
-            "回复已完成".to_owned()
+            crate::i18n::tr!("response-completed").to_owned()
         } else {
             summary
         };

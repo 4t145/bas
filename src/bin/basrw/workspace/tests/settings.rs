@@ -15,6 +15,78 @@ fn close_settings(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn language_updates_open_windows_and_preserves_draft_selection_and_focus(cx: &mut TestAppContext) {
+    if !crate::i18n::isolated_language_test(
+        "workspace::tests::settings::language_updates_open_windows_and_preserves_draft_selection_and_focus",
+    ) {
+        return;
+    }
+    use crate::i18n::Language;
+    let fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.composer.update(cx, |input, cx| {
+                input.set_value("Draft 草稿", window, cx);
+                input.set_selected_range(0..5, cx);
+            });
+            view.open_settings(window, cx);
+        });
+    })
+    .expect("prepare draft and open settings");
+    let settings = settings_window(cx);
+    for (language, search, composer, close) in [
+        (
+            Language::English,
+            "Search conversations…",
+            "Describe your task…",
+            "Close settings",
+        ),
+        (
+            Language::Chinese,
+            "搜索会话…",
+            "描述你想完成的任务…",
+            "关闭设置",
+        ),
+    ] {
+        cx.update_window(settings.into(), |_, window, cx| {
+            let editor = theme::Editor::current(cx);
+            let mut document = editor.load().expect("current settings");
+            let mut preferences = document.preferences.clone();
+            preferences.language = language;
+            editor
+                .save(&mut document, preferences, window, cx)
+                .expect("persist language");
+        })
+        .expect("change language from settings");
+        cx.run_until_parked();
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let view = fixture.view.read(cx);
+            assert_eq!(
+                view.search.read(cx).presentation().placeholder().as_ref(),
+                search
+            );
+            assert_eq!(
+                view.composer.read(cx).presentation().placeholder().as_ref(),
+                composer
+            );
+            assert_eq!(view.composer.read(cx).value(), "Draft 草稿");
+            assert_eq!(view.composer.read(cx).selected_range(), 0..5);
+            assert!(!window.is_window_active());
+        })
+        .expect("workspace localizes without disturbing the draft or taking focus");
+        cx.update_window(settings.into(), |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("settings-close").label(), Some(close));
+            assert!(window.is_window_active());
+        })
+        .expect("existing settings window localizes and keeps focus");
+    }
+    close_settings(cx);
+}
+
+#[gpui_kit::test]
 fn enter_preference_saved_in_settings_updates_workspace_without_taking_focus(
     cx: &mut TestAppContext,
 ) {

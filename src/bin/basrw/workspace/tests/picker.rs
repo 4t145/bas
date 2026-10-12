@@ -459,7 +459,7 @@ fn established_empty_session_locks_its_agent_in_both_modes(cx: &mut TestAppConte
             window.render_frame(cx);
             let button = window.find("agent-picker");
             assert!(!fixture.view.read(cx).can_select_agent());
-            assert_eq!(button.label(), Some("Agent · embedded"));
+            assert_eq!(button.label(), Some("智能体 · \u{2068}embedded\u{2069}"));
             let windows_before = cx.windows();
             window.click("agent-picker", cx);
             window.press("enter", cx);
@@ -721,7 +721,11 @@ fn stale_catalog_cannot_replace_the_agent_while_creating_or_waiting_for_login(
                 assert_eq!(view.selected_agent, "new-agent");
                 assert_eq!(view.authentication_required.as_deref(), Some("new-agent"));
                 assert!(!view.creating);
-                assert!(view.send_hint(cx).contains("new-agent"));
+                assert!(
+                    view.authentication_hint()
+                        .expect("authentication message")
+                        .contains("new-agent")
+                );
                 assert_eq!(view.composer.read(cx).value(), "new agent draft");
                 epoch
             })

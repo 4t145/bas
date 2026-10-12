@@ -311,7 +311,7 @@ pub(super) fn fallback(dark: bool) -> Resolved {
     };
     Resolved {
         config,
-        name: "System".into(),
+        name: "BASR".into(),
         background: WindowBackgroundAppearance::Opaque,
         content_font_size: None,
         font_fallbacks: Vec::new(),

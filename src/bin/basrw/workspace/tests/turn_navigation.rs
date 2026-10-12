@@ -10,11 +10,11 @@ struct TurnTargets {
     item_count: usize,
 }
 
-fn add_turns(fixture: &Fixture, window: &mut Window, cx: &mut App) -> TurnTargets {
+fn add_turns(fixture: &Fixture, count: usize, window: &mut Window, cx: &mut App) -> TurnTargets {
     fixture.view.update(cx, |view, cx| {
         let session = view.active.expect("active session");
         let mut cursor = view.conversation.as_ref().expect("conversation").cursor;
-        for number in 1..=3 {
+        for number in 1..=count {
             let turn = TurnId::new();
             let events = [
                 EventKind::TurnStarted { turn },
@@ -29,7 +29,15 @@ fn add_turns(fixture: &Fixture, window: &mut Window, cx: &mut App) -> TurnTarget
                         .status(ToolCallStatus::Completed),
                 )),
                 EventKind::Acp(SessionUpdate::AgentMessageChunk(ContentChunk::new(
-                    format!("第{number}轮回复。\n\n{}", "详细内容。\n\n".repeat(80)).into(),
+                    format!(
+                        "第{number}轮回复。\n\n{}",
+                        "详细内容。\n\n".repeat(if number == 2 || number == count {
+                            80
+                        } else {
+                            2
+                        })
+                    )
+                    .into(),
                 ))),
                 EventKind::TurnFinished {
                     turn,
@@ -59,7 +67,7 @@ fn add_turns(fixture: &Fixture, window: &mut Window, cx: &mut App) -> TurnTarget
                     .then_some(index)
             })
             .collect();
-        assert_eq!(user_items.len(), 3);
+        assert_eq!(user_items.len(), count);
         assert!(
             conversation.rows.len() < conversation.items.len(),
             "thoughts and tools should share activity rows"
@@ -78,13 +86,13 @@ fn add_turns(fixture: &Fixture, window: &mut Window, cx: &mut App) -> TurnTarget
 }
 
 #[gpui_kit::test]
-fn turn_markers_follow_user_messages_and_jump_to_grouped_rows(cx: &mut TestAppContext) {
+fn turn_shortcuts_stay_together_and_jump_to_grouped_rows(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     attach(&fixture, session(), cx);
     while fixture.commands.try_recv().is_ok() {}
 
     cx.update_window(fixture.window.into(), |_, window, cx| {
-        let targets = add_turns(&fixture, window, cx);
+        let targets = add_turns(&fixture, 3, window, cx);
         assert_ne!(targets.user_items[1], targets.user_rows[1]);
         window.render_frame(cx);
 
@@ -93,7 +101,10 @@ fn turn_markers_follow_user_messages_and_jump_to_grouped_rows(cx: &mut TestAppCo
         let rail = window.find("turn-navigation");
         assert!(rail.visible());
         let rail = rail.bounds();
-        assert_eq!(rail.left(), timeline.right());
+        assert_eq!(
+            rail.left(),
+            timeline.right() + px(chat::THREAD_BODY_PADDING)
+        );
         assert_eq!(rail.right(), body.right());
         assert_eq!(rail.size.width, px(24.));
         let mut prompt_centers = Vec::new();
@@ -102,7 +113,7 @@ fn turn_markers_follow_user_messages_and_jump_to_grouped_rows(cx: &mut TestAppCo
                 assert!(marker.visible(), "prompt marker {index} should be visible");
                 assert_eq!(marker.role(), Some(gpui_kit::Role::Button));
                 let bounds = marker.bounds();
-                assert_eq!(bounds.left(), rail.left() + px(1.));
+                assert_eq!(bounds.left(), rail.left());
                 assert_eq!(bounds.right(), rail.right());
                 assert_eq!(bounds.size.height, px(12.));
                 assert!(bounds.top() >= rail.top() && bounds.bottom() <= rail.bottom());
@@ -115,6 +126,12 @@ fn turn_markers_follow_user_messages_and_jump_to_grouped_rows(cx: &mut TestAppCo
             }
         }
         assert_eq!(prompt_centers.len(), targets.user_items.len());
+        for pair in prompt_centers.windows(2) {
+            assert_eq!(pair[1] - pair[0], px(12.), "shortcuts have fixed spacing");
+        }
+        let group = window.find("turn-shortcuts").bounds();
+        assert_eq!(group.size.height, px(48.));
+        assert_eq!(group.center().y, rail.center().y);
         assert_eq!(
             window
                 .find(format!("turn-marker-{}", targets.user_items[0]))
@@ -126,11 +143,15 @@ fn turn_markers_follow_user_messages_and_jump_to_grouped_rows(cx: &mut TestAppCo
         assert_eq!(end.role(), Some(gpui_kit::Role::Button));
         assert_eq!(end.label(), Some("跳到对话末尾"));
         let end = end.bounds();
-        assert_eq!(end.left(), rail.left() + px(1.));
+        assert_eq!(end.left(), rail.left());
         assert_eq!(end.right(), rail.right());
         assert_eq!(end.size.height, px(12.));
         assert!(end.bottom() <= rail.bottom());
-        assert!(rail.bottom() - end.bottom() <= px(1.));
+        assert_eq!(end.bottom(), group.bottom());
+        assert_eq!(
+            end.center().y - *prompt_centers.last().expect("last shortcut"),
+            px(12.)
+        );
         assert!(prompt_centers.iter().all(|&y| end.center().y > y));
         let end_line = window.find("turn-marker-line-end");
         assert!(end_line.visible());
@@ -151,6 +172,26 @@ fn turn_markers_follow_user_messages_and_jump_to_grouped_rows(cx: &mut TestAppCo
         let scroll = list.logical_scroll_top();
         assert_eq!(scroll.item_ix, targets.user_rows[0]);
         assert_eq!(scroll.offset_in_item, px(0.));
+        for height in [600., 1000.] {
+            window.resize(size(px(920.), px(height)));
+            window.bounds_changed(cx);
+            window.render_frame(cx);
+            let group = window.find("turn-shortcuts").bounds();
+            let rail = window.find("turn-navigation").bounds();
+            assert_eq!(group.size.height, px(48.));
+            assert_eq!(group.center().y, rail.center().y);
+            let first = window
+                .find(format!("turn-marker-{}", targets.user_items[0]))
+                .bounds();
+            let next = window
+                .find(format!("turn-marker-{}", targets.user_items[1]))
+                .bounds();
+            assert_eq!(
+                next.top() - first.top(),
+                px(12.),
+                "resizing keeps the group compact"
+            );
+        }
         window.hover(format!("turn-marker-{}", targets.user_items[0]), cx);
     })
     .expect("turn markers");
@@ -159,8 +200,105 @@ fn turn_markers_follow_user_messages_and_jump_to_grouped_rows(cx: &mut TestAppCo
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("bounded-tooltip-content").visible());
+        assert_eq!(
+            window.find("bounded-tooltip-content").label(),
+            Some("第1轮请求：请检查这一段内容")
+        );
     })
     .expect("prompt hint");
+    assert!(fixture.commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
+fn many_turn_shortcuts_scroll_independently_and_keep_the_end_reachable(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    let targets = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            add_turns(&fixture, 80, window, cx)
+        })
+        .expect("long conversation");
+    cx.run_until_parked();
+    for compact in [false, true] {
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            fixture.view.update(cx, |view, cx| {
+                view.compact = compact;
+                view.output_open = true;
+                view.resize_window(window, cx);
+                view.list.scroll_to(gpui_kit::ListOffset::default());
+            });
+            window.resize(size(
+                px(if compact { 420. } else { 920. }),
+                px(if compact { 440. } else { 700. }),
+            ));
+            window.bounds_changed(cx);
+            window.render_frame(cx);
+            let session = fixture.view.read(cx).active.expect("active session");
+            let prompts = format!("turn-prompts-{session}");
+            window.scroll(
+                prompts.clone(),
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(5000.))),
+                cx,
+            );
+            let rail = window.find("turn-navigation").bounds();
+            let group = window.find("turn-shortcuts").bounds();
+            let end = window.find("turn-marker-end").bounds();
+            let viewport = window.find(prompts.clone()).bounds();
+            assert!(
+                group.top() >= rail.top() && group.bottom() <= rail.bottom(),
+                "long groups fit the viewport"
+            );
+            assert!(viewport.bottom() <= end.top());
+            assert!(viewport.size.height <= px(240.));
+            assert!(group.size.height <= px(252.));
+            assert_eq!(group.center().y, rail.center().y);
+            assert_eq!(end.size.height, px(12.));
+            let first = format!("turn-marker-{}", targets.user_items[0]);
+            let last = format!(
+                "turn-marker-{}",
+                targets.user_items.last().expect("last turn")
+            );
+            assert!(window.find(first).visible());
+            assert!(
+                !window.find(last.clone()).visible(),
+                "offscreen shortcuts are clipped"
+            );
+            let before = fixture.view.read(cx).list.logical_scroll_top();
+            window.scroll(
+                prompts.clone(),
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-5000.))),
+                cx,
+            );
+            window.scroll(
+                prompts,
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-5000.))),
+                cx,
+            );
+            let after = fixture.view.read(cx).list.logical_scroll_top();
+            assert_eq!(
+                after.item_ix, before.item_ix,
+                "scrolling shortcuts, including at their boundary, leaves the conversation in place"
+            );
+            assert_eq!(after.offset_in_item, before.offset_in_item);
+            assert!(window.find(last.clone()).visible());
+            assert!(window.find("turn-marker-end").visible());
+            window.click(last, cx);
+            let list = fixture.view.read(cx).list.clone();
+            let target = *targets.user_rows.last().expect("last user row");
+            assert!(list.logical_scroll_top().item_ix <= target);
+            let bounds = list.bounds_for_item(target).expect("last user is laid out");
+            assert!(
+                bounds.bottom() > list.viewport_bounds().top()
+                    && bounds.top() < list.viewport_bounds().bottom(),
+                "last user is visible after jumping"
+            );
+            assert!(!list.is_following_tail());
+            window.click("turn-marker-end", cx);
+            assert!(list.is_following_tail());
+        })
+        .expect("shortcuts in full and compact layouts");
+    }
     assert!(fixture.commands.try_recv().is_err());
 }
 
@@ -171,7 +309,7 @@ fn end_marker_and_ctrl_end_resume_following_the_timeline(cx: &mut TestAppContext
     while fixture.commands.try_recv().is_ok() {}
 
     cx.update_window(fixture.window.into(), |_, window, cx| {
-        let targets = add_turns(&fixture, window, cx);
+        let targets = add_turns(&fixture, 3, window, cx);
         window.render_frame(cx);
         let first = format!("turn-marker-{}", targets.user_items[0]);
         let list = fixture.view.read(cx).list.clone();

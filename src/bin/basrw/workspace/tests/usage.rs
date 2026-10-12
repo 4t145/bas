@@ -60,6 +60,8 @@ fn assert_ring_in_toolbar(window: &mut Window, session: SessionId) {
     assert!(
         button
             .label()
+            .map(crate::i18n::visible_text)
+            .as_deref()
             .expect("usage accessible name")
             .contains("查看详情")
     );
@@ -84,7 +86,15 @@ fn open_details(fixture: &Fixture, cx: &mut TestAppContext) -> AnyWindowHandle {
 
 fn assert_labels(window: &Window, labels: &[(&'static str, &str)]) {
     for (id, expected) in labels {
-        assert_eq!(window.find(*id).label(), Some(*expected), "{id}");
+        assert_eq!(
+            window
+                .find(*id)
+                .label()
+                .map(crate::i18n::visible_text)
+                .as_deref(),
+            Some(*expected),
+            "{id}"
+        );
     }
 }
 
@@ -130,8 +140,12 @@ fn usage_details_update_live_in_the_full_composer(cx: &mut TestAppContext) {
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
         assert_eq!(
-            window.find("usage-hover-summary").label(),
-            Some("12% · 12k / 100k")
+            window
+                .find("usage-hint")
+                .label()
+                .map(crate::i18n::visible_text)
+                .as_deref(),
+            Some("上下文用量 12% · 12k / 100k · 查看详情")
         );
     })
     .expect("hover preview is available before opening details");
@@ -142,7 +156,7 @@ fn usage_details_update_live_in_the_full_composer(cx: &mut TestAppContext) {
         window.render_frame(cx);
         assert_eq!(fixture.view.read(cx).usage_details_open, Some(meta.id));
         assert!(
-            window.try_find("usage-hover-summary").is_none(),
+            window.try_find("usage-hint").is_none(),
             "hover preview must not cover details while the pointer remains on the ring"
         );
         assert!(
@@ -154,9 +168,9 @@ fn usage_details_update_live_in_the_full_composer(cx: &mut TestAppContext) {
             window,
             &[
                 ("usage-summary", "12% · 12k / 100k"),
-                ("usage-used", "已用 tokens · 12,000"),
+                ("usage-used", "已用词元 · 12,000"),
                 ("usage-capacity", "上下文容量 · 100,000"),
-                ("usage-remaining", "剩余 tokens · 88,000"),
+                ("usage-remaining", "剩余词元 · 88,000"),
                 ("usage-cost", "会话累计费用 · 0.05 USD"),
             ],
         );
@@ -183,8 +197,8 @@ fn usage_details_update_live_in_the_full_composer(cx: &mut TestAppContext) {
             window,
             &[
                 ("usage-summary", "85% · 85k / 100k"),
-                ("usage-used", "已用 tokens · 85,000"),
-                ("usage-remaining", "剩余 tokens · 15,000"),
+                ("usage-used", "已用词元 · 85,000"),
+                ("usage-remaining", "剩余词元 · 15,000"),
                 ("usage-cost", "会话累计费用 · 0.10 USD"),
             ],
         );
@@ -265,7 +279,11 @@ fn compact_usage_popup_updates_without_clipping_or_changing_the_draft(cx: &mut T
             );
         }
         assert_eq!(
-            window.find("usage-cost").label(),
+            window
+                .find("usage-cost")
+                .label()
+                .map(crate::i18n::visible_text)
+                .as_deref(),
             Some("会话累计费用 · 0.0050 EUR")
         );
     })
@@ -283,7 +301,7 @@ fn compact_usage_popup_updates_without_clipping_or_changing_the_draft(cx: &mut T
             window,
             &[
                 ("usage-summary", "50% · 50k / 100k"),
-                ("usage-remaining", "剩余 tokens · 50,000"),
+                ("usage-remaining", "剩余词元 · 50,000"),
             ],
         );
         assert!(window.try_find("usage-cost").is_none());
@@ -321,14 +339,17 @@ fn usage_unknown_capacity_and_over_capacity_keep_honest_details(cx: &mut TestApp
             window,
             &[
                 ("usage-summary", "5 · 容量未知"),
-                ("usage-used", "已用 tokens · 5"),
+                ("usage-used", "已用词元 · 5"),
                 ("usage-capacity", "上下文容量 · 未知"),
             ],
         );
         assert!(window.try_find("usage-remaining").is_none());
         assert!(window.try_find("usage-cost").is_none());
         let button = window.find(format!("context-usage-{}", meta.id));
-        let name = button.label().expect("unknown capacity accessible name");
+        let name = button
+            .label()
+            .map(crate::i18n::visible_text)
+            .expect("unknown capacity accessible name");
         assert!(!name.contains('%') && !name.contains("NaN") && !name.contains("inf"));
     })
     .expect("zero capacity does not invent a percentage");
@@ -337,27 +358,27 @@ fn usage_unknown_capacity_and_over_capacity_keep_honest_details(cx: &mut TestApp
             acp::UsageUpdate::new(125, 100),
             [
                 ("usage-summary", "125% · 125 / 100"),
-                ("usage-used", "已用 tokens · 125"),
+                ("usage-used", "已用词元 · 125"),
                 ("usage-capacity", "上下文容量 · 100"),
-                ("usage-remaining", "剩余 tokens · 0"),
+                ("usage-remaining", "剩余词元 · 0"),
             ],
         ),
         (
             acp::UsageUpdate::new(5, 1_000),
             [
                 ("usage-summary", "1% · 5 / 1k"),
-                ("usage-used", "已用 tokens · 5"),
+                ("usage-used", "已用词元 · 5"),
                 ("usage-capacity", "上下文容量 · 1,000"),
-                ("usage-remaining", "剩余 tokens · 995"),
+                ("usage-remaining", "剩余词元 · 995"),
             ],
         ),
         (
             acp::UsageUpdate::new(169, 200),
             [
                 ("usage-summary", "85% · 169 / 200"),
-                ("usage-used", "已用 tokens · 169"),
+                ("usage-used", "已用词元 · 169"),
                 ("usage-capacity", "上下文容量 · 200"),
-                ("usage-remaining", "剩余 tokens · 31"),
+                ("usage-remaining", "剩余词元 · 31"),
             ],
         ),
     ];
@@ -394,7 +415,11 @@ fn switching_threads_closes_usage_details_and_never_reuses_the_old_value(cx: &mu
         cx.update_window(previous_details, |_, window, cx| {
             window.render_frame(cx);
             assert_eq!(
-                window.find("usage-summary").label(),
+                window
+                    .find("usage-summary")
+                    .label()
+                    .map(crate::i18n::visible_text)
+                    .as_deref(),
                 Some("12% · 12k / 100k")
             );
         })
@@ -417,8 +442,12 @@ fn switching_threads_closes_usage_details_and_never_reuses_the_old_value(cx: &mu
                     .is_none()
             );
             assert_eq!(
-                window.find(format!("context-usage-{}", second.id)).label(),
-                Some("上下文 90% · 900 / 1k · 查看详情")
+                window
+                    .find(format!("context-usage-{}", second.id))
+                    .label()
+                    .map(crate::i18n::visible_text)
+                    .as_deref(),
+                Some("上下文用量 90% · 900 / 1k · 查看详情")
             );
             assert!(fixture.view.read(cx).menu.is_none());
             assert!(fixture.view.read(cx).usage_details_open.is_none());
@@ -434,7 +463,7 @@ fn switching_threads_closes_usage_details_and_never_reuses_the_old_value(cx: &mu
                 window,
                 &[
                     ("usage-summary", "90% · 900 / 1k"),
-                    ("usage-used", "已用 tokens · 900"),
+                    ("usage-used", "已用词元 · 900"),
                     ("usage-capacity", "上下文容量 · 1,000"),
                 ],
             );
@@ -462,7 +491,11 @@ fn switching_window_modes_closes_usage_details_and_restores_hover(cx: &mut TestA
         window.render_frame(cx);
         assert_eq!(fixture.view.read(cx).usage_details_open, Some(meta.id));
         assert_eq!(
-            window.find("usage-summary").label(),
+            window
+                .find("usage-summary")
+                .label()
+                .map(crate::i18n::visible_text)
+                .as_deref(),
             Some("12% · 12k / 100k")
         );
         window.press("ctrl-shift-m", cx);
@@ -485,8 +518,12 @@ fn switching_window_modes_closes_usage_details_and_restores_hover(cx: &mut TestA
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
         assert_eq!(
-            window.find("usage-hover-summary").label(),
-            Some("12% · 12k / 100k"),
+            window
+                .find("usage-hint")
+                .label()
+                .map(crate::i18n::visible_text)
+                .as_deref(),
+            Some("上下文用量 12% · 12k / 100k · 查看详情"),
             "switching modes restores the hover preview"
         );
         window.press("ctrl-shift-m", cx);
@@ -513,7 +550,11 @@ fn switching_window_modes_closes_usage_details_and_restores_hover(cx: &mut TestA
         window.render_frame(cx);
         assert_eq!(fixture.view.read(cx).usage_details_open, Some(meta.id));
         assert_eq!(
-            window.find("usage-summary").label(),
+            window
+                .find("usage-summary")
+                .label()
+                .map(crate::i18n::visible_text)
+                .as_deref(),
             Some("12% · 12k / 100k")
         );
         window.press("escape", cx);

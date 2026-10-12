@@ -43,8 +43,8 @@ impl Workspace {
             self.delete_pending.remove(&session);
             self.connected = false;
             self.operation_error(
-                "删除失败",
-                "连接任务已停止；请重新打开 BASR 后重试。会话、草稿和队列未删除。".into(),
+                crate::i18n::tr!("session-delete-failed"),
+                crate::i18n::tr!("session-delete-reopen").into(),
                 cx,
             );
         }
@@ -87,7 +87,11 @@ impl Workspace {
         let pinned = !self.pinned.contains(&session);
         if let Some(store) = &mut self.restore_store {
             if let Err(error) = store.set_pinned(session, pinned) {
-                self.operation_error("无法保存置顶", error.to_string(), cx);
+                self.operation_error(
+                    crate::i18n::tr!("session-pin-failed"),
+                    error.to_string(),
+                    cx,
+                );
                 return;
             }
             self.pinned = store.pinned();
@@ -120,12 +124,9 @@ impl Workspace {
             return;
         };
         let confirmation = crate::application::Confirmation {
-            title: "永久删除 thread？".into(),
-            message: format!(
-                "将永久删除「{}」，停止它的 Agent，并清除会话历史、草稿和待发送队列。\n此操作无法恢复；只想隐藏时请使用归档。",
-                title(meta)
-            ),
-            confirm_label: "永久删除".into(),
+            title: crate::i18n::tr!("session-delete-title").into(),
+            message: crate::i18n::tr!("session-delete-confirm", title = (title(meta)).to_string()),
+            confirm_label: crate::i18n::tr!("action-delete-permanently").into(),
         };
         let view = cx.entity().downgrade();
         if let Err(error) = crate::application::open_confirmation(
@@ -137,7 +138,11 @@ impl Workspace {
             },
             cx,
         ) {
-            self.operation_error("无法打开删除确认", error.to_string(), cx);
+            self.operation_error(
+                crate::i18n::tr!("session-delete-confirm-failed"),
+                error.to_string(),
+                cx,
+            );
         }
     }
 }

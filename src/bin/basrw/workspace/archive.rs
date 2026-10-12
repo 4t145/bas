@@ -41,8 +41,8 @@ impl Workspace {
         if !self.connection.send(Command::Archive { session, archived }) {
             self.archive_pending.remove(&session);
             self.operation_error(
-                "归档失败",
-                "连接任务已停止；请重新打开 BASR 后重试。草稿和队列已保留。".into(),
+                crate::i18n::tr!("session-archive-failed"),
+                crate::i18n::tr!("connection-reopen-kept").into(),
                 cx,
             );
         }
@@ -66,14 +66,14 @@ impl Workspace {
             },
         )
         .accessibility_label(if archived {
-            "恢复 thread"
+            crate::i18n::tr!("session-restore")
         } else {
-            "归档 thread"
+            crate::i18n::tr!("session-archive")
         })
         .tooltip(if archived {
-            "恢复到普通列表；队列保持暂停"
+            crate::i18n::tr!("session-restore")
         } else {
-            "保留历史并从普通列表隐藏；不会停止当前任务"
+            crate::i18n::tr!("session-archive")
         })
         .disabled(
             !self.connected

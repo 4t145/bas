@@ -1,5 +1,5 @@
 use basr::model::{ContentBlock, Message, Role};
-use gpui_kit::{ListOffset, relative};
+use gpui_kit::ListOffset;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::*;
@@ -9,7 +9,7 @@ const TICK_WIDTH: f32 = 14.;
 const END_TICK_WIDTH: f32 = 18.;
 const HOVER_TICK_WIDTH: f32 = 20.;
 const MARKER_HEIGHT: f32 = 12.;
-const POSITION_HEIGHT: f32 = 0.06;
+const VISIBLE_PROMPTS: usize = 20;
 const PREVIEW_GRAPHEMES: usize = 72;
 
 impl Workspace {
@@ -33,29 +33,31 @@ impl Workspace {
                 _ => None,
             })
             .collect();
-        let prompt_count = prompts.len();
         let session = conversation.session.id;
-        let mut rail = div()
+        let rail = div()
             .id("turn-navigation")
             .test_support()
             .absolute()
             .top(px(0.))
             .bottom(px(0.))
-            .right(px(if self.compact { 0. } else { -RAIL_WIDTH }))
+            .right(px(if self.compact {
+                0.
+            } else {
+                -RAIL_WIDTH - chat::THREAD_BODY_PADDING
+            }))
             .flex()
             .flex_col()
-            .justify_between()
-            .when(prompt_count == 0, |rail| rail.justify_end())
+            .justify_center()
+            .py_1()
             .w(px(RAIL_WIDTH))
-            .flex_shrink_0()
-            .bg(cx.theme().muted.opacity(0.24))
-            .hover(|rail| rail.bg(cx.theme().muted.opacity(0.36)))
-            .border_l_1()
-            .border_color(cx.theme().border.opacity(0.8));
-
-        if let Some(thumb) = self.render_turn_position(cx) {
-            rail = rail.child(thumb);
-        }
+            .flex_shrink_0();
+        let mut markers = div()
+            .id(SharedString::from(format!("turn-prompts-{session}")))
+            .test_support()
+            .w_full()
+            .min_h_0()
+            .max_h(px(MARKER_HEIGHT * VISIBLE_PROMPTS as f32))
+            .overflow_y_scroll();
 
         for (item_index, prompt) in prompts {
             let marker_id = SharedString::from(format!("turn-marker-{item_index}"));
@@ -89,6 +91,7 @@ impl Workspace {
             .aria_label(prompt)
             .group(group)
             .h(px(MARKER_HEIGHT))
+            .flex_shrink_0()
             .w_full()
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -107,77 +110,59 @@ impl Workspace {
                     cx.notify();
                 }
             }));
-            rail = rail.child(marker);
+            markers = markers.child(marker);
         }
 
         let group = SharedString::from("turn-marker-end");
+        let end = crate::tooltip::bounded(
+            group.clone(),
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .id("turn-marker-line-end")
+                        .test_support()
+                        .w(px(END_TICK_WIDTH))
+                        .h(px(3.))
+                        .rounded_full()
+                        .bg(cx.theme().primary.opacity(0.85))
+                        .group_hover(group.clone(), |tick| {
+                            tick.w(px(HOVER_TICK_WIDTH))
+                                .h(px(4.))
+                                .bg(cx.theme().primary)
+                        }),
+                ),
+            crate::i18n::tr!("conversation-end-shortcut"),
+        )
+        .test_support()
+        .role(gpui_kit::Role::Button)
+        .aria_label(crate::i18n::tr!("conversation-end"))
+        .group(group)
+        .h(px(MARKER_HEIGHT))
+        .flex_shrink_0()
+        .w_full()
+        .cursor_pointer()
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.scroll_conversation_to_end(cx);
+        }));
         rail.child(
-            crate::tooltip::bounded(
-                group.clone(),
-                div()
-                    .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        div()
-                            .id("turn-marker-line-end")
-                            .test_support()
-                            .w(px(END_TICK_WIDTH))
-                            .h(px(3.))
-                            .rounded_full()
-                            .bg(cx.theme().primary.opacity(0.85))
-                            .group_hover(group.clone(), |tick| {
-                                tick.w(px(HOVER_TICK_WIDTH))
-                                    .h(px(4.))
-                                    .bg(cx.theme().primary)
-                            }),
-                    ),
-                "跳到对话末尾 · Ctrl+End",
-            )
-            .test_support()
-            .role(gpui_kit::Role::Button)
-            .aria_label("跳到对话末尾")
-            .group(group)
-            .h(px(MARKER_HEIGHT))
-            .w_full()
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.scroll_conversation_to_end(cx);
-            })),
+            div()
+                .id("turn-shortcuts")
+                .test_support()
+                .flex()
+                .flex_col()
+                .w_full()
+                .max_h_full()
+                .rounded_md()
+                .hover(|group| group.bg(cx.theme().muted.opacity(0.24)))
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .child(markers)
+                .child(end),
         )
         .into_any_element()
-    }
-
-    fn render_turn_position(&self, cx: &App) -> Option<AnyElement> {
-        let row_count = self.list.item_count();
-        if row_count == 0 {
-            return None;
-        }
-        let offset = self.list.logical_scroll_top();
-        let row_fraction = self
-            .list
-            .bounds_for_item(offset.item_ix)
-            .map(|bounds| f32::from(offset.offset_in_item) / f32::from(bounds.size.height))
-            .filter(|fraction| fraction.is_finite())
-            .unwrap_or(0.)
-            .clamp(0., 1.);
-        let progress = if self.list.is_following_tail() {
-            1.
-        } else {
-            ((offset.item_ix as f32 + row_fraction) / row_count as f32).clamp(0., 1.)
-        };
-        Some(
-            div()
-                .absolute()
-                .right(px(1.))
-                .top(relative(progress * (1. - POSITION_HEIGHT)))
-                .h(relative(POSITION_HEIGHT))
-                .w(px(5.))
-                .rounded_full()
-                .bg(cx.theme().muted_foreground.opacity(0.55))
-                .into_any_element(),
-        )
     }
 }
 
@@ -212,7 +197,7 @@ fn prompt_preview(message: &Message) -> String {
         }
     }
     if preview.is_empty() {
-        "图片或附件".into()
+        crate::i18n::tr!("attachment-message").into()
     } else {
         preview
     }

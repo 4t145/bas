@@ -3,10 +3,7 @@ use basr::config::agent::Command;
 
 #[test]
 fn availability_probe_login_and_previous_results_have_separate_labels() {
-    assert_eq!(
-        Status::Installed("/tool".into()).label(),
-        "程序可用 · 未检测"
-    );
+    assert_eq!(Status::Installed("/tool".into()).label(), "已安装 · 待检测");
     assert_eq!(Status::Installed("/tool".into()).check_label(), "检测");
     assert_eq!(Status::Connecting.label(), "正在检测…");
     assert_eq!(Status::Connected("/tool".into()).label(), "检测通过");
@@ -35,7 +32,7 @@ async fn local_configuration_is_never_sent_to_a_remote_daemon() {
         )
         .await
         .expect_err("remote endpoint must be rejected without a network request");
-        assert!(error.contains("远端"));
+        assert!(error.contains("本机 basrd"));
         assert!(!error.contains("fixture-secret"));
     }
 }
@@ -55,7 +52,7 @@ async fn unreachable_local_daemon_is_not_reported_as_installed() {
     )
     .await
     .expect_err("not connected");
-    assert!(error.contains("先启动服务"));
+    assert!(error.contains("启动本机 basrd"));
 }
 
 #[test]

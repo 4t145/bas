@@ -72,8 +72,8 @@ fn compact_choices_show_waiting_status_and_submit_native_values(cx: &mut TestApp
                 cx,
             );
             assert!(view.output_open);
-            assert_eq!(view.stream_label(), "等待用户交互…");
-            assert_eq!(view.activity_label().as_deref(), Some("等待用户交互…"));
+            assert_eq!(view.stream_label(), "等待你的回答…");
+            assert_eq!(view.activity_label().as_deref(), Some("等待你的回答…"));
         });
         window.bounds_changed(cx);
         window.render_frame(cx);

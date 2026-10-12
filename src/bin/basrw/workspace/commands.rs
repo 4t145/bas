@@ -103,7 +103,7 @@ impl Workspace {
                 menu.border_b_1()
                     .border_color(cx.theme().border)
                     .p_2()
-                    .child(caption("↑ ↓ 选择 · Tab / Enter 补全 · Esc 关闭", cx))
+                    .child(caption(crate::i18n::tr!("commands-shortcuts"), cx))
                     .children(
                         candidates
                             .into_iter()
@@ -122,7 +122,7 @@ impl Workspace {
                                     .when(index == selected, |row| row.bg(cx.theme().accent))
                                     .child(
                                         div()
-                                            .text_sm()
+                                            .text_size(crate::ui::SMALL)
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child(format!("/{}", command.name)),
                                     )

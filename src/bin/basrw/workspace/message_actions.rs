@@ -3,27 +3,12 @@ use gpui_kit::{Bounds, ListOffset};
 
 use super::*;
 
-const ACTION_FOREGROUND_OPACITY: f32 = 0.5;
-const ACTION_HOVER_OPACITY: f32 = 0.35;
-const ACTION_ACTIVE_OPACITY: f32 = 0.55;
-
 pub(super) fn action_button(
     id: impl Into<gpui_kit::ElementId>,
     icon: IconName,
     cx: &App,
 ) -> Button {
-    let color = cx
-        .theme()
-        .muted_foreground
-        .opacity(ACTION_FOREGROUND_OPACITY);
-    layout::icon_button(id, icon)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(cx.theme().foreground)
-                .hover(cx.theme().muted.opacity(ACTION_HOVER_OPACITY))
-                .active(cx.theme().muted.opacity(ACTION_ACTIVE_OPACITY)),
-        )
-        .text_color(color)
+    crate::ui::subtle_icon_button(id, icon, cx)
 }
 
 struct Response {
@@ -97,6 +82,15 @@ fn is_user_message(item: &Item) -> bool {
 }
 
 impl Workspace {
+    pub(super) fn toggle_content(&mut self, key: &str, index: usize, cx: &mut Context<Self>) {
+        self.list.pause_following_tail();
+        if !self.expanded.remove(key) {
+            self.expanded.insert(key.to_owned());
+        }
+        self.list.remeasure_items(index..index + 1);
+        cx.notify();
+    }
+
     pub(super) fn track_content_header(
         &self,
         id: &str,
@@ -141,8 +135,8 @@ impl Workspace {
             .when_some(copy, |actions, copy| {
                 actions.child(
                     action_button(SharedString::from(format!("copy-{id}")), IconName::Copy, cx)
-                        .accessibility_label("复制思考内容")
-                        .tooltip("复制思考内容")
+                        .accessibility_label(crate::i18n::tr!("action-copy-thought"))
+                        .tooltip(crate::i18n::tr!("action-copy-thought"))
                         .invisible()
                         .group_hover(group, |style| style.visible())
                         .on_click(move |_, _, cx| {
@@ -157,8 +151,8 @@ impl Workspace {
                     IconName::CornerLeftUp,
                     cx,
                 )
-                .accessibility_label("返回内容顶部")
-                .tooltip("返回内容顶部")
+                .accessibility_label(crate::i18n::tr!("action-content-top"))
+                .tooltip(crate::i18n::tr!("action-content-top"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     let offset = this.content_scroll_offset(&top_id, index);
@@ -172,8 +166,8 @@ impl Workspace {
                     IconName::ChevronUp,
                     cx,
                 )
-                .accessibility_label("收起内容")
-                .tooltip("收起内容")
+                .accessibility_label(crate::i18n::tr!("action-collapse-content"))
+                .tooltip(crate::i18n::tr!("action-collapse-content"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     let offset = this.content_scroll_offset(&collapse_id, index);
@@ -241,8 +235,8 @@ impl Workspace {
                             IconName::Copy,
                             cx,
                         )
-                        .accessibility_label("复制本轮回复")
-                        .tooltip("复制本轮回复")
+                        .accessibility_label(crate::i18n::tr!("action-copy-response"))
+                        .tooltip(crate::i18n::tr!("action-copy-response"))
                         .invisible()
                         .group_hover(group, |style| style.visible())
                         .on_click(move |_, _, cx| {
@@ -257,8 +251,8 @@ impl Workspace {
                             IconName::CornerLeftUp,
                             cx,
                         )
-                        .accessibility_label("返回用户消息")
-                        .tooltip("返回用户消息")
+                        .accessibility_label(crate::i18n::tr!("action-user-message"))
+                        .tooltip(crate::i18n::tr!("action-user-message"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.scroll_to_response_user(user_item, cx);
                         })),
