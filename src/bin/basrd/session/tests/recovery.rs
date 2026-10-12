@@ -32,6 +32,16 @@ struct PausedCommit {
     entered: Notify,
     resume: Notify,
     pause_on: fn(&Event) -> bool,
+    create_gate: Option<CreateGate>,
+}
+
+#[derive(Default)]
+struct CreateGate {
+    entered: Notify,
+    resume: Notify,
+    deleted: Notify,
+    deletes: AtomicUsize,
+    duplicate: bool,
 }
 
 impl Storage for PausedCommit {
@@ -40,21 +50,39 @@ impl Storage for PausedCommit {
         meta: SessionMeta,
         resume: Option<ResumeData>,
     ) -> BoxFuture<'_, Result<(), storage::Error>> {
-        self.inner.create(meta, resume)
+        Box::pin(async move {
+            if let Some(gate) = &self.create_gate {
+                if gate.duplicate {
+                    self.inner.create(meta.clone(), resume.clone()).await?;
+                }
+                gate.entered.notify_one();
+                gate.resume.notified().await;
+            }
+            self.inner.create(meta, resume).await
+        })
     }
     fn commit<'a>(
         &'a self,
         meta: SessionMeta,
         events: &'a [Event],
+        acceptance: Option<storage::PromptAcceptance>,
     ) -> BoxFuture<'a, Result<(), storage::Error>> {
         Box::pin(async move {
             if events.iter().any(self.pause_on) {
                 self.entered.notify_one();
                 self.resume.notified().await;
             }
-            self.inner.commit(meta, events).await
+            self.inner.commit(meta, events, acceptance).await
         })
     }
+    fn acceptance(
+        &self,
+        session: SessionId,
+        turn: TurnId,
+    ) -> BoxFuture<'_, Result<Option<storage::PromptAcceptance>, storage::Error>> {
+        self.inner.acceptance(session, turn)
+    }
+
     fn save_resume(
         &self,
         id: SessionId,
@@ -84,7 +112,14 @@ impl Storage for PausedCommit {
         self.inner.tail(id, count)
     }
     fn delete(&self, id: SessionId) -> BoxFuture<'_, Result<bool, storage::Error>> {
-        self.inner.delete(id)
+        Box::pin(async move {
+            let result = self.inner.delete(id).await;
+            if let Some(gate) = &self.create_gate {
+                gate.deletes.fetch_add(1, Ordering::SeqCst);
+                gate.deleted.notify_one();
+            }
+            result
+        })
     }
     fn is_persistent(&self) -> bool {
         false
@@ -92,6 +127,284 @@ impl Storage for PausedCommit {
 }
 
 struct CountingAgent(Arc<AtomicUsize>);
+
+#[tokio::test]
+async fn terminal_interruption_and_status_commit_together_before_notification() {
+    for failed in [false, true] {
+        let storage = Arc::new(PausedCommit {
+            inner: Memory::new(NonZeroUsize::new(100).expect("capacity")),
+            entered: Notify::new(),
+            resume: Notify::new(),
+            pause_on: |event| matches!(event.kind, EventKind::TurnInterrupted { .. }),
+            create_gate: None,
+        });
+        let meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+        let id = meta.id;
+        storage.create(meta.clone(), None).await.expect("create");
+        let (sender, mut completions) = mpsc::channel(2);
+        let session = Session::with_storage(
+            meta,
+            Limits::default(),
+            Some(sender),
+            Some(storage.clone()),
+            true,
+        );
+        let (updates, inbox) = mpsc::channel(16);
+        session.listen(inbox);
+        session
+            .ready(Box::new(PendingAgent { _updates: updates }))
+            .await
+            .expect("ready");
+        let turn = session.prompt(vec!["wait".into()]).await.expect("prompt");
+        let cursor = session.meta().revision;
+        let mut attachment = session
+            .attach(AttachOptions {
+                replay: 0,
+                cursor: None,
+            })
+            .await
+            .expect("attach");
+        let worker = session.clone();
+        let task = tokio::spawn(async move {
+            if failed {
+                worker.fail("offline".into()).await;
+            } else {
+                worker.shutdown().await;
+            }
+        });
+        storage.entered.notified().await;
+        assert_eq!(session.meta().status, SessionStatus::Working);
+        assert!(completions.try_recv().is_err());
+        assert!(
+            storage
+                .page(id, Some(cursor), 10)
+                .await
+                .expect("page")
+                .events
+                .is_empty()
+        );
+        storage.resume.notify_one();
+        task.await.expect("terminal operation");
+        let expected = if failed {
+            SessionStatus::Failed
+        } else {
+            SessionStatus::Stopped
+        };
+        let completion = completions.recv().await.expect("completion");
+        assert_eq!(completion.session.status, expected);
+        assert!(matches!(
+            completion.outcome,
+            crate::session::CompletionOutcome::Interrupted(_)
+        ));
+        let page = storage.page(id, Some(cursor), 10).await.expect("history");
+        assert_eq!(page.events.len(), 2);
+        assert!(
+            matches!(page.events[0].kind, EventKind::TurnInterrupted { turn: interrupted, .. } if interrupted == turn)
+        );
+        assert_eq!(page.events[0].cursor, cursor.next());
+        assert_eq!(page.events[1].cursor, cursor.next().next());
+        if failed {
+            assert!(matches!(page.events[1].kind, EventKind::Failed { .. }));
+        } else {
+            assert!(matches!(
+                page.events[1].kind,
+                EventKind::StatusChanged {
+                    status: SessionStatus::Stopped
+                }
+            ));
+        }
+        assert_eq!(
+            storage
+                .load(id)
+                .await
+                .expect("load")
+                .expect("stored")
+                .meta
+                .status,
+            expected
+        );
+        for event in page.events {
+            assert_eq!(attachment.recv().await.expect("committed event"), event);
+        }
+        assert_eq!(
+            attachment.recv().await,
+            Err(crate::session::AttachError::Closed)
+        );
+    }
+}
+
+fn paused_create(duplicate: bool) -> Arc<PausedCommit> {
+    Arc::new(PausedCommit {
+        inner: Memory::new(NonZeroUsize::new(100).expect("history capacity")),
+        entered: Notify::new(),
+        resume: Notify::new(),
+        pause_on: |_| false,
+        create_gate: Some(CreateGate {
+            duplicate,
+            ..CreateGate::default()
+        }),
+    })
+}
+
+#[tokio::test]
+async fn cancelled_or_timed_out_create_cleans_up_only_after_write_completes() {
+    for cancellation in ["abort", "timeout", "shutdown"] {
+        let storage = paused_create(false);
+        let gate = storage.create_gate.as_ref().expect("create gate");
+        let registry = Arc::new(Registry::with_storage(
+            Arc::new(Catalog::with_defaults()),
+            Arc::new(LocalHost::default()),
+            Limits {
+                startup_timeout: if cancellation == "timeout" {
+                    std::time::Duration::from_millis(100)
+                } else {
+                    super::TIMEOUT
+                },
+                ..Limits::default()
+            },
+            storage.clone(),
+        ));
+        let creator = Arc::clone(&registry);
+        let caller = tokio::spawn(async move { creator.create(request()).await });
+        tokio::time::timeout(super::TIMEOUT, gate.entered.notified())
+            .await
+            .expect("create write entered");
+        if cancellation == "timeout" {
+            assert!(matches!(
+                caller.await.expect("caller completed"),
+                Err(CreateError::Timeout)
+            ));
+        } else if cancellation == "shutdown" {
+            registry.shutdown().await;
+            assert!(matches!(
+                caller.await.expect("caller completed"),
+                Err(CreateError::Stopping)
+            ));
+        } else {
+            caller.abort();
+            assert!(matches!(caller.await, Err(error) if error.is_cancelled()));
+        }
+        assert_eq!(gate.deletes.load(Ordering::SeqCst), 0);
+        assert!(storage.list().await.expect("no write yet").is_empty());
+        gate.resume.notify_one();
+        tokio::time::timeout(super::TIMEOUT, gate.deleted.notified())
+            .await
+            .expect("successful late write compensated");
+        assert_eq!(gate.deletes.load(Ordering::SeqCst), 1);
+        assert!(storage.list().await.expect("no orphan").is_empty());
+        registry.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn failed_create_does_not_delete_an_existing_record() {
+    let storage = paused_create(true);
+    let gate = storage.create_gate.as_ref().expect("create gate");
+    let registry = Arc::new(Registry::with_storage(
+        Arc::new(Catalog::with_defaults()),
+        Arc::new(LocalHost::default()),
+        Limits::default(),
+        storage.clone(),
+    ));
+    let creator = Arc::clone(&registry);
+    let caller = tokio::spawn(async move { creator.create(request()).await });
+    tokio::time::timeout(super::TIMEOUT, gate.entered.notified())
+        .await
+        .expect("create entered with conflicting record");
+    let existing = storage.list().await.expect("existing record");
+    gate.resume.notify_one();
+    assert!(matches!(
+        caller.await.expect("caller completed"),
+        Err(CreateError::Storage(storage::Error::AlreadyExists(_)))
+    ));
+    assert_eq!(gate.deletes.load(Ordering::SeqCst), 0);
+    assert_eq!(storage.list().await.expect("record preserved"), existing);
+}
+
+#[tokio::test]
+async fn recovered_terminal_history_replays_in_order_then_closes() {
+    for status in [
+        SessionStatus::Stopped,
+        SessionStatus::Failed,
+        SessionStatus::Starting,
+        SessionStatus::Idle,
+        SessionStatus::Working,
+    ] {
+        let storage = Arc::new(LocalDb::open(":memory:").await.expect("database"));
+        let mut meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+        let id = meta.id;
+        storage.create(meta.clone(), None).await.expect("create");
+        for title in ["first", "second"] {
+            let event = Event::new(
+                id,
+                meta.revision.next(),
+                EventKind::TitleChanged {
+                    title: title.into(),
+                },
+            );
+            meta.apply_event(&event);
+            storage
+                .commit(meta.clone(), &[event], None)
+                .await
+                .expect("history");
+        }
+        meta.set_status(status);
+        storage.commit(meta, &[], None).await.expect("status");
+        let mut registry = Registry::with_storage(
+            Arc::new(Catalog::with_defaults()),
+            Arc::new(LocalHost::default()),
+            Limits::default(),
+            storage.clone(),
+        );
+        registry.recover().await.expect("recover");
+        let session = registry.get(id).await.expect("session");
+        let expected = storage
+            .page(id, Some(Cursor::START), 100)
+            .await
+            .expect("history")
+            .events;
+        assert_eq!(
+            expected.len(),
+            if status == SessionStatus::Starting {
+                3
+            } else {
+                2
+            }
+        );
+        for options in [
+            AttachOptions {
+                replay: 100,
+                cursor: None,
+            },
+            AttachOptions {
+                replay: 0,
+                cursor: Some(Cursor::START),
+            },
+        ] {
+            let mut attachment = session.try_attach(options).await.expect("attach");
+            for event in &expected {
+                assert_eq!(attachment.recv().await.expect("replayed event"), *event);
+            }
+            if matches!(status, SessionStatus::Idle | SessionStatus::Working) {
+                // A single poll must wait for live updates, not report a closed stream.
+                let next = attachment.recv();
+                futures::pin_mut!(next);
+                assert!(futures::poll!(next).is_pending());
+            } else {
+                assert_eq!(
+                    tokio::time::timeout(super::TIMEOUT, attachment.recv())
+                        .await
+                        .expect("terminal EOF"),
+                    Err(super::AttachError::Closed)
+                );
+                use futures::StreamExt;
+                let stream = attachment.into_stream();
+                futures::pin_mut!(stream);
+                assert!(stream.next().await.is_none());
+            }
+        }
+    }
+}
 
 #[async_trait]
 impl Agent for CountingAgent {
@@ -410,6 +723,7 @@ async fn cancelled_restore_commit_retains_gate_and_retry_uses_one_agent() {
             inner: Memory::new(NonZeroUsize::new(100).expect("history capacity")),
             entered: Notify::new(),
             resume: Notify::new(),
+            create_gate: None,
             pause_on: |event| {
                 matches!(
                     event.kind,
@@ -497,10 +811,10 @@ async fn cancelled_restore_commit_retains_gate_and_retry_uses_one_agent() {
             .events;
         assert_eq!(events.len(), 2, "one restore state publication");
         session
-            .accept_prompt(acp::PromptRequest::new(
+            .accept_prompt(basr::model::PromptSubmission::new(acp::PromptRequest::new(
                 id.to_string(),
                 vec!["hello".into()],
-            ))
+            )))
             .await
             .expect("the restored agent is installed and accepts prompts");
         registry.shutdown().await;
@@ -513,6 +827,7 @@ async fn aborted_prompt_during_commit_keeps_revision_contiguous_and_dispatches_o
         inner: Memory::new(NonZeroUsize::new(100).expect("history capacity")),
         entered: Notify::new(),
         resume: Notify::new(),
+        create_gate: None,
         pause_on: |event| matches!(event.kind, EventKind::TurnStarted { .. }),
     });
     let meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
@@ -532,10 +847,10 @@ async fn aborted_prompt_during_commit_keeps_revision_contiguous_and_dispatches_o
         let session = Arc::clone(&session);
         tokio::spawn(async move {
             session
-                .accept_prompt(acp::PromptRequest::new(
+                .accept_prompt(basr::model::PromptSubmission::new(acp::PromptRequest::new(
                     id.to_string(),
                     vec!["hello".into()],
-                ))
+                )))
                 .await
         })
     };
@@ -795,9 +1110,9 @@ async fn recovery_records_an_interrupted_turn_instead_of_silently_clearing_it() 
         .expect("interruption event");
     assert!(matches!(
         event.kind,
-        EventKind::TurnFinished {
+        EventKind::TurnInterrupted {
             turn: finished,
-            result: Err(_)
+            reason: basr::model::InterruptionReason::DaemonRestarted
         } if finished == turn
     ));
 }

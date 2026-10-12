@@ -96,7 +96,7 @@ impl Workspace {
         let Some(session) = self.active else {
             return;
         };
-        if self.sending(session) || !self.loading_attachments.insert(session) {
+        if self.composition_locked(session) || !self.loading_attachments.insert(session) {
             return;
         }
         self.error = None;
@@ -295,7 +295,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.active.is_some_and(|id| self.sending(id)) {
+        if self.active.is_some_and(|id| self.composition_locked(id)) {
             cx.stop_propagation();
             return;
         }
@@ -345,7 +345,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.active.is_some_and(|id| self.sending(id)) {
+        if self.active.is_some_and(|id| self.composition_locked(id)) {
             cx.stop_propagation();
             return;
         }
@@ -384,7 +384,7 @@ impl Workspace {
     }
 
     pub(super) fn paste_attachment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.paste_pending || self.active.is_some_and(|id| self.sending(id)) {
+        if self.paste_pending || self.active.is_some_and(|id| self.composition_locked(id)) {
             cx.stop_propagation();
             return;
         }
@@ -511,9 +511,9 @@ impl Workspace {
     }
 
     pub(super) fn attachment_button(&self, cx: &mut Context<Self>) -> Button {
-        let busy = self
-            .active
-            .is_some_and(|id| self.loading_attachments.contains(&id) || self.sending(id));
+        let busy = self.active.is_some_and(|id| {
+            self.loading_attachments.contains(&id) || self.composition_locked(id)
+        });
         Button::new("add-attachment")
             .ghost()
             .xsmall()

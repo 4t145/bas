@@ -24,7 +24,7 @@ fn sidebar_can_archive_and_compact_mode_can_restore(cx: &mut TestAppContext) {
             view.update(
                 Update::Archived {
                     session: meta.id,
-                    result: Ok(archived(meta.clone(), true, 2)),
+                    result: Ok(archived(meta.clone(), true, 2).into()),
                 },
                 window,
                 cx,
@@ -99,7 +99,7 @@ fn a_catalog_started_before_creation_does_not_discard_new_drafts_or_queue(cx: &m
             view.update(
                 Update::Created {
                     epoch: fixture.initial_create.epoch,
-                    result: Ok(meta.clone()),
+                    result: Ok(meta.clone().into()),
                 },
                 window,
                 cx,
@@ -134,7 +134,7 @@ fn a_catalog_started_before_creation_does_not_discard_new_drafts_or_queue(cx: &m
                 view.update(
                     Update::Catalog(Ok(connection::Catalog {
                         agents: view.agents.clone(),
-                        sessions,
+                        sessions: sessions.into_iter().map(Into::into).collect(),
                     })),
                     window,
                     cx,
@@ -163,7 +163,7 @@ fn delayed_archive_success_after_a_newer_restore_still_pauses_the_queue(cx: &mut
             view.update(
                 Update::Catalog(Ok(connection::Catalog {
                     agents: view.agents.clone(),
-                    sessions: vec![archived(meta.clone(), false, 3)],
+                    sessions: vec![archived(meta.clone(), false, 3).into()],
                 })),
                 window,
                 cx,
@@ -172,7 +172,7 @@ fn delayed_archive_success_after_a_newer_restore_still_pauses_the_queue(cx: &mut
             view.update(
                 Update::Archived {
                     session: meta.id,
-                    result: Ok(archived(meta.clone(), true, 2)),
+                    result: Ok(archived(meta.clone(), true, 2).into()),
                 },
                 window,
                 cx,
@@ -253,7 +253,10 @@ fn inactive_catalog_archive_retains_attachments_and_does_not_resume_queue(cx: &m
                 view.update(
                     Update::Catalog(Ok(connection::Catalog {
                         agents: Vec::new(),
-                        sessions: vec![archived(first.clone(), value, revision), second.clone()],
+                        sessions: vec![
+                            archived(first.clone(), value, revision).into(),
+                            second.clone().into(),
+                        ],
                     })),
                     window,
                     cx,
@@ -295,7 +298,7 @@ fn row_archive_restore_and_filter_keep_details_and_draft(cx: &mut TestAppContext
             view.update(
                 Update::Archived {
                     session: first.id,
-                    result: Ok(archived(first.clone(), true, 2)),
+                    result: Ok(archived(first.clone(), true, 2).into()),
                 },
                 window,
                 cx,
@@ -316,7 +319,7 @@ fn row_archive_restore_and_filter_keep_details_and_draft(cx: &mut TestAppContext
             view.update(
                 Update::Archived {
                     session: first.id,
-                    result: Ok(archived(first.clone(), false, 3)),
+                    result: Ok(archived(first.clone(), false, 3).into()),
                 },
                 window,
                 cx,
@@ -373,7 +376,7 @@ fn pending_failure_and_background_catalog_preserve_edit_and_pause(cx: &mut TestA
             view.update(
                 Update::Catalog(Ok(connection::Catalog {
                     agents: Vec::new(),
-                    sessions: vec![archived(meta.clone(), true, 4)],
+                    sessions: vec![archived(meta.clone(), true, 4).into()],
                 })),
                 window,
                 cx,
@@ -383,7 +386,7 @@ fn pending_failure_and_background_catalog_preserve_edit_and_pause(cx: &mut TestA
             view.update(
                 Update::Archived {
                     session: meta.id,
-                    result: Ok(archived(meta.clone(), false, 3)),
+                    result: Ok(archived(meta.clone(), false, 3).into()),
                 },
                 window,
                 cx,
@@ -469,7 +472,7 @@ fn archive_event_keeps_running_turn_cancel_and_restore_notice(cx: &mut TestAppCo
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: meta.clone(),
+                    session: meta.clone().into(),
                     events: Vec::new(),
                 },
                 window,

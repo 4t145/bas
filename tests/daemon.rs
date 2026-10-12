@@ -261,10 +261,12 @@ async fn cli_overrides_invalid_environment_and_shutdown_closes_live_streams() {
         .into_inner();
     daemon
         .client
-        .prompt(pb::AcpPayload::from(&basr::acp::PromptRequest::new(
-            session.id,
-            vec![basr::acp::ContentBlock::from("long turn".repeat(100))],
-        )))
+        .prompt(pb::PromptSubmission::from(
+            &basr::model::PromptSubmission::new(basr::acp::PromptRequest::new(
+                session.id,
+                vec![basr::acp::ContentBlock::from("long turn".repeat(100))],
+            )),
+        ))
         .await
         .expect("prompt");
     daemon.stop().await;

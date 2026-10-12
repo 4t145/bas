@@ -7,10 +7,10 @@ fn appearance_save_keeps_agents_written_since_the_form_was_opened() {
     let loader = Loader::new(Some(directory.path().join("settings.json")), None);
     let mut appearance = loader.document().expect("appearance baseline");
     let mut agents = loader.store.load().expect("agents baseline");
-    let catalog = vec![AgentSpec::acp(
+    let catalog = vec![basr::config::AgentRegistration::from(AgentSpec::acp(
         "custom",
         Command::new("test-acp", vec!["argument with spaces".into()]),
-    )];
+    ))];
     loader
         .store
         .save_agents(&mut agents, catalog.clone())

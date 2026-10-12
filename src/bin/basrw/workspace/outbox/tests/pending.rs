@@ -79,12 +79,14 @@ fn immediate_send_waits_for_cancel_and_turn_completion_without_resuming_paused_d
         outbox.advance(&meta, true).is_none(),
         "working turn must finish first"
     );
-    assert_eq!(sent(outbox.advance(&idle(2), true)), "B");
+    let send = outbox.advance(&idle(2), true).expect("send B");
+    assert_eq!(send.draft.text, "B");
+    let submission = submission(send);
     let receipt = TurnReceipt {
-        turn: TurnId::new(),
+        turn: submission.turn,
         cursor: Cursor::from_raw(3),
     };
-    outbox.receipt(Some(receipt));
+    outbox.settle(submission, Ok(PromptSubmissionOutcome::Accepted(receipt)));
     outbox.observe(&finish(&meta, receipt.turn, 4));
     assert!(
         outbox.advance(&idle(4), true).is_none(),
@@ -118,12 +120,12 @@ fn completion_before_cancel_acknowledgement_never_releases_the_pending_send_earl
     for succeeded in [true, false] {
         let mut outbox = SessionOutbox::default();
         let meta = idle(1);
-        outbox.start(draft("current turn"), Origin::Composer);
+        let submission = submission(outbox.start(draft("current turn"), Origin::Composer));
         let accepted = TurnReceipt {
-            turn: TurnId::new(),
+            turn: submission.turn,
             cursor: Cursor::from_raw(1),
         };
-        outbox.receipt(Some(accepted));
+        outbox.settle(submission, Ok(PromptSubmissionOutcome::Accepted(accepted)));
         outbox.enqueue(draft("A"));
         outbox.enqueue(draft("B"));
         outbox.pause();
@@ -157,8 +159,9 @@ fn immediately_sending_an_edit_preserves_composition_and_the_other_paused_messag
             .text,
         "composition"
     );
-    assert_eq!(sent(outbox.advance(&idle(1), true)), "B'");
-    outbox.receipt(None);
+    let send = outbox.advance(&idle(1), true).expect("send edited B");
+    assert_eq!(send.draft.text, "B'");
+    outbox.settle(submission(send), rejected());
     assert_eq!(
         outbox
             .iter()

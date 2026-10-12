@@ -22,10 +22,10 @@ async fn codex_shaped_async_choice_remains_answerable_after_the_turn_finishes() 
         .into_inner();
     let _ = interactions.next().await.expect("initial snapshot");
     let receipt = session
-        .accept_prompt(v1::PromptRequest::new(
+        .accept_prompt(basr::model::PromptSubmission::new(v1::PromptRequest::new(
             session.id().to_string(),
             vec!["ask asynchronously".into()],
-        ))
+        )))
         .await
         .expect("prompt");
     let snapshot = tokio::time::timeout(TIMEOUT, interactions.next())
@@ -125,10 +125,10 @@ async fn active_acp_session_routes_original_form_and_receives_user_response() {
         .expect("initial snapshot")
         .expect("valid snapshot");
     let receipt = session
-        .accept_prompt(v1::PromptRequest::new(
+        .accept_prompt(basr::model::PromptSubmission::new(v1::PromptRequest::new(
             session.id().to_string(),
             vec!["configure project".into()],
-        ))
+        )))
         .await
         .expect("prompt");
     let snapshot = tokio::time::timeout(TIMEOUT, interactions.next())
@@ -222,10 +222,10 @@ async fn cancelling_a_turn_clears_its_waiting_form_and_sends_cancel_to_agent() {
         .expect("initial snapshot")
         .expect("valid snapshot");
     session
-        .accept_prompt(v1::PromptRequest::new(
+        .accept_prompt(basr::model::PromptSubmission::new(v1::PromptRequest::new(
             session.id().to_string(),
             vec!["configure project".into()],
-        ))
+        )))
         .await
         .expect("prompt");
     let snapshot = tokio::time::timeout(TIMEOUT, interactions.next())

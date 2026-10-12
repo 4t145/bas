@@ -1,5 +1,6 @@
 use super::*;
 
+mod interruption;
 mod protocol;
 
 #[test]

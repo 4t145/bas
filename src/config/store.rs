@@ -1,4 +1,6 @@
-use super::{AgentSpec, Appearance, Settings, validate_agents};
+use super::{
+    AgentRegistration, AgentSpec, Appearance, Settings, validate_agents, validate_registrations,
+};
 use serde::de::DeserializeOwned;
 use std::{
     fs::{self, OpenOptions},
@@ -72,7 +74,7 @@ struct Loaded {
 }
 enum Section {
     Appearance(Appearance),
-    Agents(Vec<AgentSpec>),
+    Agents(Vec<AgentRegistration>),
 }
 impl Store {
     pub fn new(path: Option<PathBuf>) -> Self {
@@ -116,7 +118,7 @@ impl Store {
     pub fn save_agents(
         &self,
         document: &mut Document,
-        agents: Vec<AgentSpec>,
+        agents: Vec<AgentRegistration>,
     ) -> Result<(), Error> {
         self.save(document, Section::Agents(agents))
     }
@@ -142,8 +144,9 @@ impl Store {
                     .map_err(|e| invalid(&appearance_path, e))?;
             }
             if let Some(bytes) = &agents {
-                settings.daemon.agents = parse(&agents_path, bytes)?;
-                validate_agents(&settings.daemon.agents).map_err(|e| invalid(&agents_path, e))?;
+                let legacy: Vec<AgentSpec> = parse(&agents_path, bytes)?;
+                validate_agents(&legacy).map_err(|e| invalid(&agents_path, e))?;
+                settings.daemon.agents = legacy.into_iter().map(Into::into).collect();
             }
             snapshot.files.push((appearance_path, appearance));
             snapshot.files.push((agents_path, agents));
@@ -268,7 +271,7 @@ fn validate(path: &Path, settings: &Settings) -> Result<(), Error> {
         .appearance
         .validate()
         .map_err(|e| invalid(path, e))?;
-    validate_agents(&settings.daemon.agents).map_err(|e| invalid(path, e))
+    validate_registrations(&settings.daemon.agents).map_err(|e| invalid(path, e))
 }
 fn reject_links(path: &Path) -> Result<(), Error> {
     for ancestor in path.ancestors().filter(|p| !p.as_os_str().is_empty()) {

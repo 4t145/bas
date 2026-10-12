@@ -124,6 +124,8 @@ fn categories_are_nested_and_agent_drafts_survive_navigation(cx: &mut TestAppCon
     assert_eq!(settings.daemon.agents.len(), 2);
     assert_eq!(
         settings.daemon.agents[1]
+            .as_custom()
+            .expect("custom registration")
             .command
             .as_ref()
             .expect("ACP command")

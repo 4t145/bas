@@ -1,12 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
-use basr::model::StopReason;
+use basr::model::{InterruptionReason, StopReason};
 use tokio::sync::mpsc;
 use tokio_util::task::AbortOnDropHandle;
 
 use super::{Dbus, Notification, Notifier, Urgency};
-use crate::{config::Notify, session::Completion};
+use crate::{
+    config::Notify,
+    session::{Completion, CompletionOutcome},
+};
 
 const COMPLETION_CAPACITY: usize = 128;
 pub const NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -73,26 +76,35 @@ impl From<Completion> for Notification {
         let title = meta
             .title
             .unwrap_or_else(|| format!("basrd session {}", meta.id));
-        let body = match completion
-            .result
-            .as_ref()
-            .map(|response| response.stop_reason)
-        {
-            Ok(StopReason::EndTurn) => "The agent finished the turn.",
-            Ok(StopReason::MaxTokens) => "The agent ran out of output budget.",
-            Ok(StopReason::Cancelled) => "The turn was cancelled.",
-            Ok(StopReason::Refusal) => "The agent declined to continue.",
-            Err(_) => "The agent failed while executing the turn.",
-            _ => "The turn ended.",
-        };
-        let urgency = match completion
-            .result
-            .as_ref()
-            .map(|response| response.stop_reason)
-        {
-            Ok(StopReason::EndTurn) => Urgency::Normal,
-            Err(_) => Urgency::Critical,
-            _ => Urgency::Low,
+        let (body, urgency) = match &completion.outcome {
+            CompletionOutcome::Native(Ok(response)) => match response.stop_reason {
+                StopReason::EndTurn => ("The agent finished the turn.", Urgency::Normal),
+                StopReason::MaxTokens => ("The agent ran out of output budget.", Urgency::Low),
+                StopReason::Cancelled => ("The turn was cancelled.", Urgency::Low),
+                StopReason::Refusal => ("The agent declined to continue.", Urgency::Low),
+                _ => ("The turn ended.", Urgency::Low),
+            },
+            CompletionOutcome::Native(Err(_)) => {
+                ("The agent rejected the prompt.", Urgency::Critical)
+            }
+            CompletionOutcome::Interrupted(reason) => match reason {
+                InterruptionReason::CancelledBeforeDispatch => {
+                    ("The turn was cancelled before dispatch.", Urgency::Low)
+                }
+                InterruptionReason::SessionStopped => (
+                    "Turn execution was interrupted because the session stopped.",
+                    Urgency::Low,
+                ),
+                InterruptionReason::DaemonRestarted => (
+                    "Turn execution was interrupted by a daemon restart.",
+                    Urgency::Critical,
+                ),
+                InterruptionReason::BackendFailure { .. }
+                | InterruptionReason::DispatchFailure { .. } => (
+                    "Turn execution was interrupted by a runtime failure.",
+                    Urgency::Critical,
+                ),
+            },
         };
         Self::new(title, body).with_urgency(urgency)
     }

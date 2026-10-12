@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use crate::storage::Storage;
 use basr::{
-    model::{Cursor, Event},
+    model::{Cursor, Event, RuntimeFailure},
     service::DEFAULT_REPLAY,
 };
 use futures::{Stream, stream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AttachOptions {
@@ -27,6 +27,8 @@ impl Default for AttachOptions {
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum AttachError {
+    #[error(transparent)]
+    Runtime(#[from] RuntimeFailure),
     #[error("client is {0} events behind; re-attach from the last cursor")]
     Lagged(u64),
     #[error("the session ended")]
@@ -41,6 +43,7 @@ pub struct Attachment {
     cursor: Cursor,
     events: Option<broadcast::Receiver<Event>>,
     persistent: Option<(Arc<dyn Storage>, basr::model::SessionId, Cursor)>,
+    failure: watch::Receiver<Option<RuntimeFailure>>,
 }
 
 impl Attachment {
@@ -48,12 +51,14 @@ impl Attachment {
         backlog: Vec<Event>,
         cursor: Cursor,
         events: Option<broadcast::Receiver<Event>>,
+        failure: watch::Receiver<Option<RuntimeFailure>>,
     ) -> Self {
         Self {
             backlog: backlog.into(),
             cursor,
             events,
             persistent: None,
+            failure,
         }
     }
 
@@ -63,8 +68,9 @@ impl Attachment {
         storage: Arc<dyn Storage>,
         session: basr::model::SessionId,
         events: Option<broadcast::Receiver<Event>>,
+        failure: watch::Receiver<Option<RuntimeFailure>>,
     ) -> Self {
-        let mut attachment = Self::new(Vec::new(), cursor, events);
+        let mut attachment = Self::new(Vec::new(), cursor, events, failure);
         attachment.persistent = Some((storage, session, snapshot));
         attachment
     }
@@ -75,10 +81,20 @@ impl Attachment {
     }
 
     /// Reads retained history first, then events published after the snapshot.
+    /// Runtime failure interrupts either phase; committed history remains available separately.
     ///
     /// # Errors
     /// Returns an error when the stream ends or a slow reader loses live events.
     pub async fn recv(&mut self) -> Result<Event, AttachError> {
+        let mut failure = self.failure.clone();
+        tokio::select! {
+            biased;
+            error = wait_failure(&mut failure) => Err(error.into()),
+            event = self.recv_event() => event,
+        }
+    }
+
+    async fn recv_event(&mut self) -> Result<Event, AttachError> {
         loop {
             if self.backlog.is_empty()
                 && let Some((storage, session, snapshot)) = &self.persistent
@@ -153,5 +169,19 @@ impl Attachment {
                 Err(error) => Some((Err(error), None)),
             }
         })
+    }
+}
+
+pub(super) async fn wait_failure(
+    failure: &mut watch::Receiver<Option<RuntimeFailure>>,
+) -> RuntimeFailure {
+    loop {
+        if let Some(error) = failure.borrow_and_update().clone() {
+            return error;
+        }
+        if failure.changed().await.is_err() {
+            // Normal session disposal must let retained history drain before live EOF.
+            std::future::pending::<()>().await;
+        }
     }
 }

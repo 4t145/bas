@@ -607,7 +607,7 @@ fn startup_response_copies_in_initialization_and_navigates_safely_in_the_timelin
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: meta.clone(),
+                    session: meta.clone().into(),
                     events: vec![Event::new(
                         meta.id,
                         Cursor::from_raw(1),

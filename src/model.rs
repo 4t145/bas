@@ -10,6 +10,7 @@ mod ids;
 mod message;
 pub mod presentation;
 mod session;
+mod submission;
 mod time;
 
 pub use approval::*;
@@ -18,6 +19,7 @@ pub use event::*;
 pub use ids::*;
 pub use message::*;
 pub use session::*;
+pub use submission::*;
 pub use time::*;
 
 #[cfg(test)]

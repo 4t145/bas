@@ -51,7 +51,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.active.is_some_and(|session| self.sending(session))
+        if self
+            .active
+            .is_some_and(|session| self.composition_locked(session))
             || (!action.shift && self.complete_command(window, cx))
         {
             cx.stop_propagation();

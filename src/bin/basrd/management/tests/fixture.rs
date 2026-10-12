@@ -76,11 +76,15 @@ impl Drop for Fixture {
     }
 }
 
-pub fn manager(directory: &tempfile::TempDir, url: &str) -> Manager {
-    let root = directory.path().join("data");
+pub fn manager(directory: &tempfile::TempDir, url: &str) -> Arc<Manager> {
+    manager_at(directory.path(), url)
+}
+
+pub fn manager_at(directory: &std::path::Path, url: &str) -> Arc<Manager> {
+    let root = directory.join("data");
     fs::create_dir_all(&root).expect("manager data directory");
-    Manager {
-        store: Some(Store::at(directory.path().join("settings.json"))),
+    Arc::new(Manager {
+        store: Some(Store::at(directory.join("settings.json"))),
         root,
         url: format!("{url}/registry.json"),
         client: reqwest::Client::builder()
@@ -89,13 +93,30 @@ pub fn manager(directory: &tempfile::TempDir, url: &str) -> Manager {
             .expect("fixture HTTP client"),
         registry: Mutex::new(RegistryMemory::default()),
         mutation: Mutex::new(()),
-    }
+        installations: TaskTracker::new(),
+        stopping: CancellationToken::new(),
+        admission: std::sync::Mutex::new(()),
+    })
 }
 
-pub async fn install(manager: &Manager) -> Result<AgentSpec> {
+pub async fn install(manager: &Arc<Manager>) -> Result<AgentSpec> {
     let (sender, mut receiver) = mpsc::channel(32);
     let drain = tokio::spawn(async move { while receiver.recv().await.is_some() {} });
     let result = manager.install("fixture-agent", sender).await;
     drain.await.expect("progress drain");
     result
+}
+
+pub fn managed(manager: &Manager) -> basr::config::ManagedAgent {
+    manager
+        .store()
+        .expect("settings store")
+        .load()
+        .expect("saved settings")
+        .settings
+        .daemon
+        .agents
+        .into_iter()
+        .find_map(|registration| registration.managed().cloned())
+        .expect("managed registration")
 }

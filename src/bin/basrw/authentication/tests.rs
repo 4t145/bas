@@ -3,6 +3,54 @@ use basr::authentication::{Arguments, Source, Terminal};
 use gpui_kit::{TestAppContext, component::Root, px, size, test::TestWindowExt};
 use serde_json::json;
 
+#[test]
+fn authentication_requires_the_current_checksum_bound_registration() {
+    use basr::config::{AgentRegistration, InstallationRef, ManagedAgent, agent::Command};
+    let directory = tempfile::tempdir().expect("installation outside settings profile");
+    let path = directory.path().join(basr::config::INSTALLATION_FILE);
+    let spec = AgentSpec::acp("managed", Command::new("/managed/acp", []));
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "schema_version": 1,
+        "spec": spec,
+    }))
+    .expect("descriptor");
+    std::fs::write(&path, &bytes).expect("write descriptor");
+    let managed = AgentRegistration::Managed(ManagedAgent {
+        id: spec.id.clone(),
+        installation: InstallationRef::from_bytes(path.clone(), &bytes).expect("reference"),
+    });
+    assert!(service::matches_registration(
+        std::slice::from_ref(&managed),
+        &spec
+    ));
+    assert!(
+        !service::matches_registration(&[managed.clone(), spec.clone().into()], &spec),
+        "ambiguous membership fails closed"
+    );
+    std::fs::write(&path, [bytes.as_slice(), b"\n"].concat()).expect("change descriptor bytes");
+    assert!(
+        !service::matches_registration(std::slice::from_ref(&managed), &spec),
+        "even an equivalent launch config needs the registered descriptor hash"
+    );
+    std::fs::remove_file(&path).expect("remove descriptor");
+    assert!(!service::matches_registration(
+        std::slice::from_ref(&managed),
+        &spec
+    ));
+    std::fs::write(&path, &bytes).expect("restore descriptor");
+    let wrong_identity = AgentRegistration::Managed(ManagedAgent {
+        id: "another-agent".into(),
+        installation: InstallationRef::from_bytes(path, &bytes).expect("reference"),
+    });
+    let mut wrong_spec = spec.clone();
+    wrong_spec.id = "another-agent".into();
+    assert!(!service::matches_registration(
+        &[wrong_identity],
+        &wrong_spec
+    ));
+    assert!(service::matches_registration(&[spec.clone().into()], &spec));
+}
+
 #[gpui_kit::test]
 fn method_clicks_keep_agent_names_and_begin_without_a_confirmation_window(cx: &mut TestAppContext) {
     cx.update(|cx| {

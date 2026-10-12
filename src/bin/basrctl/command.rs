@@ -28,7 +28,12 @@ impl Command {
                 cursor,
                 replay,
             } => attach::run(client, &session, cursor, replay).await,
-            Command::Prompt { session, text } => prompt::send(client, &session, text).await,
+            Command::Prompt {
+                session,
+                submission,
+                text,
+            } => prompt::send(client, server, &session, submission, text).await,
+            Command::PromptStatus { session, turn } => prompt::status(client, session, turn).await,
             Command::Cancel { session } => prompt::cancel(client, &session).await,
             Command::History {
                 session,

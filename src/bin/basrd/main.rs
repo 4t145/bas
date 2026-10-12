@@ -61,7 +61,7 @@ async fn run(config: Config) -> Result<()> {
         None => Arc::new(storage::Memory::new(config.limits.history_capacity)),
     };
     let mut registry = Registry::with_storage(
-        Arc::new(Catalog::from_specs(config.agents.clone())?),
+        Arc::new(Catalog::from_registrations(config.agents.clone())?),
         Arc::new(LocalHost::new(config.permissions)),
         config.limits,
         storage,
@@ -98,7 +98,7 @@ async fn run(config: Config) -> Result<()> {
     let server = tonic::transport::Server::builder()
         .add_service(
             service::Service::new(Arc::clone(&registry))
-                .with_manager(manager)
+                .with_manager(Arc::clone(&manager))
                 .into_server(),
         )
         .serve_with_incoming_shutdown(
@@ -116,16 +116,16 @@ async fn run(config: Config) -> Result<()> {
     system::stopping();
     stopping.cancel();
     let cleanup = async {
-        if let Some(catalog_watcher) = catalog_watcher {
-            catalog_watcher.await.context("catalog watcher failed")?;
-        }
         let finish_server = async {
             match server_result {
                 Some(result) => result,
                 None => server.await,
             }
         };
-        let (_, result) = tokio::join!(registry.shutdown(), finish_server);
+        let (_, _, result) = tokio::join!(manager.shutdown(), registry.shutdown(), finish_server);
+        if let Some(catalog_watcher) = catalog_watcher {
+            catalog_watcher.await.context("catalog watcher failed")?;
+        }
         if let Some(watcher) = watcher {
             watcher.shutdown().await;
         }

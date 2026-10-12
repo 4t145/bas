@@ -6,18 +6,19 @@
 
 use std::path::Path;
 
-use basr::model::{Cursor, Event, SessionId, SessionMeta};
+use basr::model::{Cursor, Event, SessionId, SessionMeta, TurnId};
 use futures::future::BoxFuture;
 use tokio::sync::{mpsc, oneshot};
 
-use super::{Error, Page, ResumeData, SqliteStore, StoredSession};
+use super::{Error, Page, PromptAcceptance, ResumeData, SqliteStore, StoredSession};
 use crate::storage::Storage;
 
 type Reply<T> = oneshot::Sender<Result<T, Error>>;
 
 enum Command {
     Create(SessionMeta, Option<ResumeData>, Reply<()>),
-    Commit(SessionMeta, Vec<Event>, Reply<()>),
+    Commit(SessionMeta, Vec<Event>, Option<PromptAcceptance>, Reply<()>),
+    Acceptance(SessionId, TurnId, Reply<Option<PromptAcceptance>>),
     SaveResume(SessionId, Option<ResumeData>, Reply<()>),
     Load(SessionId, Reply<Option<StoredSession>>),
     List(Reply<Vec<SessionMeta>>),
@@ -34,8 +35,11 @@ impl Command {
             Self::Create(meta, resume, reply) => {
                 let _ = reply.send(store.create(meta, resume).await);
             }
-            Self::Commit(meta, events, reply) => {
-                let _ = reply.send(store.commit(meta, &events).await);
+            Self::Commit(meta, events, acceptance, reply) => {
+                let _ = reply.send(store.commit(meta, &events, acceptance).await);
+            }
+            Self::Acceptance(session, turn, reply) => {
+                let _ = reply.send(store.acceptance(session, turn).await);
             }
             Self::SaveResume(id, resume, reply) => {
                 let _ = reply.send(store.save_resume(id, resume).await);
@@ -143,9 +147,18 @@ impl Storage for LocalDb {
         &'a self,
         meta: SessionMeta,
         events: &'a [Event],
+        acceptance: Option<PromptAcceptance>,
     ) -> BoxFuture<'a, Result<(), Error>> {
         let events = events.to_vec();
-        Box::pin(self.request(move |reply| Command::Commit(meta, events, reply)))
+        Box::pin(self.request(move |reply| Command::Commit(meta, events, acceptance, reply)))
+    }
+
+    fn acceptance(
+        &self,
+        session: SessionId,
+        turn: TurnId,
+    ) -> BoxFuture<'_, Result<Option<PromptAcceptance>, Error>> {
+        Box::pin(self.request(move |reply| Command::Acceptance(session, turn, reply)))
     }
 
     fn save_resume(
@@ -206,6 +219,12 @@ impl TestSql {
         match self {
             Self::DropMigrationHistory => {
                 sql::statement("DROP TABLE __toasty_migrations")
+                    .exec(&mut db)
+                    .await?;
+                sql::statement("DROP TABLE accepted_prompts")
+                    .exec(&mut db)
+                    .await?;
+                sql::statement("PRAGMA user_version = 1")
                     .exec(&mut db)
                     .await?;
             }

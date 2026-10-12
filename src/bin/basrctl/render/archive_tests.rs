@@ -11,7 +11,7 @@ fn metadata(archived: bool) -> pb::Session {
     );
     session.archived = archived;
     session.title = Some("中文\x1b]52;c;clipboard\x07".into());
-    pb::Session::try_from(&session).expect("valid fixture metadata")
+    pb::Session::try_from(&model::SessionSnapshot::from(session)).expect("valid fixture metadata")
 }
 
 #[test]

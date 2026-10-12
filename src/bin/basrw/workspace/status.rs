@@ -51,6 +51,9 @@ impl Workspace {
         if self.active.is_none() {
             return ConnectionStatus::Connected;
         }
+        if self.active.is_some_and(|id| !self.runtime_healthy(id)) {
+            return ConnectionStatus::Disconnected;
+        }
         match self.stream {
             StreamState::Loading | StreamState::Reconnecting(_) => ConnectionStatus::Connecting,
             StreamState::Live => ConnectionStatus::Connected,

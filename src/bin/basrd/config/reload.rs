@@ -5,7 +5,8 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 
-use crate::{agent::AgentSpec, session::Registry};
+use crate::session::Registry;
+use basr::config::AgentRegistration;
 
 #[cfg(test)]
 mod tests;
@@ -51,9 +52,12 @@ impl CatalogSource {
         })
     }
 
-    pub fn load(&mut self) -> Result<Vec<AgentSpec>> {
+    pub fn load(&mut self) -> Result<Vec<AgentRegistration>> {
         if !self.settings {
-            return super::read_agents(&self.path).map_err(Into::into);
+            return Ok(super::read_agents(&self.path)?
+                .into_iter()
+                .map(Into::into)
+                .collect());
         }
         // Latch the highest-priority file even when it is temporarily invalid.
         // A removed settings file must not silently resurrect the legacy catalog.
@@ -120,7 +124,7 @@ impl CatalogSource {
 /// Every publication is a fully validated catalog; failures preserve the last snapshot.
 pub fn watch_catalog(
     mut source: CatalogSource,
-    mut current: Vec<AgentSpec>,
+    mut current: Vec<AgentRegistration>,
     registry: Arc<Registry>,
     stopping: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {

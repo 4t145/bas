@@ -47,5 +47,9 @@ jobs:
         run: cargo build --all-targets --features gui-tests --locked
       - name: Test shared model and configuration
         run: cargo test --lib --locked
+      - name: Test native installation process ownership
+        run: cargo test --bin basrd management::runtime::process:: --locked
+      - name: Test native installation cancellation and shutdown
+        run: cargo test --bin basrd management::tests::lifecycle:: --locked
       - name: Test desktop state and protocol
         run: cargo test --features gui --bin basrw --locked

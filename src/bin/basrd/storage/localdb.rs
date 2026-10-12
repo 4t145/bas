@@ -1,13 +1,16 @@
 use std::path::Path;
 
-use basr::model::{Cursor, Event, SessionId, SessionMeta};
+use basr::model::{Cursor, Event, SessionId, SessionMeta, TurnId, TurnReceipt};
 use toasty::{
     migration::{MigrationFile, MigrationSet},
     sql,
     stmt::Value,
 };
 
-use super::{Error, Page, ResumeData, StoredSession, check_page, validate_commit, validate_create};
+use super::{
+    Error, Page, PromptAcceptance, ResumeData, StoredSession, check_page, validate_acceptance,
+    validate_commit, validate_create,
+};
 
 #[path = "localdb/worker.rs"]
 mod worker;
@@ -38,11 +41,28 @@ struct EventRow {
     payload: Vec<u8>,
 }
 
-const MIGRATIONS: MigrationSet = MigrationSet::new(&[MigrationFile::new(
-    1,
-    "session_history",
-    include_str!("migrations/0001_session_history.sql"),
-)]);
+#[derive(Debug, toasty::Model)]
+#[table = "accepted_prompts"]
+#[key(partition = session_id, local = turn_id)]
+struct AcceptanceRow {
+    session_id: String,
+    turn_id: String,
+    cursor: i64,
+    fingerprint: Vec<u8>,
+}
+
+const MIGRATIONS: MigrationSet = MigrationSet::new(&[
+    MigrationFile::new(
+        1,
+        "session_history",
+        include_str!("migrations/0001_session_history.sql"),
+    ),
+    MigrationFile::new(
+        2,
+        "accepted_prompts",
+        include_str!("migrations/0002_accepted_prompts.sql"),
+    ),
+]);
 
 /// Runs only on the dedicated database runtime.
 struct SqliteStore {
@@ -65,7 +85,7 @@ impl SqliteStore {
             toasty_driver_sqlite::Sqlite::open(path)
         };
         let db = toasty::Db::builder()
-            .models(toasty::models!(SessionRow, EventRow))
+            .models(toasty::models!(SessionRow, EventRow, AcceptanceRow))
             .max_pool_size(1)
             .build(driver)
             .await?;
@@ -83,20 +103,23 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
         .next()
         .ok_or(Error::Corrupt("missing schema version"))?;
     let version: i64 = field(&mut columns(version)?)?;
-    if version != 0 && version != 1 {
+    if !(0..=2).contains(&version) {
         return Err(Error::InvalidCommit("unsupported SQLite schema version"));
     }
     let tables = sql::query(
-        "SELECT name FROM sqlite_master WHERE name IN ('sessions', 'events', 'sessions_recent')",
+        "SELECT name FROM sqlite_master WHERE name IN ('sessions', 'events', 'sessions_recent', 'accepted_prompts')",
     )
     .exec(&mut db.clone())
     .await?;
-    if (version == 0 && !tables.is_empty()) || (version == 1 && tables.len() != 3) {
+    if (version == 0 && !tables.is_empty())
+        || (version == 1 && tables.len() != 3)
+        || (version == 2 && tables.len() != 4)
+    {
         return Err(Error::Corrupt(
             "existing session schema is incomplete or unversioned",
         ));
     }
-    if version == 1 {
+    if version >= 1 {
         let session_rows = sql::query("PRAGMA table_info(sessions)")
             .exec(&mut db.clone())
             .await?;
@@ -145,6 +168,37 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
             return Err(Error::Corrupt(
                 "events must have the (session_id, cursor) primary key",
             ));
+        }
+    }
+    if version == 2 {
+        let rows = sql::query("PRAGMA table_info(accepted_prompts)")
+            .exec(&mut db.clone())
+            .await?;
+        let mut actual = std::collections::HashMap::new();
+        for row in rows {
+            let fields = columns(row)?;
+            let name = String::try_from(fields[1].clone())
+                .map_err(|_| Error::Corrupt("acceptance column"))?;
+            let kind = String::try_from(fields[2].clone())
+                .map_err(|_| Error::Corrupt("acceptance type"))?;
+            let required = i64::try_from(fields[3].clone())
+                .map_err(|_| Error::Corrupt("acceptance nullability"))?;
+            let key =
+                i64::try_from(fields[5].clone()).map_err(|_| Error::Corrupt("acceptance key"))?;
+            actual.insert(name, (kind.to_ascii_uppercase(), required, key));
+        }
+        if actual.len() != 4 {
+            return Err(Error::Corrupt("incompatible accepted_prompts columns"));
+        }
+        for (name, kind, key) in [
+            ("session_id", "TEXT", 1),
+            ("turn_id", "TEXT", 2),
+            ("cursor", "INTEGER", 0),
+            ("fingerprint", "BLOB", 0),
+        ] {
+            if actual.get(name) != Some(&(kind.into(), 1, key)) {
+                return Err(Error::Corrupt("incompatible accepted_prompts table"));
+            }
         }
     }
     Ok(())
@@ -277,13 +331,37 @@ impl SqliteStore {
         Ok(())
     }
 
-    async fn commit(&self, meta: SessionMeta, events: &[Event]) -> Result<(), Error> {
+    async fn commit(
+        &self,
+        meta: SessionMeta,
+        events: &[Event],
+        acceptance: Option<PromptAcceptance>,
+    ) -> Result<(), Error> {
         let mut db = self.db.clone();
         let mut tx = db.transaction().await?;
         let previous = sql::query("SELECT id, revision, metadata, resume_version, resume_payload FROM sessions WHERE id = ?1")
             .bind(meta.id.to_string()).exec(&mut tx).await?
             .into_iter().next().ok_or(Error::NotFound(meta.id))?;
+        if let Some(acceptance) = acceptance {
+            let existing = sql::query(
+                "SELECT turn_id FROM accepted_prompts WHERE session_id = ?1 AND turn_id = ?2",
+            )
+            .bind(meta.id.to_string())
+            .bind(acceptance.receipt.turn.to_string())
+            .exec(&mut tx)
+            .await?;
+            if !existing.is_empty() {
+                return Err(Error::SubmissionExists(acceptance.receipt.turn));
+            }
+            validate_acceptance(events, acceptance)?;
+        }
         validate_commit(&decode_session(previous)?.meta, &meta, events)?;
+        if let Some(acceptance) = acceptance {
+            sql::statement("INSERT INTO accepted_prompts(session_id, turn_id, cursor, fingerprint) VALUES (?1, ?2, ?3, ?4)")
+                .bind(meta.id.to_string()).bind(acceptance.receipt.turn.to_string())
+                .bind(raw(acceptance.receipt.cursor)?).bind(acceptance.fingerprint.to_vec())
+                .exec(&mut tx).await?;
+        }
         for event in events {
             sql::statement("INSERT INTO events(session_id, cursor, payload) VALUES (?1, ?2, ?3)")
                 .bind(meta.id.to_string())
@@ -303,6 +381,46 @@ impl SqliteStore {
         .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    async fn acceptance(
+        &self,
+        session: SessionId,
+        turn: TurnId,
+    ) -> Result<Option<PromptAcceptance>, Error> {
+        let mut db = self.db.clone();
+        let mut tx = db.transaction().await?;
+        let row = sql::query("SELECT id, revision, metadata, resume_version, resume_payload FROM sessions WHERE id = ?1")
+            .bind(session.to_string()).exec(&mut tx).await?
+            .into_iter().next().ok_or(Error::NotFound(session))?;
+        let latest = decode_session(row)?.meta.revision;
+        let row = sql::query("SELECT cursor, fingerprint FROM accepted_prompts WHERE session_id = ?1 AND turn_id = ?2")
+            .bind(session.to_string()).bind(turn.to_string()).exec(&mut tx).await?
+            .into_iter().next();
+        let Some(row) = row else { return Ok(None) };
+        let mut fields = columns(row)?;
+        let cursor = revision(field(&mut fields)?)?;
+        let fingerprint: Vec<u8> = field(&mut fields)?;
+        let fingerprint = fingerprint
+            .try_into()
+            .map_err(|_| Error::Corrupt("acceptance fingerprint length"))?;
+        let event =
+            sql::query("SELECT cursor, payload FROM events WHERE session_id = ?1 AND cursor = ?2")
+                .bind(session.to_string())
+                .bind(raw(cursor)?)
+                .exec(&mut tx)
+                .await?
+                .into_iter()
+                .next()
+                .ok_or(Error::Corrupt("acceptance event missing"))?;
+        let event = decode_event(session, latest, event)?;
+        let acceptance = PromptAcceptance {
+            receipt: TurnReceipt { turn, cursor },
+            fingerprint,
+        };
+        validate_acceptance(&[event], acceptance)
+            .map_err(|_| Error::Corrupt("acceptance event mismatch"))?;
+        Ok(Some(acceptance))
     }
 
     async fn save_resume(&self, id: SessionId, resume: Option<ResumeData>) -> Result<(), Error> {
@@ -395,6 +513,10 @@ impl SqliteStore {
             .await?
             != 0;
         sql::statement("DELETE FROM events WHERE session_id = ?1")
+            .bind(id.to_string())
+            .exec(&mut tx)
+            .await?;
+        sql::statement("DELETE FROM accepted_prompts WHERE session_id = ?1")
             .bind(id.to_string())
             .exec(&mut tx)
             .await?;

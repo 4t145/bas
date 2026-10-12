@@ -110,7 +110,7 @@ fn confirmed_deletion_cannot_be_undone_by_old_catalogs_or_receipts(cx: &mut Test
             view.update(
                 Update::Catalog(Ok(connection::Catalog {
                     agents: view.agents.clone(),
-                    sessions: vec![removed.clone(), retained.clone()],
+                    sessions: vec![removed.clone().into(), retained.clone().into()],
                 })),
                 window,
                 cx,
@@ -126,7 +126,7 @@ fn confirmed_deletion_cannot_be_undone_by_old_catalogs_or_receipts(cx: &mut Test
             view.update(
                 Update::Catalog(Ok(connection::Catalog {
                     agents: view.agents.clone(),
-                    sessions: vec![removed.clone(), retained.clone()],
+                    sessions: vec![removed.clone().into(), retained.clone().into()],
                 })),
                 window,
                 cx,
@@ -134,7 +134,7 @@ fn confirmed_deletion_cannot_be_undone_by_old_catalogs_or_receipts(cx: &mut Test
             view.update(
                 Update::Archived {
                     session: removed.id,
-                    result: Ok(removed.clone()),
+                    result: Ok(removed.clone().into()),
                 },
                 window,
                 cx,
@@ -142,7 +142,7 @@ fn confirmed_deletion_cannot_be_undone_by_old_catalogs_or_receipts(cx: &mut Test
             view.update(
                 Update::Created {
                     epoch: view.epoch,
-                    result: Ok(removed.clone()),
+                    result: Ok(removed.clone().into()),
                 },
                 window,
                 cx,

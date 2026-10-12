@@ -8,6 +8,9 @@ use super::*;
 use pb::basr_server::{Basr, BasrServer};
 mod archive;
 mod permissions;
+mod runtime;
+mod submission;
+mod tracking;
 
 #[test]
 fn native_auth_required_is_typed_but_transport_failures_stay_errors() {
@@ -43,8 +46,11 @@ fn native_auth_required_is_typed_but_transport_failures_stay_errors() {
 struct Fixture {
     client: Client,
     session: SessionId,
+    turn: TurnId,
     attachments: Arc<Mutex<Vec<Option<u64>>>>,
     prompts: Arc<Mutex<Vec<acp::PromptRequest>>>,
+    submissions: Arc<Mutex<Vec<PromptSubmission>>>,
+    titles: Arc<Mutex<Vec<String>>>,
     permission_answers: Arc<Mutex<Vec<pb::RespondPermissionRequest>>>,
     task: JoinHandle<()>,
 }
@@ -57,6 +63,11 @@ impl Drop for Fixture {
 
 #[derive(Clone, Copy)]
 enum Scenario {
+    Tracking(tracking::Scenario),
+    Submission(submission::Scenario),
+    RuntimeFailure,
+    AttachFailedPrecondition,
+    StreamFailedPrecondition,
     Reconnect,
     Expired,
     Missing,
@@ -68,9 +79,13 @@ enum Scenario {
 
 struct Service {
     session: SessionMeta,
+    runtime: SessionRuntime,
+    turn: TurnId,
     history: Vec<Event>,
     attachments: Arc<Mutex<Vec<Option<u64>>>>,
     prompts: Arc<Mutex<Vec<acp::PromptRequest>>>,
+    submissions: Arc<Mutex<Vec<PromptSubmission>>>,
+    titles: Arc<Mutex<Vec<String>>>,
     permission_answers: Arc<Mutex<Vec<pb::RespondPermissionRequest>>>,
     permission_snapshots: tokio::sync::watch::Sender<Vec<PendingPermission>>,
     scenario: Scenario,
@@ -198,8 +213,11 @@ impl Basr for Service {
     ) -> Result<Response<pb::GetSessionResponse>, Status> {
         Ok(Response::new(pb::GetSessionResponse {
             session: Some(
-                pb::Session::try_from(&self.session)
-                    .expect("fixture metadata has a UTF-8 working directory"),
+                pb::Session::try_from(&SessionSnapshot {
+                    meta: self.session.clone(),
+                    runtime: self.runtime.clone(),
+                })
+                .expect("fixture metadata has a UTF-8 working directory"),
             ),
         }))
     }
@@ -236,8 +254,24 @@ impl Basr for Service {
             calls.push(request.into_inner().cursor);
             calls.len()
         };
+        if let Scenario::Tracking(scenario) = self.scenario {
+            return tracking::attach(self, scenario, count);
+        }
+        if matches!(self.scenario, Scenario::Submission(_)) {
+            return tracking::attach(self, tracking::Scenario::Finished, count);
+        }
         if matches!(self.scenario, Scenario::Expired) && count == 1 {
             return Err(Status::data_loss("cursor evicted"));
+        }
+        if matches!(self.scenario, Scenario::AttachFailedPrecondition) {
+            return Err(Status::failed_precondition(
+                "session persistence failed: disk full",
+            ));
+        }
+        if matches!(self.scenario, Scenario::StreamFailedPrecondition) {
+            return Ok(Response::new(Box::pin(tokio_stream::iter(vec![Err(
+                Status::failed_precondition("session persistence failed: disk full"),
+            )]))));
         }
         let events = if count == 1 {
             vec![
@@ -306,7 +340,13 @@ impl Basr for Service {
     ) -> Result<Response<pb::ListSessionsResponse>, Status> {
         assert!(request.into_inner().include_archived);
         Ok(Response::new(pb::ListSessionsResponse {
-            sessions: vec![pb::Session::try_from(&self.session).expect("metadata")],
+            sessions: vec![
+                pb::Session::try_from(&SessionSnapshot {
+                    meta: self.session.clone(),
+                    runtime: self.runtime.clone(),
+                })
+                .expect("metadata"),
+            ],
         }))
     }
     async fn create_session(
@@ -330,16 +370,34 @@ impl Basr for Service {
     }
     async fn prompt(
         &self,
-        request: Request<pb::AcpPayload>,
-    ) -> Result<Response<pb::TurnAccepted>, Status> {
-        let prompt = request
-            .into_inner()
-            .decode()
+        request: Request<pb::PromptSubmission>,
+    ) -> Result<Response<pb::PromptSubmissionResponse>, Status> {
+        let submission = PromptSubmission::try_from(request.into_inner())
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
-        self.prompts.lock().expect("prompt log").push(prompt);
-        Ok(Response::new(pb::TurnAccepted {
-            turn: uuid::Uuid::new_v4().to_string(),
-            cursor: 7,
+        if let Scenario::Submission(scenario) = self.scenario {
+            return submission::prompt(self, scenario, submission);
+        }
+        self.prompts
+            .lock()
+            .expect("prompt log")
+            .push(submission.request);
+        Ok(Response::new(
+            PromptSubmissionOutcome::Accepted(TurnReceipt {
+                turn: submission.turn,
+                cursor: Cursor::from_raw(7),
+            })
+            .into(),
+        ))
+    }
+    async fn get_prompt_acceptance(
+        &self,
+        request: Request<pb::PromptAcceptanceRequest>,
+    ) -> Result<Response<pb::PromptAcceptanceResponse>, Status> {
+        if let Scenario::Submission(scenario) = self.scenario {
+            return submission::acceptance(self, scenario, request.into_inner());
+        }
+        Ok(Response::new(pb::PromptAcceptanceResponse {
+            accepted: None,
         }))
     }
     async fn cancel(
@@ -362,8 +420,17 @@ impl Basr for Service {
     }
     async fn set_title(
         &self,
-        _: Request<pb::SetTitleRequest>,
+        request: Request<pb::SetTitleRequest>,
     ) -> Result<Response<pb::SetTitleResponse>, Status> {
+        if let Scenario::Submission(scenario) = self.scenario {
+            self.titles
+                .lock()
+                .expect("titles")
+                .push(request.into_inner().title);
+            if !matches!(scenario, submission::Scenario::TitleFailure) {
+                return Ok(Response::new(pb::SetTitleResponse {}));
+            }
+        }
         Err(Status::unimplemented("not used"))
     }
 }
@@ -385,6 +452,8 @@ async fn fixture(scenario: Scenario) -> Fixture {
         .collect();
     let attachments = Arc::new(Mutex::new(Vec::new()));
     let prompts = Arc::new(Mutex::new(Vec::new()));
+    let submissions = Arc::new(Mutex::new(Vec::new()));
+    let titles = Arc::new(Mutex::new(Vec::new()));
     let permission_answers = Arc::new(Mutex::new(Vec::new()));
     let initial_permissions = if matches!(
         scenario,
@@ -411,11 +480,23 @@ async fn fixture(scenario: Scenario) -> Fixture {
         Vec::new()
     };
     let permission_snapshots = tokio::sync::watch::channel(initial_permissions).0;
+    let turn = TurnId::new();
     let service = Service {
         session,
+        runtime: SessionRuntime {
+            failure: matches!(scenario, Scenario::RuntimeFailure).then(|| {
+                RuntimeFailure::Persistence {
+                    message: "disk full".into(),
+                }
+            }),
+            ..SessionRuntime::default()
+        },
+        turn,
         history,
         attachments: attachments.clone(),
         prompts: prompts.clone(),
+        submissions: submissions.clone(),
+        titles: titles.clone(),
         permission_answers: permission_answers.clone(),
         permission_snapshots,
         scenario,
@@ -434,8 +515,11 @@ async fn fixture(scenario: Scenario) -> Fixture {
     Fixture {
         client: Client::connect_at(address).await.expect("test client"),
         session: id,
+        turn,
         attachments,
         prompts,
+        submissions,
+        titles,
         permission_answers,
         task,
     }
@@ -462,6 +546,7 @@ async fn prompt_sends_text_files_and_images_as_native_acp_blocks() {
         fixture.client.clone(),
         Command::Prompt {
             session: fixture.session,
+            turn: fixture.turn,
             text: format!(
                 "分析附件{}{}",
                 attachments[0].mention, attachments[1].mention
@@ -474,11 +559,18 @@ async fn prompt_sends_text_files_and_images_as_native_acp_blocks() {
         },
     )
     .await;
-    assert!(matches!(update, Update::Sent { result: Ok(_), .. }));
+    assert!(matches!(
+        update,
+        Update::Submission {
+            result: Ok(PromptSubmissionOutcome::Accepted(_)),
+            ..
+        }
+    ));
     let update = execute(
         fixture.client.clone(),
         Command::Prompt {
             session: fixture.session,
+            turn: fixture.turn,
             text: format!("{}{}", attachments[0].mention, attachments[1].mention),
             attachments,
             capabilities: acp::PromptCapabilities::new()
@@ -489,7 +581,7 @@ async fn prompt_sends_text_files_and_images_as_native_acp_blocks() {
     )
     .await;
     assert!(
-        matches!(update, Update::Sent { result: Ok(receipt), .. } if receipt.cursor.raw() == 7)
+        matches!(update, Update::Submission { result: Ok(PromptSubmissionOutcome::Accepted(receipt)), .. } if receipt.cursor.raw() == 7)
     );
     let prompts = fixture.prompts.lock().expect("prompt log");
     assert_eq!(prompts.len(), 2);

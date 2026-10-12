@@ -548,7 +548,7 @@ fn installation_catalog_starts_a_new_agent_chat_and_preserves_the_old_draft(
             view.update(
                 Update::Created {
                     epoch: created.epoch,
-                    result: Ok(next.clone()),
+                    result: Ok(next.clone().into()),
                 },
                 window,
                 cx,

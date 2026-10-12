@@ -46,9 +46,20 @@ pub enum Command {
     Prompt {
         /// Session id.
         session: String,
+        /// Stable submission id; reuse it and the exact original text for an explicit retry.
+        #[arg(long)]
+        submission: Option<basr::model::TurnId>,
         /// Prompt text; several words are joined with spaces.
         #[arg(required = true, num_args = 1..)]
         text: Vec<String>,
+    },
+
+    /// Query whether a submission was accepted, without sending a prompt.
+    PromptStatus {
+        /// Session id.
+        session: basr::model::SessionId,
+        /// Original submission id.
+        turn: basr::model::TurnId,
     },
 
     /// Ask a session's backend to abandon the running turn.

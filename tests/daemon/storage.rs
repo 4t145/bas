@@ -1,9 +1,10 @@
 use super::*;
 
-async fn cli(daemon: &Daemon, args: &[&str]) -> String {
-    let output = tokio::time::timeout(
+async fn cli_output(daemon: &Daemon, args: &[&str]) -> std::process::Output {
+    tokio::time::timeout(
         TIMEOUT,
         Command::new(env!("CARGO_BIN_EXE_basrctl"))
+            .kill_on_drop(true)
             .arg("--server")
             .arg(daemon.address.to_string())
             .args(args)
@@ -11,7 +12,11 @@ async fn cli(daemon: &Daemon, args: &[&str]) -> String {
     )
     .await
     .expect("CLI request deadline")
-    .expect("run CLI");
+    .expect("run CLI")
+}
+
+async fn cli(daemon: &Daemon, args: &[&str]) -> String {
+    let output = cli_output(daemon, args).await;
     assert!(
         output.status.success(),
         "CLI failed: {}",
@@ -156,7 +161,25 @@ async fn acknowledged_prompt_remains_replayable_after_daemon_is_killed() {
         .find_map(|line| line.strip_prefix("id        "))
         .expect("create prints the session ID")
         .to_owned();
-    cli(&daemon, &["prompt", &id, "accepted before crash"]).await;
+    let turn = basr::model::TurnId::new().to_string();
+    let before = cli(&daemon, &["history", &id]).await;
+    let unknown = cli(&daemon, &["prompt-status", &id, &turn]).await;
+    assert!(unknown.contains("acceptance unknown"));
+    assert_eq!(cli(&daemon, &["history", &id]).await, before);
+    let prompt = [
+        "prompt",
+        &id,
+        "--submission",
+        &turn,
+        "accepted before crash",
+    ];
+    let accepted = cli_output(&daemon, &prompt).await;
+    assert!(accepted.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&accepted.stdout),
+        format!("turn {turn}\n")
+    );
+    assert!(String::from_utf8_lossy(&accepted.stderr).contains(&format!("submission {turn}")));
     kill(
         Pid::from_raw(daemon.child.id().expect("daemon running") as i32),
         Signal::SIGKILL,
@@ -170,11 +193,21 @@ async fn acknowledged_prompt_remains_replayable_after_daemon_is_killed() {
 
     let mut daemon = Daemon::start(start()).await;
     assert!(cli(&daemon, &["session", "list"]).await.contains(&id));
-    assert!(
-        cli(&daemon, &["history", &id])
-            .await
-            .contains("accepted before crash")
+    let history = cli(&daemon, &["history", &id]).await;
+    assert!(history.contains("accepted before crash"));
+    assert_eq!(
+        cli(&daemon, &["prompt-status", &id, &turn]).await,
+        format!("turn {turn}\n")
     );
+    assert_eq!(cli(&daemon, &prompt).await, format!("turn {turn}\n"));
+    let conflict = cli_output(
+        &daemon,
+        &["prompt", &id, "--submission", &turn, "different text"],
+    )
+    .await;
+    assert!(!conflict.status.success());
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("prompt rejected (Conflict)"));
+    assert_eq!(cli(&daemon, &["history", &id]).await, history);
     cli(&daemon, &["prompt", &id, "continued after crash"]).await;
     daemon.stop().await;
 }

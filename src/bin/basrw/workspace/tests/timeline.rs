@@ -14,7 +14,7 @@ fn startup_agent_message_stays_formatted_and_separate_from_the_first_turn(cx: &m
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: session.clone(),
+                    session: session.clone().into(),
                     events: vec![Event::new(
                         session.id,
                         Cursor::from_raw(1),

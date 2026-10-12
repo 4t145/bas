@@ -6,12 +6,12 @@ fn archive_keeps_accepted_turn_and_restore_requires_explicit_retry() {
     let mut meta = idle(1);
     outbox.enqueue(draft("A"));
     outbox.enqueue(draft("B"));
-    outbox.advance(&meta, true);
+    let submission = submission(outbox.advance(&meta, true).expect("send A"));
     let receipt = TurnReceipt {
-        turn: TurnId::new(),
+        turn: submission.turn,
         cursor: Cursor::from_raw(2),
     };
-    outbox.receipt(Some(receipt));
+    outbox.settle(submission, Ok(PromptSubmissionOutcome::Accepted(receipt)));
     meta.archived = true;
     meta.revision = Cursor::from_raw(3);
     assert!(outbox.advance(&meta, true).is_none());
@@ -38,16 +38,19 @@ fn archive_while_submitting_retains_receipt_correlation() {
     let mut meta = idle(1);
     outbox.enqueue(draft("A"));
     outbox.enqueue(draft("B"));
-    outbox.advance(&meta, true);
+    let submission = submission(outbox.advance(&meta, true).expect("send A"));
     meta.archived = true;
     outbox.advance(&meta, true);
     let receipt = TurnReceipt {
-        turn: TurnId::new(),
+        turn: submission.turn,
         cursor: Cursor::from_raw(2),
     };
     assert!(matches!(
-        outbox.receipt(Some(receipt)),
-        Some(Action::Accepted(Origin::Queue))
+        outbox.settle(submission, Ok(PromptSubmissionOutcome::Accepted(receipt))),
+        Some(Settlement::Accepted {
+            origin: Origin::Queue,
+            ..
+        })
     ));
     assert!(matches!(outbox.dispatch, Dispatch::Awaiting(_)));
     assert!(outbox.paused());

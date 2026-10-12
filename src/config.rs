@@ -2,9 +2,11 @@
 pub mod agent;
 pub mod appearance;
 pub mod paths;
+pub mod registration;
 mod store;
 pub use agent::{AgentSpec, validate_agents};
 pub use appearance::Appearance;
+pub use registration::*;
 use serde::{Deserialize, Serialize};
 pub use store::{Document, Error, Store};
 
@@ -17,12 +19,12 @@ pub struct Settings {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Daemon {
-    pub agents: Vec<AgentSpec>,
+    pub agents: Vec<AgentRegistration>,
 }
 impl Default for Daemon {
     fn default() -> Self {
         Self {
-            agents: vec![AgentSpec::embedded()],
+            agents: vec![AgentSpec::embedded().into()],
         }
     }
 }

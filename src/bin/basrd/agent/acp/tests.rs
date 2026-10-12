@@ -39,6 +39,7 @@ impl crate::storage::Storage for RejectPromptStore {
         &'a self,
         meta: basr::model::SessionMeta,
         events: &'a [basr::model::Event],
+        acceptance: Option<crate::storage::PromptAcceptance>,
     ) -> BoxFuture<'a, Result<(), crate::storage::Error>> {
         Box::pin(async move {
             if events
@@ -49,8 +50,17 @@ impl crate::storage::Storage for RejectPromptStore {
                     "injected prompt commit failure",
                 ));
             }
-            self.inner.commit(meta, events).await
+            self.inner.commit(meta, events, acceptance).await
         })
+    }
+
+    fn acceptance(
+        &self,
+        session: basr::model::SessionId,
+        turn: basr::model::TurnId,
+    ) -> BoxFuture<'_, Result<Option<crate::storage::PromptAcceptance>, crate::storage::Error>>
+    {
+        self.inner.acceptance(session, turn)
     }
 
     fn save_resume(
@@ -117,14 +127,18 @@ async fn failed_prompt_commit_never_dispatches_to_the_acp_agent() {
     let before = session.meta().revision;
     assert!(matches!(
         session
-            .accept_prompt(v1::PromptRequest::new(
+            .accept_prompt(basr::model::PromptSubmission::new(v1::PromptRequest::new(
                 session.id().to_string(),
                 vec!["must not run".into()],
-            ))
+            )))
             .await,
-        Err(crate::session::SessionError::Storage(_))
+        Err(crate::session::SubmissionError::Unknown(
+            crate::session::SessionError::Runtime(basr::model::RuntimeFailure::Persistence { .. })
+        ))
     ));
     assert_eq!(session.meta().revision, before);
+    assert_eq!(session.snapshot().status(), SessionStatus::Failed);
+    assert!(registry.ensure_restored(&session).await.is_err());
     assert!(!directory.path().join("pid.prompt").exists());
     assert_eq!(
         storage
@@ -166,10 +180,10 @@ async fn persisted_acp_session_loads_before_continuing_without_duplicating_histo
     let session = registry.create(request()).await.expect("create");
     let public_id = session.id();
     let receipt = session
-        .accept_prompt(v1::PromptRequest::new(
+        .accept_prompt(basr::model::PromptSubmission::new(v1::PromptRequest::new(
             public_id.to_string(),
             vec!["first".into()],
-        ))
+        )))
         .await
         .expect("first prompt");
     let mut attachment = session
@@ -235,10 +249,10 @@ async fn persisted_acp_session_loads_before_continuing_without_duplicating_histo
         "session/load history replay is not appended a second time"
     );
     let receipt = session
-        .accept_prompt(v1::PromptRequest::new(
+        .accept_prompt(basr::model::PromptSubmission::new(v1::PromptRequest::new(
             public_id.to_string(),
             vec!["second".into()],
-        ))
+        )))
         .await
         .expect("continue original session");
     let mut resumed = session
@@ -339,12 +353,17 @@ async fn shutdown_during_acp_load_cannot_reinstall_a_backend() {
     );
     assert!(matches!(
         session
-            .accept_prompt(v1::PromptRequest::new(
+            .accept_prompt(basr::model::PromptSubmission::new(v1::PromptRequest::new(
                 id.to_string(),
                 vec!["after shutdown".into()],
-            ))
+            )))
             .await,
-        Err(crate::session::SessionError::Inactive(_))
+        Err(crate::session::SubmissionError::Rejected(
+            basr::model::PromptRejection {
+                kind: basr::model::PromptRejectionKind::Unavailable,
+                ..
+            }
+        ))
     ));
     wait_for_exit(&directory).await;
 }
@@ -528,6 +547,50 @@ async fn connection_checks_are_short_lived_and_not_registry_sessions() {
             tonic::Code::FailedPrecondition
         );
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn session_operation_auth_errors_keep_native_details_without_mutating_session() {
+    use basr::service::{acp_error, pb::basr_server::Basr};
+    use tonic::Request;
+
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let registry = Arc::new(fixture("auth_operation", &directory, TIMEOUT));
+    let session = registry.create(request()).await.expect("ready session");
+    let service = crate::service::Service::new(registry.clone());
+    let before = session.meta();
+    let id = session.id().to_string();
+    let config = v1::SetSessionConfigOptionRequest::new(id.clone(), "model", "deep");
+    let mode = v1::SetSessionModeRequest::new(id, "code");
+
+    let errors = [
+        tokio::time::timeout(
+            TIMEOUT,
+            service.set_config_option(Request::new((&config).into())),
+        )
+        .await
+        .expect("config response deadline")
+        .expect_err("configuration requires authentication"),
+        tokio::time::timeout(TIMEOUT, service.set_mode(Request::new((&mode).into())))
+            .await
+            .expect("mode response deadline")
+            .expect_err("mode requires authentication"),
+    ];
+    for status in errors {
+        assert_eq!(status.code(), tonic::Code::Unauthenticated);
+        let error = acp_error(&status).expect("native ACP error");
+        assert_eq!(error.code, v1::ErrorCode::AuthRequired);
+        assert_eq!(error.message, "Sign in required");
+        assert_eq!(error.data, Some(json!({"reason": "expired"})));
+    }
+    assert_eq!(
+        session.meta(),
+        before,
+        "a native request rejection is not a session lifecycle transition"
+    );
+    registry.shutdown().await;
+    wait_for_exit(&directory).await;
 }
 
 #[cfg(unix)]
@@ -805,7 +868,9 @@ async fn acp_finishes_and_notifies_after_the_last_client_disconnects() {
         .into_inner();
     let prompt = v1::PromptRequest::new(session.id().to_string(), vec!["hello".into()]);
     service
-        .prompt(Request::new((&prompt).into()))
+        .prompt(Request::new(
+            (&basr::model::PromptSubmission::new(prompt.clone())).into(),
+        ))
         .await
         .expect("prompt accepted");
     tokio::time::timeout(TIMEOUT, async {
@@ -826,7 +891,11 @@ async fn acp_finishes_and_notifies_after_the_last_client_disconnects() {
         .expect("completion notification");
     assert_eq!(completion.session.id, session.id());
     assert_eq!(
-        completion.result.expect("successful turn").stop_reason,
+        match completion.outcome {
+            crate::session::CompletionOutcome::Native(result) =>
+                result.expect("successful turn").stop_reason,
+            other => panic!("expected native result, got {other:?}"),
+        },
         StopReason::EndTurn
     );
     assert_eq!(session.meta().status, SessionStatus::Idle);
@@ -989,6 +1058,53 @@ async fn startup_timeout_and_request_cancellation_kill_the_partial_process() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn cancellation_before_worker_dispatch_has_no_native_result() {
+    let directory = tempfile::tempdir().expect("directory");
+    let (updates, mut inbox) = mpsc::channel(16);
+    let public_id = SessionId::new();
+    let mut agent = Driver::new()
+        .launch(LaunchRequest {
+            session: public_id,
+            spec: Arc::new(fixture_spec("wait_cancel", &directory)),
+            cwd: std::env::current_dir().expect("cwd"),
+            host: Arc::new(LocalHost::default()),
+            updates,
+        })
+        .await
+        .expect("launch");
+    let turn = TurnId::new();
+    // No yield between enqueue and cancellation: the prompt worker cannot dispatch.
+    agent
+        .prompt(
+            turn,
+            v1::PromptRequest::new(public_id.to_string(), vec!["wait".into()]),
+        )
+        .expect("prompt");
+    agent
+        .cancel(v1::CancelNotification::new(public_id.to_string()))
+        .expect("cancel");
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if let Update::Turn {
+                turn: completed,
+                update,
+            } = inbox.recv().await.expect("update")
+            {
+                assert_eq!(completed, turn);
+                assert_eq!(update, TurnUpdate::CancelledBeforeDispatch);
+                break;
+            }
+        }
+    })
+    .await
+    .expect("interrupted");
+    assert!(!directory.path().join("pid.request").exists());
+    agent.shutdown().await;
+    wait_for_exit(&directory).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn cancellation_before_and_after_prompt_dispatch_completes_the_turn() {
     for immediate in [true, false] {
         let directory = tempfile::tempdir().expect("fixture directory");
@@ -1016,14 +1132,23 @@ async fn cancellation_before_and_after_prompt_dispatch_completes_the_turn() {
         session.cancel_acp(cancel).await.expect("cancel requested");
         tokio::time::timeout(TIMEOUT, async {
             loop {
-                if let basr::model::EventKind::TurnFinished { result, .. } =
-                    attachment.recv().await.expect("event").kind
-                {
-                    assert_eq!(
-                        result.expect("cancel result").stop_reason,
-                        StopReason::Cancelled
-                    );
-                    return;
+                match attachment.recv().await.expect("event").kind {
+                    basr::model::EventKind::TurnInterrupted { reason, .. } => {
+                        assert!(immediate);
+                        assert_eq!(
+                            reason,
+                            basr::model::InterruptionReason::CancelledBeforeDispatch
+                        );
+                        return;
+                    }
+                    basr::model::EventKind::TurnFinished { result, .. } => {
+                        assert_eq!(
+                            result.expect("cancel result").stop_reason,
+                            StopReason::Cancelled
+                        );
+                        return;
+                    }
+                    _ => {}
                 }
             }
         })
@@ -1211,7 +1336,9 @@ async fn native_acp_requests_options_and_rich_updates_cross_the_service_and_repl
     let prompt = v1::PromptRequest::new(id.clone(), content.clone())
         .meta(serde_json::from_value::<v1::Meta>(json!({"prompt":"metadata"})).expect("meta"));
     service
-        .prompt(Request::new((&prompt).into()))
+        .prompt(Request::new(
+            (&basr::model::PromptSubmission::new(prompt.clone())).into(),
+        ))
         .await
         .expect("prompt accepted");
     let events = tokio::time::timeout(TIMEOUT, async {
@@ -1361,10 +1488,10 @@ async fn prompt_rejection_finishes_only_the_turn_and_the_next_prompt_succeeds() 
         .expect("attach");
     for rejected in [true, false] {
         let receipt = session
-            .accept_prompt(v1::PromptRequest::new(
+            .accept_prompt(basr::model::PromptSubmission::new(v1::PromptRequest::new(
                 session.id().to_string(),
                 vec!["hello".into()],
-            ))
+            )))
             .await
             .expect("accepted");
         let started = events.recv().await.expect("turn started");
@@ -1376,6 +1503,16 @@ async fn prompt_rejection_finishes_only_the_turn_and_the_next_prompt_succeeds() 
                 if let EventKind::TurnFinished { turn, result } = event.kind {
                     assert_eq!(turn, receipt.turn);
                     assert_eq!(result.is_err(), rejected);
+                    if let Err(error) = result {
+                        assert_eq!(
+                            serde_json::to_value(error).expect("native error"),
+                            json!({
+                                "code": -32602,
+                                "message": "fixture prompt rejected",
+                                "data": {"field": "prompt", "retryable": true}
+                            })
+                        );
+                    }
                     break;
                 }
             }

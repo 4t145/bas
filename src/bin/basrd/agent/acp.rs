@@ -8,7 +8,9 @@ use agent_client_protocol::{
     schema::{ProtocolVersion, v1},
 };
 use async_trait::async_trait;
-use basr::model::{AgentId, SessionId, StopReason, TurnId};
+#[cfg(test)]
+use basr::model::StopReason;
+use basr::model::{AgentId, SessionId, TurnId};
 use futures::future::BoxFuture;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
@@ -527,9 +529,7 @@ impl AgentTrait for Session {
                 let _ = updates
                     .send(Update::Turn {
                         turn,
-                        update: TurnUpdate::Finished(Ok(v1::PromptResponse::new(
-                            StopReason::Cancelled,
-                        ))),
+                        update: TurnUpdate::CancelledBeforeDispatch,
                     })
                     .await;
                 return Ok(());
@@ -566,7 +566,7 @@ impl AgentTrait for Session {
                 Ok(value) => Ok(serde_json::from_value::<v1::PromptResponse>(value).map_err(
                     |error| Error::with_source(agent, "malformed ACP prompt response", error),
                 )?),
-                Err(error) => Err(error.to_string()),
+                Err(error) => Err(error),
             };
             let _ = updates
                 .send(Update::Turn {

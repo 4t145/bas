@@ -48,7 +48,7 @@ async fn run(
     let saved = basr::config::Store::at(path)
         .load()
         .map_err(|_| crate::i18n::tr!("auth-check-config").to_owned())?;
-    if !saved.settings.daemon.agents.contains(&spec) {
+    if !matches_registration(&saved.settings.daemon.agents, &spec) {
         return Err(crate::i18n::tr!("auth-config-changed").into());
     }
     let request = pb::AuthenticationInput {
@@ -88,6 +88,22 @@ async fn run(
     }
 }
 
+pub(super) fn matches_registration(
+    registrations: &[basr::config::AgentRegistration],
+    spec: &AgentSpec,
+) -> bool {
+    let mut matching = registrations
+        .iter()
+        .filter(|registration| registration.id() == &spec.id);
+    let Some(registration) = matching.next() else {
+        return false;
+    };
+    matching.next().is_none()
+        && registration
+            .resolve()
+            .is_ok_and(|resolved| resolved == *spec)
+}
+
 fn rpc_error(action: &str, error: &tonic::Status) -> String {
     if error.code() == tonic::Code::Unimplemented {
         return crate::i18n::tr!("auth-upgrade").into();
@@ -109,7 +125,7 @@ pub(super) fn terminal(
     plan: basr::authentication::Invocation,
 ) -> impl Future<Output = Result<i32, String>> + use<> {
     let (send, receive) = futures::channel::oneshot::channel();
-    runtime.spawn(async move {
+    let task = AbortOnDropHandle::new(runtime.spawn(async move {
         let result = async {
             let invocation =
                 super::terminal::Invocation::from_plan(plan).map_err(|error| error.to_string())?;
@@ -118,8 +134,9 @@ pub(super) fn terminal(
         }
         .await;
         let _ = send.send(result);
-    });
+    }));
     async move {
+        let _task = task;
         receive
             .await
             .unwrap_or_else(|_| Err(crate::i18n::tr!("auth-terminal-ended").into()))

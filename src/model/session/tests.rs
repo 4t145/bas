@@ -263,3 +263,36 @@ fn finishing_an_archived_turn_does_not_restore_the_session() {
     assert_eq!(meta.status, SessionStatus::Idle);
     assert_eq!(meta.active_turn, None);
 }
+
+#[test]
+fn runtime_interruption_clears_activity_without_inventing_an_acp_result() {
+    let mut meta = metadata();
+    let turn = TurnId::new();
+    for (cursor, kind) in [
+        (1, EventKind::TurnStarted { turn }),
+        (2, EventKind::ArchiveChanged { archived: true }),
+        (
+            3,
+            EventKind::TurnInterrupted {
+                turn,
+                reason: crate::model::InterruptionReason::DaemonRestarted,
+            },
+        ),
+    ] {
+        assert!(meta.apply_event(&Event::new(meta.id, Cursor::from_raw(cursor), kind)));
+    }
+    assert!(meta.archived);
+    assert_eq!(meta.status, SessionStatus::Idle);
+    assert_eq!(meta.active_turn, None);
+    assert_eq!(meta.revision, Cursor::from_raw(3));
+    let failure = Event::new(
+        meta.id,
+        Cursor::from_raw(4),
+        EventKind::Failed {
+            message: "backend unavailable".into(),
+        },
+    );
+    assert!(meta.apply_event(&failure));
+    assert_eq!(meta.status, SessionStatus::Failed);
+    assert_eq!(meta.active_turn, None);
+}

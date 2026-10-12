@@ -12,7 +12,7 @@ pub use basr::acp::{
 };
 use basr::{
     acp,
-    model::{AgentId, SessionId, TurnId, TurnResult},
+    model::{AgentId, PromptResult, SessionId, TurnId},
 };
 use futures::future::BoxFuture;
 
@@ -107,7 +107,8 @@ pub enum Update {
 )]
 pub enum TurnUpdate {
     Acp(acp::SessionUpdate),
-    Finished(TurnResult),
+    Finished(PromptResult),
+    CancelledBeforeDispatch,
 }
 
 /// Backend calls only enqueue work; they must not block or re-enter the session.

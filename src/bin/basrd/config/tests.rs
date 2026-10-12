@@ -59,7 +59,10 @@ fn defaults_are_suitable_for_a_local_daemon() {
     assert_eq!(config.notify, Notify::Auto);
     assert_eq!(config.storage, Storage::Localdb);
     assert_eq!(config.localdb_path, None);
-    assert_eq!(config.agents, vec![crate::agent::AgentSpec::embedded()]);
+    assert_eq!(
+        config.agents,
+        vec![crate::agent::AgentSpec::embedded().into()]
+    );
 }
 
 #[test]

@@ -24,7 +24,7 @@ fn finish_initialization(
         view.update(
             Update::Created {
                 epoch: view.epoch,
-                result: Ok(session.clone()),
+                result: Ok(session.clone().into()),
             },
             window,
             cx,
@@ -32,7 +32,7 @@ fn finish_initialization(
         view.update(
             Update::Snapshot {
                 epoch: view.epoch,
-                session,
+                session: session.into(),
                 events,
             },
             window,
@@ -225,13 +225,10 @@ fn first_prompt_receipt_locks_agent_and_rejection_keeps_it_selectable(cx: &mut T
             view.select_agent("other".into(), window, cx);
             assert_eq!(view.active, Some(meta.id));
             assert_eq!(view.epoch, epoch);
+            let submission =
+                submission::payload(fixture.commands.try_recv().expect("first prompt"));
             view.update(
-                Update::Sent {
-                    session: meta.id,
-                    text: "first prompt".into(),
-                    attachments: Vec::new(),
-                    result: Err("rejected before acceptance".into()),
-                },
+                submission::rejected(meta.id, &submission, "rejected before acceptance"),
                 window,
                 cx,
             );
@@ -239,22 +236,15 @@ fn first_prompt_receipt_locks_agent_and_rejection_keeps_it_selectable(cx: &mut T
             assert!(!view.thread_has_user_prompt());
             assert_eq!(view.composer.read(cx).value(), "first prompt");
             view.send_prompt(window, cx);
-            view.update(
-                Update::Sent {
-                    session: meta.id,
-                    text: "first prompt".into(),
-                    attachments: Vec::new(),
-                    result: Ok(receipt(1)),
-                },
-                window,
-                cx,
-            );
+            let submission =
+                submission::payload(fixture.commands.try_recv().expect("retry prompt"));
+            view.update(submission::accepted_at(meta.id, &submission, 1), window, cx);
             assert!(view.thread_has_user_prompt());
             assert!(!view.can_select_agent());
             view.update(
                 Update::Snapshot {
                     epoch,
-                    session: meta.clone(),
+                    session: meta.clone().into(),
                     events: Vec::new(),
                 },
                 window,
@@ -262,13 +252,7 @@ fn first_prompt_receipt_locks_agent_and_rejection_keeps_it_selectable(cx: &mut T
             );
             assert!(!view.can_select_agent());
         });
-        let commands: Vec<_> = std::iter::from_fn(|| fixture.commands.try_recv().ok()).collect();
-        assert_eq!(commands.len(), 2);
-        assert!(
-            commands
-                .iter()
-                .all(|command| matches!(command, Command::Prompt { .. }))
-        );
+        assert!(fixture.commands.try_recv().is_err());
     })
     .expect("submission blocks switching and successful acceptance permanently fixes the agent");
 }
@@ -336,7 +320,7 @@ fn initialized_agent_waits_for_complete_history_and_no_pending_drafts(cx: &mut T
             view.update(
                 Update::Catalog(Ok(connection::Catalog {
                     agents: view.agents.clone(),
-                    sessions: vec![newer],
+                    sessions: vec![newer.into()],
                 })),
                 window,
                 cx,
@@ -360,7 +344,7 @@ fn initialized_agent_waits_for_complete_history_and_no_pending_drafts(cx: &mut T
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: meta.clone(),
+                    session: meta.clone().into(),
                     events: vec![Event::new(
                         meta.id,
                         Cursor::from_raw(8),
@@ -400,7 +384,7 @@ fn complete_startup_history_reopens_an_unused_thread_but_cannot_unlock_an_accept
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: meta.clone(),
+                    session: meta.clone().into(),
                     events: vec![banner.clone()],
                 },
                 window,
@@ -409,11 +393,15 @@ fn complete_startup_history_reopens_an_unused_thread_but_cannot_unlock_an_accept
             assert!(view.can_select_agent());
             assert!(!view.thread_has_user_prompt());
             view.update(
-                Update::Sent {
-                    session: meta.id,
-                    text: "accepted elsewhere".into(),
-                    attachments: Vec::new(),
-                    result: Ok(receipt(2)),
+                Update::Event {
+                    epoch: view.epoch,
+                    event: Event::new(
+                        meta.id,
+                        Cursor::from_raw(2),
+                        EventKind::TurnStarted {
+                            turn: basr::model::TurnId::new(),
+                        },
+                    ),
                 },
                 window,
                 cx,
@@ -421,7 +409,7 @@ fn complete_startup_history_reopens_an_unused_thread_but_cannot_unlock_an_accept
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: meta.clone(),
+                    session: meta.clone().into(),
                     events: vec![banner.clone()],
                 },
                 window,
@@ -533,7 +521,7 @@ fn explicit_new_thread_waits_for_agent_choice_across_catalog_refreshes(cx: &mut 
                     view.update(
                         Update::Catalog(Ok(connection::Catalog {
                             agents: view.agents.clone(),
-                            sessions: vec![previous.clone()],
+                            sessions: vec![previous.clone().into()],
                         })),
                         window,
                         cx,
@@ -701,7 +689,7 @@ fn stale_catalog_cannot_replace_the_agent_while_creating_or_waiting_for_login(
                             kind: "embedded".into(),
                             command: String::new(),
                         }],
-                        sessions: vec![previous.clone()],
+                        sessions: vec![previous.clone().into()],
                     }))
                 };
                 view.update(old_catalog(), window, cx);
@@ -767,7 +755,7 @@ fn stale_catalog_cannot_replace_the_agent_while_creating_or_waiting_for_login(
             view.update(
                 Update::Created {
                     epoch: retry.epoch,
-                    result: Ok(created.clone()),
+                    result: Ok(created.clone().into()),
                 },
                 window,
                 cx,
@@ -781,7 +769,7 @@ fn stale_catalog_cannot_replace_the_agent_while_creating_or_waiting_for_login(
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: created.clone(),
+                    session: created.clone().into(),
                     events: Vec::new(),
                 },
                 window,

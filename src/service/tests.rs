@@ -2,14 +2,16 @@ use super::{Error, pb};
 use crate::{acp, model::*};
 
 mod permissions;
+mod submission;
 
 #[test]
 fn agent_reported_timestamp_survives_session_snapshot_transport() {
     let mut meta = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
     meta.agent_updated_at = Some(Timestamp::from_millis(1234));
-    let snapshot = pb::Session::try_from(&meta).expect("session snapshot");
-    assert_eq!(snapshot.agent_updated_at, Some(1234));
-    assert_eq!(SessionMeta::try_from(snapshot).expect("metadata"), meta);
+    let snapshot = SessionSnapshot::from(meta);
+    let wire = pb::Session::try_from(&snapshot).expect("session snapshot");
+    assert_eq!(wire.agent_updated_at, Some(1234));
+    assert_eq!(SessionSnapshot::try_from(wire).expect("snapshot"), snapshot);
 }
 
 fn event(kind: EventKind) -> Event {
@@ -73,7 +75,8 @@ fn lifecycle_and_complete_prompt_responses_round_trip() {
         },
         EventKind::TurnFinished {
             turn: TurnId::new(),
-            result: Err("connection lost".into()),
+            result: Err(acp::Error::new(-32000, "authentication required")
+                .data(serde_json::json!({"authMethods": [], "large": 9_007_199_254_740_993_u64}))),
         },
         EventKind::TitleChanged {
             title: "renamed".into(),
@@ -92,6 +95,34 @@ fn lifecycle_and_complete_prompt_responses_round_trip() {
             Event::try_from(pb::Event::from(&original)).expect("event"),
             original
         );
+    }
+}
+
+#[test]
+fn runtime_interruptions_round_trip_without_an_acp_outcome() {
+    use prost::Message;
+    for reason in [
+        InterruptionReason::BackendFailure {
+            message: "connection lost".into(),
+        },
+        InterruptionReason::DispatchFailure {
+            message: "cannot dispatch".into(),
+        },
+        InterruptionReason::SessionStopped,
+        InterruptionReason::DaemonRestarted,
+        InterruptionReason::CancelledBeforeDispatch,
+    ] {
+        let original = event(EventKind::TurnInterrupted {
+            turn: TurnId::new(),
+            reason,
+        });
+        let wire = pb::Event::from(&original);
+        assert!(matches!(
+            wire.kind,
+            Some(pb::event::Kind::TurnInterrupted(_))
+        ));
+        let decoded = pb::Event::decode(wire.encode_to_vec().as_slice()).expect("protobuf event");
+        assert_eq!(Event::try_from(decoded).expect("interruption"), original);
     }
 }
 
@@ -134,6 +165,35 @@ fn malformed_envelopes_and_acp_payloads_are_rejected() {
         ..Default::default()
     };
     assert!(matches!(Event::try_from(wire), Err(Error::MissingOutcome)));
+    let wire = pb::Event {
+        session: SessionId::new().to_string(),
+        kind: Some(pb::event::Kind::TurnFinished(pb::TurnFinished {
+            turn: TurnId::new().to_string(),
+            outcome: Some(pb::turn_finished::Outcome::Error(pb::AcpPayload {
+                json: br#""unclassified failure""#.to_vec(),
+            })),
+        })),
+        ..Default::default()
+    };
+    assert!(matches!(Event::try_from(wire), Err(Error::Json(_))));
+    for reason in [pb::InterruptionReason::Unspecified as i32, 999] {
+        let wire = pb::Event {
+            session: SessionId::new().to_string(),
+            kind: Some(pb::event::Kind::TurnInterrupted(pb::TurnInterrupted {
+                turn: TurnId::new().to_string(),
+                reason,
+                message: String::new(),
+            })),
+            ..Default::default()
+        };
+        assert!(matches!(
+            Event::try_from(wire),
+            Err(Error::Unknown {
+                field: "interruption reason",
+                ..
+            })
+        ));
+    }
 }
 
 #[test]
@@ -165,10 +225,11 @@ fn session_capabilities_modes_and_options_round_trip() {
     session.available_commands = Some(acp::AvailableCommandsUpdate::new(vec![
         acp::AvailableCommand::new("help", "Help"),
     ]));
+    let snapshot = SessionSnapshot::from(session);
     assert_eq!(
-        SessionMeta::try_from(pb::Session::try_from(&session).expect("wire metadata"))
-            .expect("metadata"),
-        session
+        SessionSnapshot::try_from(pb::Session::try_from(&snapshot).expect("wire snapshot"))
+            .expect("snapshot"),
+        snapshot
     );
 }
 
@@ -187,7 +248,8 @@ fn session_preserves_original_initialization_extensions_across_protobuf() {
     let mut session = SessionMeta::new(SessionId::new(), "fixture".into(), Owner::current());
     session.initialization = Some(serde_json::from_value(raw.clone()).expect("typed projection"));
     session.initialization_raw = Some(raw.clone());
-    let wire = pb::Session::try_from(&session).expect("wire metadata");
+    let snapshot = SessionSnapshot::from(session);
+    let wire = pb::Session::try_from(&snapshot).expect("wire snapshot");
     assert_eq!(
         wire.initialization
             .as_ref()
@@ -196,7 +258,7 @@ fn session_preserves_original_initialization_extensions_across_protobuf() {
             .expect("JSON"),
         raw
     );
-    assert_eq!(SessionMeta::try_from(wire).expect("metadata"), session);
+    assert_eq!(SessionSnapshot::try_from(wire).expect("snapshot"), snapshot);
 }
 
 #[test]
@@ -207,7 +269,7 @@ fn missing_owner_and_unknown_lifecycle_status_are_rejected() {
         ..Default::default()
     };
     assert!(matches!(
-        SessionMeta::try_from(session.clone()),
+        SessionSnapshot::try_from(session.clone()),
         Err(Error::MissingOwner)
     ));
     let session = pb::Session {
@@ -216,7 +278,7 @@ fn missing_owner_and_unknown_lifecycle_status_are_rejected() {
         ..session
     };
     assert!(matches!(
-        SessionMeta::try_from(session),
+        SessionSnapshot::try_from(session),
         Err(Error::Unknown {
             field: "session status",
             ..
@@ -231,7 +293,7 @@ fn non_utf8_working_directory_is_rejected_without_replacement() {
     let mut session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
     session.cwd = Some(std::ffi::OsString::from_vec(b"/tmp/invalid-\xff".to_vec()).into());
     assert!(matches!(
-        pb::Session::try_from(&session),
+        pb::Session::try_from(&SessionSnapshot::from(session.clone())),
         Err(Error::NonUtf8Cwd)
     ));
     assert!(matches!(
@@ -240,50 +302,95 @@ fn non_utf8_working_directory_is_rejected_without_replacement() {
     ));
     session.cwd = Some("/tmp/中文".into());
     assert_eq!(
-        pb::Session::try_from(&session).unwrap().cwd.as_deref(),
+        pb::Session::try_from(&SessionSnapshot::from(session))
+            .expect("UTF-8 directory")
+            .cwd
+            .as_deref(),
         Some("/tmp/中文")
     );
 }
 
 #[test]
-fn turn_receipts_preserve_acknowledged_cursor_and_accept_legacy_default() {
-    let turn = TurnId::new();
-    for cursor in [Cursor::START, Cursor::from_raw(123)] {
-        let receipt = TurnReceipt { turn, cursor };
-        let wire = pb::TurnAccepted::from(receipt);
-        assert_eq!(wire.turn, turn.to_string());
-        assert_eq!(wire.cursor, cursor.raw());
-        let decoded = TurnReceipt::try_from(wire).expect("receipt");
-        assert_eq!(decoded.turn, turn);
-        assert_eq!(decoded.cursor, cursor);
-    }
-    let legacy = pb::TurnAccepted {
-        turn: turn.to_string(),
-        ..Default::default()
-    };
-    assert_eq!(TurnReceipt::try_from(legacy).unwrap().cursor, Cursor::START);
-    assert!(matches!(
-        TurnReceipt::try_from(pb::TurnAccepted {
-            turn: "invalid-turn".into(),
-            cursor: 123,
-        }),
-        Err(Error::Id(_))
+fn snapshot_preserves_initial_metadata_and_rejects_invalid_turn() {
+    let session = SessionSnapshot::from(SessionMeta::new(
+        SessionId::new(),
+        "test".into(),
+        Owner::current(),
     ));
-}
-
-#[test]
-fn legacy_metadata_defaults_revision_and_active_turn_and_rejects_invalid_turn() {
-    let session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
     let mut wire = pb::Session::try_from(&session).unwrap();
     assert_eq!(wire.revision, 0);
     assert_eq!(wire.active_turn, None);
     assert!(!wire.archived);
     assert_eq!(wire.last_reply, 0);
-    let decoded = SessionMeta::try_from(wire.clone()).unwrap();
+    let decoded = SessionSnapshot::try_from(wire.clone())
+        .expect("snapshot")
+        .meta;
     assert_eq!(decoded.revision, Cursor::START);
     assert_eq!(decoded.active_turn, None);
     assert!(!decoded.archived);
     assert_eq!(decoded.last_reply, Cursor::START);
     wire.active_turn = Some("invalid-turn".into());
-    assert!(matches!(SessionMeta::try_from(wire), Err(Error::Id(_))));
+    assert!(matches!(SessionSnapshot::try_from(wire), Err(Error::Id(_))));
+}
+
+#[test]
+fn runtime_failure_round_trips_independently_of_committed_status_and_revision() {
+    use prost::Message;
+    let mut meta = SessionMeta::new(SessionId::new(), "fixture".into(), Owner::current());
+    meta.status = SessionStatus::Working;
+    meta.active_turn = Some(TurnId::new());
+    meta.revision = Cursor::from_raw(42);
+    let mut snapshot = SessionSnapshot::from(meta.clone());
+    snapshot.runtime.failure = Some(RuntimeFailure::Persistence {
+        message: "fixture write failure".into(),
+    });
+    let wire = pb::Session::try_from(&snapshot).expect("snapshot");
+    assert_eq!(wire.status(), pb::SessionStatus::Working);
+    assert_eq!(wire.revision, 42);
+    let bytes = wire.encode_to_vec();
+    let decoded =
+        SessionSnapshot::try_from(pb::Session::decode(bytes.as_slice()).expect("protobuf"))
+            .expect("snapshot");
+    assert_eq!(decoded, snapshot);
+    assert_eq!(decoded.meta, meta);
+    assert_eq!(decoded.status(), SessionStatus::Failed);
+    assert_eq!(decoded.active_turn(), None);
+}
+
+#[test]
+fn missing_or_malformed_runtime_state_is_never_treated_as_healthy() {
+    let snapshot = SessionSnapshot::from(SessionMeta::new(
+        SessionId::new(),
+        "fixture".into(),
+        Owner::current(),
+    ));
+    let mut wire = pb::Session::try_from(&snapshot).expect("snapshot");
+    wire.runtime = None;
+    assert!(matches!(
+        SessionSnapshot::try_from(wire),
+        Err(Error::MissingRuntime)
+    ));
+    let mut wire = pb::Session::try_from(&snapshot).expect("snapshot");
+    wire.runtime.as_mut().expect("runtime").id = "invalid".into();
+    assert!(matches!(
+        SessionSnapshot::try_from(wire),
+        Err(Error::Unknown {
+            field: "session runtime id",
+            ..
+        })
+    ));
+    for kind in [pb::runtime_failure::Kind::Unspecified as i32, 999] {
+        let mut wire = pb::Session::try_from(&snapshot).expect("snapshot");
+        wire.runtime.as_mut().expect("runtime").failure = Some(pb::RuntimeFailure {
+            kind,
+            message: "fixture".into(),
+        });
+        assert!(matches!(
+            SessionSnapshot::try_from(wire),
+            Err(Error::Unknown {
+                field: "runtime failure kind",
+                ..
+            })
+        ));
+    }
 }

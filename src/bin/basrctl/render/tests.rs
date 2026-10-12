@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn interruption_preserves_partial_output_without_a_success_or_duplicate_failure() {
+    let session = model::SessionId::new();
+    let turn = model::TurnId::new();
+    let events = [
+        EventKind::TurnStarted { turn },
+        EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(
+            acp::ContentChunk::new("partial output".into()),
+        )),
+        EventKind::TurnInterrupted {
+            turn,
+            reason: model::InterruptionReason::BackendFailure {
+                message: "connection lost".into(),
+            },
+        },
+        EventKind::Failed {
+            message: "connection lost".into(),
+        },
+        EventKind::Failed {
+            message: "different failure".into(),
+        },
+        EventKind::TurnStarted { turn },
+        EventKind::TurnFinished {
+            turn,
+            result: Err(acp::Error::new(-32000, "native message")),
+        },
+    ];
+    let mut timeline = Timeline::default();
+    let mut output = Vec::new();
+    for (index, kind) in events.into_iter().enumerate() {
+        timeline
+            .write_event(
+                &model::Event::new(session, model::Cursor::from_raw(index as u64 + 1), kind),
+                &mut output,
+            )
+            .expect("render layered results");
+    }
+    let output = String::from_utf8(output).expect("UTF-8");
+    assert!(output.contains("agent partial output\n"));
+    assert!(output.contains("interrupted by BASR (backend failure: connection lost)"));
+    assert_eq!(output.matches("connection lost").count(), 1);
+    assert!(output.contains("failed: different failure"));
+    assert!(output.contains("finished (agent error: native message)"));
+    assert!(!output.contains("-32000"));
+    assert!(!output.contains("end_turn"));
+}
+
+#[test]
 fn native_chunks_form_readable_lines_without_duplicate_commits() {
     let session = model::SessionId::new();
     let turn = model::TurnId::new();
@@ -67,7 +114,13 @@ fn every_timeline_field_crosses_the_safe_output_boundary() {
         },
         EventKind::TurnFinished {
             turn: model::TurnId::new(),
-            result: Err(malicious.into()),
+            result: Err(acp::Error::new(-32000, malicious)),
+        },
+        EventKind::TurnInterrupted {
+            turn: model::TurnId::new(),
+            reason: model::InterruptionReason::BackendFailure {
+                message: malicious.into(),
+            },
         },
         EventKind::TitleChanged {
             title: malicious.into(),

@@ -1,12 +1,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use basr::model::AgentId;
+use basr::{
+    config::{AgentRegistration, ManagedAgent, RegistrationError, validate_registrations},
+    model::AgentId,
+};
 
 use super::{Agent, AgentSpec, Error, Kind, LaunchRequest, acp, driver::Driver, embedded};
 
 /// Failure raised while configuring the set of available backends.
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
+    #[error(transparent)]
+    Registration(#[from] RegistrationError),
+    #[error("cannot load managed installation: {0}")]
+    Installation(#[source] anyhow::Error),
     #[error("agent {0} is already configured")]
     Duplicate(AgentId),
     #[error("agent {id} is configured as {kind} but has no command line")]
@@ -26,6 +33,7 @@ pub struct Catalog {
 }
 
 struct Entry {
+    registration: AgentRegistration,
     spec: Arc<AgentSpec>,
     driver: Arc<dyn Driver>,
 }
@@ -34,16 +42,33 @@ impl Catalog {
     /// Builds the catalog using the configured backend drivers.
     /// # Errors
     /// Returns an error for invalid or duplicate backend specifications.
+    #[cfg(test)]
     pub fn from_specs(specs: impl IntoIterator<Item = AgentSpec>) -> Result<Self, CatalogError> {
+        Self::from_registrations(specs.into_iter().map(AgentRegistration::from).collect())
+    }
+
+    /// Resolves a profile's registrations before publishing any part of its catalog.
+    ///
+    /// # Errors
+    /// Rejects invalid registrations or missing, modified and invalid installation manifests.
+    pub fn from_registrations(registrations: Vec<AgentRegistration>) -> Result<Self, CatalogError> {
+        validate_registrations(&registrations)?;
         let mut catalog = Catalog::new();
 
-        for spec in specs {
+        for registration in registrations {
+            let spec = match &registration {
+                AgentRegistration::Managed(managed) => {
+                    crate::management::installation::resolve(managed)
+                        .map_err(CatalogError::Installation)?
+                }
+                AgentRegistration::Custom(_) => registration.resolve()?,
+            };
             let driver: Arc<dyn Driver> = match spec.kind {
                 Kind::Embedded => Arc::new(embedded::Driver::new()),
                 Kind::Acp => Arc::new(acp::Driver::new()),
             };
 
-            catalog.insert(spec, driver)?;
+            catalog.insert_registration(registration, spec, driver)?;
         }
 
         Ok(catalog)
@@ -75,7 +100,17 @@ impl Catalog {
     ///
     /// Returns [`CatalogError`] when the id is taken, when an external backend
     /// has no command line, or when the driver handles a different kind.
+    #[cfg(test)]
     pub fn insert(&mut self, spec: AgentSpec, driver: Arc<dyn Driver>) -> Result<(), CatalogError> {
+        self.insert_registration(spec.clone().into(), spec, driver)
+    }
+
+    fn insert_registration(
+        &mut self,
+        registration: AgentRegistration,
+        spec: AgentSpec,
+        driver: Arc<dyn Driver>,
+    ) -> Result<(), CatalogError> {
         if self.entries.contains_key(&spec.id) {
             return Err(CatalogError::Duplicate(spec.id));
         }
@@ -98,6 +133,7 @@ impl Catalog {
         self.entries.insert(
             spec.id.clone(),
             Entry {
+                registration,
                 spec: Arc::new(spec),
                 driver,
             },
@@ -116,6 +152,36 @@ impl Catalog {
         self.entries.values().map(|entry| &entry.spec)
     }
 
+    pub fn registrations(&self) -> impl Iterator<Item = &AgentRegistration> {
+        self.entries.values().map(|entry| &entry.registration)
+    }
+
+    pub fn managed(&self, id: &AgentId) -> Option<&ManagedAgent> {
+        self.entries.get(id)?.registration.managed()
+    }
+
+    /// A retained last-valid catalog does not authorize a new process from a broken reference.
+    ///
+    /// # Errors
+    /// Rejects unconfigured or stale specs and missing, modified or invalid managed descriptors.
+    pub fn validate(&self, spec: &AgentSpec) -> Result<(), Error> {
+        let entry = self
+            .entries
+            .get(&spec.id)
+            .ok_or_else(|| Error::backend(spec.id.clone(), "the backend is not configured"))?;
+        if entry.spec.as_ref() != spec {
+            return Err(Error::backend(
+                spec.id.clone(),
+                "the backend configuration changed",
+            ));
+        }
+        if let Some(managed) = entry.registration.managed() {
+            crate::management::installation::validate_spec(managed, spec)
+                .map_err(|error| Error::backend(spec.id.clone(), error.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Starts a conversation on the backend named by `request.spec`.
     ///
     /// # Errors
@@ -123,10 +189,11 @@ impl Catalog {
     /// Returns [`Error::Backend`] when the backend is unknown or refuses to
     /// start.
     pub async fn launch(&self, request: LaunchRequest) -> Result<Box<dyn Agent>, Error> {
-        let entry = self.entries.get(&request.spec.id).ok_or_else(|| {
-            Error::backend(request.spec.id.clone(), "the backend is not configured")
-        })?;
-
+        self.validate(&request.spec)?;
+        let entry = self
+            .entries
+            .get(&request.spec.id)
+            .expect("validated backend");
         entry.driver.launch(request).await
     }
 
@@ -140,10 +207,11 @@ impl Catalog {
         request: LaunchRequest,
         backend_session_id: String,
     ) -> Result<Box<dyn Agent>, Error> {
-        let entry = self.entries.get(&request.spec.id).ok_or_else(|| {
-            Error::backend(request.spec.id.clone(), "the backend is not configured")
-        })?;
-
+        self.validate(&request.spec)?;
+        let entry = self
+            .entries
+            .get(&request.spec.id)
+            .expect("validated backend");
         entry.driver.restore(request, backend_session_id).await
     }
 }

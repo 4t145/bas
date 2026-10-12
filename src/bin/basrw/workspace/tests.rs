@@ -1,4 +1,4 @@
-use basr::model::{ContentBlock, Cursor, Event, EventKind, Owner};
+use basr::model::{ContentBlock, Cursor, Event, EventKind, Owner, PromptSubmissionOutcome};
 use gpui_kit::{Focusable, TestAppContext, WindowHandle, size, test::TestWindowExt};
 use tokio::sync::mpsc;
 
@@ -16,13 +16,16 @@ mod composer_geometry;
 mod composer_queue;
 mod config;
 mod elicitation;
+mod interruption;
 mod message_actions;
 mod navigation;
 mod picker;
 mod protocol_elements;
 mod rename;
 mod rows;
+mod runtime;
 mod settings;
+mod submission;
 mod thread_actions;
 mod timeline;
 mod tool_content;
@@ -30,13 +33,6 @@ mod tooltips;
 mod turn_navigation;
 mod usage;
 mod workspaces;
-
-fn receipt(cursor: u64) -> basr::model::TurnReceipt {
-    basr::model::TurnReceipt {
-        turn: basr::model::TurnId::new(),
-        cursor: Cursor::from_raw(cursor),
-    }
-}
 
 struct Fixture {
     view: Entity<Workspace>,
@@ -115,56 +111,55 @@ fn session() -> SessionMeta {
 }
 
 #[gpui_kit::test]
-fn title_before_receipt_does_not_drain_and_background_catalog_does(cx: &mut TestAppContext) {
+fn title_and_background_catalog_wait_for_receipt_correlated_tracking(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let first = session();
     let second = session();
-    let accepted = receipt(3);
     attach(&fixture, first.clone(), cx);
     while fixture.commands.try_recv().is_ok() {}
-    cx.update_window(fixture.window.into(), |_, window, cx| {
-        fixture.view.update(cx, |view, cx| {
-            view.composer
-                .update(cx, |input, cx| input.set_value("A", window, cx));
-            view.send_prompt(window, cx);
-            view.outboxes
-                .get_mut(&first.id)
-                .expect("outbox")
-                .enqueue(Draft {
-                    text: "B".into(),
-                    attachments: Vec::new(),
-                });
-            view.update(
-                Update::Event {
-                    epoch: view.epoch,
-                    event: Event::new(
-                        first.id,
-                        Cursor::from_raw(2),
-                        EventKind::TitleChanged {
-                            title: "renamed".into(),
-                        },
-                    ),
-                },
-                window,
-                cx,
-            );
-            view.update(
-                Update::Sent {
-                    session: first.id,
-                    text: "A".into(),
-                    attachments: Vec::new(),
-                    result: Ok(accepted),
-                },
-                window,
-                cx,
-            );
-        });
-        assert!(
-            matches!(fixture.commands.try_recv(), Ok(Command::Prompt { text, .. }) if text == "A")
-        );
-        assert!(fixture.commands.try_recv().is_err());
-    })
-    .expect("window");
+    let accepted = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            fixture.view.update(cx, |view, cx| {
+                view.composer
+                    .update(cx, |input, cx| input.set_value("A", window, cx));
+                view.send_prompt(window, cx);
+                let command = fixture.commands.try_recv().expect("A");
+                assert!(matches!(&command, Command::Prompt { text, .. } if text == "A"));
+                let submission = submission::payload(command);
+                view.outboxes
+                    .get_mut(&first.id)
+                    .expect("outbox")
+                    .enqueue(Draft {
+                        text: "B".into(),
+                        attachments: Vec::new(),
+                    });
+                view.update(
+                    Update::Event {
+                        epoch: view.epoch,
+                        event: Event::new(
+                            first.id,
+                            Cursor::from_raw(2),
+                            EventKind::TitleChanged {
+                                title: "renamed".into(),
+                            },
+                        ),
+                    },
+                    window,
+                    cx,
+                );
+                view.update(
+                    submission::accepted_at(first.id, &submission, 3),
+                    window,
+                    cx,
+                );
+                assert!(fixture.commands.try_recv().is_err());
+                basr::model::TurnReceipt {
+                    turn: submission.turn,
+                    cursor: Cursor::from_raw(3),
+                }
+            })
+        })
+        .expect("window");
     attach(&fixture, second.clone(), cx);
     while fixture.commands.try_recv().is_ok() {}
     cx.update_window(fixture.window.into(), |_, window, cx| {
@@ -172,8 +167,15 @@ fn title_before_receipt_does_not_drain_and_background_catalog_does(cx: &mut Test
             let mut completed = first.clone();
             completed.revision = Cursor::from_raw(4);
             view.update(Update::Catalog(Ok(connection::Catalog {
-                agents: view.agents.clone(), sessions: vec![completed, second],
+                agents: view.agents.clone(), sessions: vec![completed.into(), second.into()],
             })), window, cx);
+            assert!(fixture.commands.try_recv().is_err());
+            view.update(Update::TrackedTurn {
+                event: Event::new(first.id, Cursor::from_raw(4), EventKind::TurnFinished {
+                    turn: accepted.turn,
+                    result: Ok(basr::acp::PromptResponse::new(basr::acp::StopReason::EndTurn)),
+                }),
+            }, window, cx);
         });
         assert!(matches!(fixture.commands.try_recv(), Ok(Command::Prompt { session, text, .. }) if session == first.id && text == "B"));
     }).expect("window");
@@ -208,7 +210,7 @@ fn catalog_and_history_merge_metadata_without_skipping_content(cx: &mut TestAppC
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: old.clone(),
+                    session: old.clone().into(),
                     events: vec![
                         Event::new(
                             newest.id,
@@ -226,7 +228,7 @@ fn catalog_and_history_merge_metadata_without_skipping_content(cx: &mut TestAppC
             view.update(
                 Update::Catalog(Ok(connection::Catalog {
                     agents: view.agents.clone(),
-                    sessions: vec![old],
+                    sessions: vec![old.into()],
                 })),
                 window,
                 cx,
@@ -323,15 +325,16 @@ fn editing_queue_head_keeps_order_and_escape_restores_composition(cx: &mut TestA
 
 #[gpui_kit::test]
 fn receipt_after_session_deletion_cannot_recreate_outbox_or_draft(cx: &mut TestAppContext) {
-    let fixture = fixture(cx);
+    let mut fixture = fixture(cx);
     let meta = session();
     attach(&fixture, meta.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
             view.update(
                 Update::Catalog(Ok(crate::connection::Catalog {
                     agents: view.agents.clone(),
-                    sessions: vec![meta.clone()],
+                    sessions: vec![meta.clone().into()],
                 })),
                 window,
                 cx,
@@ -339,6 +342,7 @@ fn receipt_after_session_deletion_cannot_recreate_outbox_or_draft(cx: &mut TestA
             view.composer
                 .update(cx, |input, cx| input.set_value("A", window, cx));
             view.send_prompt(window, cx);
+            let submission = submission::payload(fixture.commands.try_recv().expect("A"));
             view.update(
                 Update::Catalog(Ok(crate::connection::Catalog {
                     agents: Vec::new(),
@@ -348,12 +352,7 @@ fn receipt_after_session_deletion_cannot_recreate_outbox_or_draft(cx: &mut TestA
                 cx,
             );
             view.update(
-                Update::Sent {
-                    session: meta.id,
-                    text: "A".into(),
-                    attachments: Vec::new(),
-                    result: Err("late failure".into()),
-                },
+                submission::rejected(meta.id, &submission, "late failure"),
                 window,
                 cx,
             );
@@ -372,7 +371,7 @@ fn attach(fixture: &Fixture, session: SessionMeta, cx: &mut TestAppContext) {
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session,
+                    session: session.into(),
                     events: Vec::new(),
                 },
                 window,
@@ -551,7 +550,7 @@ fn selecting_an_agent_initializes_options_before_any_prompt(cx: &mut TestAppCont
             view.update(
                 Update::Created {
                     epoch: fixture.initial_create.epoch,
-                    result: Ok(created.clone()),
+                    result: Ok(created.clone().into()),
                 },
                 window,
                 cx,
@@ -562,7 +561,7 @@ fn selecting_an_agent_initializes_options_before_any_prompt(cx: &mut TestAppCont
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: created.clone(),
+                    session: created.clone().into(),
                     events: vec![],
                 },
                 window,
@@ -678,7 +677,7 @@ fn late_initialization_cannot_steal_another_agent_or_workspace(cx: &mut TestAppC
             view.update(
                 Update::Created {
                     epoch: fixture.initial_create.epoch,
-                    result: Ok(created.clone()),
+                    result: Ok(created.clone().into()),
                 },
                 window,
                 cx,
@@ -715,7 +714,7 @@ fn late_initialization_cannot_steal_another_agent_or_workspace(cx: &mut TestAppC
             view.update(
                 Update::Created {
                     epoch: form.epoch,
-                    result: Ok(latest.clone()),
+                    result: Ok(latest.clone().into()),
                 },
                 window,
                 cx,
@@ -752,23 +751,22 @@ fn enter_submits_shift_enter_adds_a_line_and_failed_send_keeps_draft(cx: &mut Te
         window.press("enter", cx)
     })
     .expect("test window available");
+    let command = fixture.commands.try_recv().expect("prompt sent");
     let Command::Prompt {
         session: id, text, ..
-    } = fixture.commands.try_recv().expect("prompt sent")
+    } = &command
     else {
         panic!("expected Prompt")
     };
-    assert_eq!(id, session.id);
+    assert_eq!(*id, session.id);
     assert_eq!(text, "你好 🦀\n第二行");
+    let text = text.clone();
+    let id = *id;
+    let submission = submission::payload(command);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
             view.update(
-                Update::Sent {
-                    session: id,
-                    text: text.clone(),
-                    attachments: vec![],
-                    result: Err("unavailable".into()),
-                },
+                submission::rejected(id, &submission, "unavailable"),
                 window,
                 cx,
             );
@@ -786,6 +784,7 @@ fn late_events_and_send_receipts_cannot_modify_another_session(cx: &mut TestAppC
     let first = session();
     let second = session();
     attach(&fixture, first.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
         window.input("第一条消息", cx);
@@ -793,18 +792,14 @@ fn late_events_and_send_receipts_cannot_modify_another_session(cx: &mut TestAppC
     })
     .expect("test window available");
     let old_epoch = cx.update(|cx| fixture.view.read(cx).epoch);
+    let submission = submission::payload(fixture.commands.try_recv().expect("first prompt"));
     attach(&fixture, second.clone(), cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
         window.input("另一条草稿", cx);
         fixture.view.update(cx, |view, cx| {
             view.update(
-                Update::Sent {
-                    session: first.id,
-                    text: "第一条消息".into(),
-                    attachments: vec![],
-                    result: Ok(receipt(1)),
-                },
+                submission::accepted_at(first.id, &submission, 1),
                 window,
                 cx,
             );
@@ -1465,26 +1460,22 @@ fn attachments_follow_drafts_and_survive_failed_send(cx: &mut TestAppContext) {
             view.select(first.id, window, cx);
             assert_eq!(view.attachments[0].id, attachment.id);
             view.stream = StreamState::Live;
+            while fixture.commands.try_recv().is_ok() {}
             view.send_prompt(window, cx);
+            let command = fixture.commands.try_recv().expect("attachment prompt");
+            assert!(matches!(&command, Command::Prompt { text, attachments, .. }
+                if text == &format!("{} ", attachment.mention) && attachments[0].id == attachment.id));
+            let submission = submission::payload(command);
             view.update(
-                Update::Sent {
-                    session: first.id,
-                    text: format!("{} ", attachment.mention),
-                    attachments: vec![attachment.clone()],
-                    result: Err("offline".into()),
-                },
+                submission::rejected(first.id, &submission, "offline"),
                 window,
                 cx,
             );
             assert_eq!(view.attachments[0].id, attachment.id);
             view.send_prompt(window, cx);
+            let submission = submission::payload(fixture.commands.try_recv().expect("retry attachment"));
             view.update(
-                Update::Sent {
-                    session: first.id,
-                    text: format!("{} ", attachment.mention),
-                    attachments: vec![attachment.clone()],
-                    result: Ok(receipt(1)),
-                },
+                submission::accepted_at(first.id, &submission, 1),
                 window,
                 cx,
             );
@@ -1492,18 +1483,7 @@ fn attachments_follow_drafts_and_survive_failed_send(cx: &mut TestAppContext) {
         });
     })
     .expect("window");
-    let mut sent = false;
-    while let Ok(command) = fixture.commands.try_recv() {
-        if let Command::Prompt {
-            text, attachments, ..
-        } = command
-        {
-            assert_eq!(text, format!("{} ", attachment.mention));
-            assert_eq!(attachments[0].id, attachment.id);
-            sent = true;
-        }
-    }
-    assert!(sent);
+    assert!(fixture.commands.try_recv().is_err());
 }
 
 #[gpui_kit::test]
@@ -2186,7 +2166,7 @@ fn folded_reply_stays_unread_until_opened_and_survives_replay(cx: &mut TestAppCo
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: session.clone(),
+                    session: session.clone().into(),
                     events,
                 },
                 window,
@@ -2298,7 +2278,6 @@ fn unread_reply_is_scoped_to_its_session_and_requires_a_visible_foreground_answe
 fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let mut session = session();
-    let accepted = receipt(2);
     session.status = SessionStatus::Working;
     attach(&fixture, session.clone(), cx);
     while fixture.commands.try_recv().is_ok() {}
@@ -2311,35 +2290,112 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
         .expect("enqueue from composer");
     }
     cx.update_window(fixture.window.into(), |_, window, cx| {
-        assert!(fixture.commands.try_recv().is_err(), "running turns must not overlap");
-        assert_eq!(fixture.view.read(cx).outboxes.get(&session.id).map(|q| q.len()), Some(2), "text after enter: {:?}", fixture.view.read(cx).composer.read(cx).value());
+        assert!(
+            fixture.commands.try_recv().is_err(),
+            "running turns must not overlap"
+        );
+        assert_eq!(
+            fixture
+                .view
+                .read(cx)
+                .outboxes
+                .get(&session.id)
+                .map(|q| q.len()),
+            Some(2),
+            "text after enter: {:?}",
+            fixture.view.read(cx).composer.read(cx).value()
+        );
         assert!(fixture.view.read(cx).composer.read(cx).value().is_empty());
         fixture.view.update(cx, |view, cx| {
-            view.update(Update::Event { epoch: view.epoch, event: Event::new(session.id, Cursor::from_raw(1), EventKind::TurnFinished {
-                turn: basr::model::TurnId::new(), result: Ok(basr::acp::PromptResponse::new(basr::acp::StopReason::EndTurn))
-            }) }, window, cx);
+            view.update(
+                Update::Event {
+                    epoch: view.epoch,
+                    event: Event::new(
+                        session.id,
+                        Cursor::from_raw(1),
+                        EventKind::TurnFinished {
+                            turn: basr::model::TurnId::new(),
+                            result: Ok(basr::acp::PromptResponse::new(
+                                basr::acp::StopReason::EndTurn,
+                            )),
+                        },
+                    ),
+                },
+                window,
+                cx,
+            );
         });
-        assert!(matches!(fixture.commands.try_recv(), Ok(Command::Prompt { text, .. }) if text == "追加一"));
+        let command = fixture.commands.try_recv().expect("first queued prompt");
+        assert!(matches!(&command, Command::Prompt { text, .. } if text == "追加一"));
+        let submission = submission::payload(command);
+        let accepted = basr::model::TurnReceipt {
+            turn: submission.turn,
+            cursor: Cursor::from_raw(2),
+        };
         fixture.view.update(cx, |view, cx| {
-            view.update(Update::Sent { session: session.id, text: "追加一".into(), attachments: Vec::new(), result: Ok(accepted) }, window, cx);
+            view.update(
+                submission::accepted_at(session.id, &submission, 2),
+                window,
+                cx,
+            );
         });
-        assert!(fixture.commands.try_recv().is_err(), "receipt must not drain the next prompt using a stale Idle snapshot");
+        assert!(
+            fixture.commands.try_recv().is_err(),
+            "receipt must not drain the next prompt using a stale Idle snapshot"
+        );
         fixture.view.update(cx, |view, cx| {
-            view.update(Update::Event { epoch: view.epoch, event: Event::new(session.id, Cursor::from_raw(2), EventKind::TurnStarted { turn: accepted.turn }) }, window, cx);
-            view.update(Update::Event { epoch: view.epoch, event: Event::new(session.id, Cursor::from_raw(3), EventKind::TurnFinished {
-                turn: accepted.turn, result: Ok(basr::acp::PromptResponse::new(basr::acp::StopReason::EndTurn))
-            }) }, window, cx);
+            view.update(
+                Update::Event {
+                    epoch: view.epoch,
+                    event: Event::new(
+                        session.id,
+                        Cursor::from_raw(2),
+                        EventKind::TurnStarted {
+                            turn: accepted.turn,
+                        },
+                    ),
+                },
+                window,
+                cx,
+            );
+            view.update(
+                Update::Event {
+                    epoch: view.epoch,
+                    event: Event::new(
+                        session.id,
+                        Cursor::from_raw(3),
+                        EventKind::TurnFinished {
+                            turn: accepted.turn,
+                            result: Ok(basr::acp::PromptResponse::new(
+                                basr::acp::StopReason::EndTurn,
+                            )),
+                        },
+                    ),
+                },
+                window,
+                cx,
+            );
         });
-        assert!(matches!(fixture.commands.try_recv(), Ok(Command::Prompt { text, .. }) if text == "追加二"));
+        let command = fixture.commands.try_recv().expect("second queued prompt");
+        assert!(matches!(&command, Command::Prompt { text, .. } if text == "追加二"));
+        let submission = submission::payload(command);
         fixture.view.update(cx, |view, cx| {
-            view.update(Update::Sent { session: session.id, text: "追加二".into(), attachments: Vec::new(), result: Err("offline".into()) }, window, cx);
+            view.update(
+                submission::rejected(session.id, &submission, "offline"),
+                window,
+                cx,
+            );
             view.flush_queue(cx);
         });
-        assert!(fixture.commands.try_recv().is_err(), "failed queued sends must wait for user retry");
+        assert!(
+            fixture.commands.try_recv().is_err(),
+            "failed queued sends must wait for user retry"
+        );
         window.render_frame(cx);
         window.click("pending-messages", cx);
         assert_eq!(fixture.view.read(cx).composer.read(cx).value(), "追加二");
-    }).expect("window");
+    })
+    .expect("window");
 }
 
 #[gpui_kit::test]
@@ -2548,7 +2604,7 @@ fn reopening_restores_the_selected_thread_and_deleted_threads_fall_back(cx: &mut
             view.update(
                 Update::Catalog(Ok(connection::Catalog {
                     agents: vec![],
-                    sessions: vec![recent.clone(), previous.clone()],
+                    sessions: vec![recent.clone().into(), previous.clone().into()],
                 })),
                 window,
                 cx,
@@ -2586,7 +2642,7 @@ fn reopening_restores_the_selected_thread_and_deleted_threads_fall_back(cx: &mut
             view.update(
                 Update::Catalog(Ok(connection::Catalog {
                     agents: vec![],
-                    sessions: vec![previous.clone()],
+                    sessions: vec![previous.clone().into()],
                 })),
                 window,
                 cx,

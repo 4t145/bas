@@ -429,8 +429,18 @@ impl Workspace {
                 )
             };
         }
+        if self.active.is_some_and(|id| !self.runtime_healthy(id)) {
+            return crate::i18n::tr!("status-failed").into();
+        }
         if self.active.is_some_and(|id| self.configuring.contains(&id)) {
             return crate::i18n::tr!("status-applying").into();
+        }
+        if self
+            .active
+            .and_then(|id| self.outboxes.get(&id))
+            .is_some_and(|outbox| outbox.unknown().is_some())
+        {
+            return crate::i18n::tr!("status-submission-unknown").into();
         }
         if self.active.is_some_and(|id| self.sending(id)) {
             return crate::i18n::tr!("status-sending").into();
@@ -452,7 +462,7 @@ impl Workspace {
             (f32::from(theme::content_font_size(cx)) * theme::content_line_height(cx)).ceil();
         let expand_top = gpui_kit::component::Size::Medium.input_py()
             + px((line_height - layout::ICON_BUTTON_SIZE) / 2.);
-        let sending = self.active.is_some_and(|id| self.sending(id));
+        let composition_locked = self.active.is_some_and(|id| self.composition_locked(id));
         let cancelling = self.active.is_some_and(|id| self.cancelling.contains(&id));
         let can_send = self.can_send(cx);
         let submit_hint = if self.working() || cancelling {
@@ -473,7 +483,9 @@ impl Workspace {
                     cancelling || self.connection_status() != status::ConnectionStatus::Connected,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(session) = this.active {
+                    if let Some(session) = this.active
+                        && this.runtime_healthy(session)
+                    {
                         this.cancelling.insert(session);
                         this.outboxes.entry(session).or_default().pause();
                         this.command(Command::Cancel(session));
@@ -615,7 +627,7 @@ impl Workspace {
                                             ))
                                             .appearance(false)
                                             .bordered(false)
-                                            .readonly(sending || self.paste_pending)
+                                            .readonly(composition_locked || self.paste_pending)
                                             .aria_label(crate::i18n::tr!("composer-message"))
                                             .when(fills_thread, |editor| editor.h_full())
                                             .when(!fills_thread, |editor| {

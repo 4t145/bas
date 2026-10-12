@@ -49,6 +49,7 @@ pub(super) struct Conversation {
     pub last_reply: Option<ReplyPosition>,
     turn_start: usize,
     next_notice: u64,
+    interruption_message: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -90,6 +91,7 @@ impl Conversation {
             last_reply: None,
             turn_start: 0,
             next_notice: 0,
+            interruption_message: None,
         }
     }
 
@@ -198,6 +200,7 @@ impl Conversation {
                 _ => None,
             },
             EventKind::TurnStarted { .. } => {
+                self.interruption_message = None;
                 self.foreground_state =
                     Some(acp2::StateUpdate::Running(acp2::RunningStateUpdate::new()));
                 self.turn_start = self.items.len();
@@ -209,7 +212,7 @@ impl Conversation {
                 let changed = self.seal();
                 self.completed_reply = self
                     .last_reply
-                    .filter(|reply| reply.index >= self.turn_start);
+                    .filter(|reply| result.is_ok() && reply.index >= self.turn_start);
                 let notice = match result.map(|response| response.stop_reason) {
                     Ok(StopReason::EndTurn) => None,
                     Ok(StopReason::Cancelled) => self.notice(crate::i18n::tr!("turn-stopped")),
@@ -218,10 +221,22 @@ impl Conversation {
                     }
                     Ok(StopReason::Refusal) => self.notice(crate::i18n::tr!("turn-refused")),
                     Err(error) => {
-                        self.notice(crate::i18n::tr!("turn-failed", error = (error).to_string()))
+                        self.notice(crate::i18n::tr!("turn-failed", error = error.message))
                     }
                     _ => self.notice(crate::i18n::tr!("turn-ended")),
                 };
+                changed.or(notice)
+            }
+            EventKind::TurnInterrupted { reason, .. } => {
+                self.foreground_state = Some(acp2::StateUpdate::Idle(acp2::IdleStateUpdate::new()));
+                let changed = self.seal();
+                self.completed_reply = None;
+                self.interruption_message = match &reason {
+                    InterruptionReason::BackendFailure { message }
+                    | InterruptionReason::DispatchFailure { message } => Some(message.clone()),
+                    _ => None,
+                };
+                let notice = self.notice(interruption_notice(reason));
                 changed.or(notice)
             }
             EventKind::TitleChanged { .. }
@@ -230,6 +245,9 @@ impl Conversation {
             EventKind::Failed { message } => {
                 self.foreground_state = Some(acp2::StateUpdate::Idle(acp2::IdleStateUpdate::new()));
                 let changed = self.seal();
+                if self.interruption_message.take().as_ref() == Some(&message) {
+                    return changed;
+                }
                 let notice = self.notice(crate::i18n::tr!(
                     "agent-disconnected",
                     message = (message).to_string()
@@ -298,6 +316,24 @@ impl Conversation {
             text: text.into(),
         });
         Some(self.items.len() - 1)
+    }
+}
+
+fn interruption_notice(reason: InterruptionReason) -> String {
+    match reason {
+        InterruptionReason::BackendFailure { message } => {
+            crate::i18n::tr!("turn-interrupted-backend", message = message)
+        }
+        InterruptionReason::DispatchFailure { message } => {
+            crate::i18n::tr!("turn-interrupted-dispatch", message = message)
+        }
+        InterruptionReason::SessionStopped => crate::i18n::tr!("turn-interrupted-stopped").into(),
+        InterruptionReason::DaemonRestarted => {
+            crate::i18n::tr!("turn-interrupted-restarted").into()
+        }
+        InterruptionReason::CancelledBeforeDispatch => {
+            crate::i18n::tr!("turn-interrupted-cancelled").into()
+        }
     }
 }
 

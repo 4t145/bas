@@ -164,7 +164,8 @@ fixture_service! {
     delete_session(pb::DeleteSessionRequest) -> pb::DeleteSessionResponse;
     attach(pb::AttachRequest) -> Self::AttachStream;
     set_foreground(tonic::Streaming<pb::ForegroundRequest>) -> Self::SetForegroundStream;
-    prompt(pb::AcpPayload) -> pb::TurnAccepted;
+    prompt(pb::PromptSubmission) -> pb::PromptSubmissionResponse;
+    get_prompt_acceptance(pb::PromptAcceptanceRequest) -> pb::PromptAcceptanceResponse;
     cancel(pb::AcpPayload) -> pb::CancelResponse;
     set_config_option(pb::AcpPayload) -> pb::AcpPayload;
     set_mode(pb::AcpPayload) -> pb::AcpPayload;
@@ -289,7 +290,7 @@ impl Fixture {
         let spec = AgentSpec::acp("codex", Command::new("/fixture/codex-acp", []));
         let mut document = self.store.load().expect("settings");
         let mut agents = document.settings.daemon.agents.clone();
-        agents.push(spec.clone());
+        agents.push(spec.clone().into());
         self.store
             .save_agents(&mut document, agents)
             .expect("simulate successful daemon registration");
@@ -325,7 +326,7 @@ fn checking_and_login_are_independent_and_only_checking_records_a_probe_result(
     let mut document = fixture.store.load().expect("settings");
     fixture
         .store
-        .save_agents(&mut document, vec![spec.clone()])
+        .save_agents(&mut document, vec![spec.clone().into()])
         .expect("configured agent");
     {
         let mut catalog = fixture.catalog.lock().expect("catalog");
@@ -629,7 +630,7 @@ fn authentication_form_round_trips_over_the_owned_interactive_stream(cx: &mut Te
     let mut document = fixture.store.load().expect("document");
     fixture
         .store
-        .save_agents(&mut document, vec![spec.clone()])
+        .save_agents(&mut document, vec![spec.clone().into()])
         .expect("configured fixture");
     {
         let mut catalog = fixture.catalog.lock().expect("catalog");
@@ -704,7 +705,7 @@ fn old_daemon_empty_unimplemented_authentication_reports_restart_instead_of_blan
     let mut document = fixture.store.load().expect("document");
     fixture
         .store
-        .save_agents(&mut document, vec![spec.clone()])
+        .save_agents(&mut document, vec![spec.clone().into()])
         .expect("saved spec");
     {
         let mut catalog = fixture.catalog.lock().expect("catalog");
@@ -772,7 +773,7 @@ fn terminal_method_click_starts_verified_flow_directly_and_can_be_cancelled(
     let mut document = fixture.store.load().expect("document");
     fixture
         .store
-        .save_agents(&mut document, vec![spec.clone()])
+        .save_agents(&mut document, vec![spec.clone().into()])
         .expect("saved spec");
     {
         let mut catalog = fixture.catalog.lock().expect("catalog");

@@ -234,10 +234,9 @@ async fn interactive_form_preserves_schema_and_returns_validated_input() {
     let start = start(&spec);
     let (events, mut receive) = tokio::sync::mpsc::channel(8);
     let (controls, input) = tokio::sync::mpsc::channel(8);
-    let task =
-        tokio::spawn(
-            async move { super::interactive(&spec, &start, events, input, TIMEOUT).await },
-        );
+    let task = tokio::spawn(async move {
+        super::interactive(&spec, None, &start, events, input, TIMEOUT).await
+    });
     let event = tokio::time::timeout(TIMEOUT, receive.recv())
         .await
         .expect("form event timeout")
@@ -289,10 +288,9 @@ async fn interactive_url_completion_is_connection_scoped_and_keeps_metadata() {
     let start = start(&spec);
     let (events, mut receive) = tokio::sync::mpsc::channel(8);
     let (controls, input) = tokio::sync::mpsc::channel(8);
-    let task =
-        tokio::spawn(
-            async move { super::interactive(&spec, &start, events, input, TIMEOUT).await },
-        );
+    let task = tokio::spawn(async move {
+        super::interactive(&spec, None, &start, events, input, TIMEOUT).await
+    });
     let event = tokio::time::timeout(TIMEOUT, receive.recv())
         .await
         .expect("URL event timeout")
@@ -342,10 +340,9 @@ async fn invalid_form_response_cancels_without_sending_unvalidated_content() {
     let start = start(&spec);
     let (events, mut receive) = tokio::sync::mpsc::channel(8);
     let (controls, input) = tokio::sync::mpsc::channel(8);
-    let task =
-        tokio::spawn(
-            async move { super::interactive(&spec, &start, events, input, TIMEOUT).await },
-        );
+    let task = tokio::spawn(async move {
+        super::interactive(&spec, None, &start, events, input, TIMEOUT).await
+    });
     let event = tokio::time::timeout(TIMEOUT, receive.recv())
         .await
         .expect("form timeout")
@@ -379,10 +376,9 @@ async fn disconnect_during_form_releases_connection_and_pending_responder() {
     let start = start(&spec);
     let (events, mut receive) = tokio::sync::mpsc::channel(8);
     let (_controls, input) = tokio::sync::mpsc::channel(8);
-    let task =
-        tokio::spawn(
-            async move { super::interactive(&spec, &start, events, input, TIMEOUT).await },
-        );
+    let task = tokio::spawn(async move {
+        super::interactive(&spec, None, &start, events, input, TIMEOUT).await
+    });
     tokio::time::timeout(TIMEOUT, receive.recv())
         .await
         .expect("form timeout")
@@ -413,7 +409,7 @@ async fn stale_method_and_unknown_type_are_not_executed() {
             tokio::sync::mpsc::channel::<Result<pb::AuthenticationEvent, tonic::Status>>(8);
         let (_controls, input) = tokio::sync::mpsc::channel(8);
         assert!(
-            super::interactive(&spec, &start, events, input, TIMEOUT)
+            super::interactive(&spec, None, &start, events, input, TIMEOUT)
                 .await
                 .is_err()
         );
@@ -448,10 +444,9 @@ async fn terminal_plan_closes_acp_connection_then_rechecks_after_success() {
     let start = start(&spec);
     let (events, mut receive) = tokio::sync::mpsc::channel(8);
     let (controls, input) = tokio::sync::mpsc::channel(8);
-    let task =
-        tokio::spawn(
-            async move { super::interactive(&spec, &start, events, input, TIMEOUT).await },
-        );
+    let task = tokio::spawn(async move {
+        super::interactive(&spec, None, &start, events, input, TIMEOUT).await
+    });
     let event = tokio::time::timeout(TIMEOUT, receive.recv())
         .await
         .expect("terminal timeout")
@@ -493,10 +488,9 @@ async fn terminal_failure_returns_its_exit_status_without_retrying_authenticatio
     let start = start(&spec);
     let (events, mut receive) = tokio::sync::mpsc::channel(8);
     let (controls, input) = tokio::sync::mpsc::channel(8);
-    let task =
-        tokio::spawn(
-            async move { super::interactive(&spec, &start, events, input, TIMEOUT).await },
-        );
+    let task = tokio::spawn(async move {
+        super::interactive(&spec, None, &start, events, input, TIMEOUT).await
+    });
     let event = tokio::time::timeout(TIMEOUT, receive.recv())
         .await
         .expect("terminal timeout")
@@ -534,10 +528,9 @@ async fn agent_cancellation_removes_the_form_and_keeps_the_connection_usable() {
     let start = start(&spec);
     let (events, mut receive) = tokio::sync::mpsc::channel(8);
     let (_controls, input) = tokio::sync::mpsc::channel(8);
-    let task =
-        tokio::spawn(
-            async move { super::interactive(&spec, &start, events, input, TIMEOUT).await },
-        );
+    let task = tokio::spawn(async move {
+        super::interactive(&spec, None, &start, events, input, TIMEOUT).await
+    });
     let event = tokio::time::timeout(TIMEOUT, receive.recv())
         .await
         .expect("form timeout")
@@ -578,7 +571,7 @@ async fn unmatched_request_and_session_scopes_are_rejected_before_display() {
         let start = start(&spec);
         let (events, mut receive) = tokio::sync::mpsc::channel(8);
         let (_controls, input) = tokio::sync::mpsc::channel(8);
-        let error = super::interactive(&spec, &start, events, input, TIMEOUT)
+        let error = super::interactive(&spec, None, &start, events, input, TIMEOUT)
             .await
             .err()
             .expect("invalid scope");

@@ -87,10 +87,12 @@ async fn settings_file_environment_reloads_catalog_and_preserves_sessions() {
         .expect("removed agent's session remains");
     daemon
         .client
-        .prompt(pb::AcpPayload::from(&basr::acp::PromptRequest::new(
-            old.id,
-            vec!["still alive".into()],
-        )))
+        .prompt(pb::PromptSubmission::from(
+            &basr::model::PromptSubmission::new(basr::acp::PromptRequest::new(
+                old.id,
+                vec!["still alive".into()],
+            )),
+        ))
         .await
         .expect("old session still accepts work");
     daemon.stop().await;

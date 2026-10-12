@@ -104,10 +104,13 @@ fn sections_merge_and_conflict() {
     store
         .save_agents(
             &mut b,
-            vec![AgentSpec::acp(
-                "dummy",
-                agent::Command::new("dummy", ["arg with spaces".into()]),
-            )],
+            vec![
+                AgentSpec::acp(
+                    "dummy",
+                    agent::Command::new("dummy", ["arg with spaces".into()]),
+                )
+                .into(),
+            ],
         )
         .expect("agents save");
     assert_eq!(store.load().expect("load").settings.appearance, appearance);

@@ -876,7 +876,7 @@ fn rows_stale_thread_menu_cannot_start_editing_an_archived_hidden_row(cx: &mut T
             view.update(
                 Update::Catalog(Ok(connection::Catalog {
                     agents: view.agents.clone(),
-                    sessions: vec![archived, active.clone()],
+                    sessions: vec![archived.into(), active.clone().into()],
                 })),
                 window,
                 cx,

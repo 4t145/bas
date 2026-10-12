@@ -117,7 +117,7 @@ rusqlite = "=0.40.2"
 tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", features = ["fs", "poll", "process", "signal", "user"] }
+nix = { version = "0.31", features = ["fs", "poll", "process", "signal", "term", "user"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wl-clipboard-rs = { version = "=0.9.4", optional = true }
@@ -127,3 +127,6 @@ tracing-journald = "0.3"
 [target.'cfg(target_os = "macos")'.dependencies]
 arboard = { version = "=3.6.1", optional = true }
 png = { version = "0.18", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+process-wrap = { version = "=10.0.1", default-features = false, features = ["tokio1", "job-object", "kill-on-drop"] }

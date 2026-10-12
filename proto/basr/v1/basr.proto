@@ -39,8 +39,12 @@ service Basr {
   // Tracks the session currently viewed in an active client window. Closing
   // this stream releases its foreground state without affecting agent work.
   rpc SetForeground(stream ForegroundRequest) returns (stream ForegroundResponse);
-  // Sends a user turn.
-  rpc Prompt(AcpPayload) returns (TurnAccepted);
+  // Registers a client-identified submission. Retries with the same identity
+  // and payload return the original acceptance without dispatching again.
+  rpc Prompt(PromptSubmission) returns (PromptSubmissionResponse);
+  // Read-only acceptance lookup. Absence is not proof that an in-flight request
+  // cannot still be accepted; it must never trigger an implicit new submission.
+  rpc GetPromptAcceptance(PromptAcceptanceRequest) returns (PromptAcceptanceResponse);
   // Cancels the running turn.
   rpc Cancel(AcpPayload) returns (CancelResponse);
   // ACP session/set_config_option request and response.
@@ -187,7 +191,22 @@ enum SessionStatus {
   SESSION_STATUS_FAILED = 5;
 }
 
-// A session's metadata, without its events.
+message RuntimeFailure {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_PERSISTENCE = 1;
+  }
+  Kind kind = 1;
+  string message = 2;
+}
+
+// Volatile state of one loaded session. A restart creates a new id.
+message SessionRuntime {
+  string id = 1;
+  RuntimeFailure failure = 2;
+}
+
+// Committed metadata plus independent runtime health, without history events.
 message Session {
   string id = 1;
   string agent = 2;
@@ -197,6 +216,7 @@ message Session {
   // Milliseconds since the Unix epoch.
   uint64 created_at = 6;
   uint64 updated_at = 7;
+  // Last committed lifecycle status. Runtime failure independently prevents execution.
   SessionStatus status = 8;
   // ACP InitializeResponse.
   AcpPayload initialization = 9;
@@ -206,6 +226,7 @@ message Session {
   AcpPayload available_commands = 11;
   // Last event reflected in this snapshot; independent of retained history.
   uint64 revision = 12;
+  // Active turn at the committed revision, not evidence of current runtime activity.
   optional string active_turn = 13;
   // Independent of lifecycle: a running turn may finish while archived.
   bool archived = 14;
@@ -213,6 +234,7 @@ message Session {
   uint64 last_reply = 15;
   // Latest valid Agent-reported RFC3339 updatedAt, converted to epoch milliseconds.
   optional uint64 agent_updated_at = 16;
+  SessionRuntime runtime = 17;
 }
 
 message CreateSessionRequest {
@@ -272,12 +294,28 @@ message TurnStarted {
 
 message TurnFinished {
   string turn = 1;
-  reserved 2;
-  // Exactly one outcome: ACP PromptResponse or a daemon failure.
+  reserved 2, 4;
+  // Exactly one native ACP outcome, never a BASR runtime/storage failure.
   oneof outcome {
     AcpPayload response = 3;
-    string error = 4;
+    AcpPayload error = 5;
   }
+}
+
+enum InterruptionReason {
+  INTERRUPTION_REASON_UNSPECIFIED = 0;
+  INTERRUPTION_REASON_BACKEND_FAILURE = 1;
+  INTERRUPTION_REASON_DISPATCH_FAILURE = 2;
+  INTERRUPTION_REASON_SESSION_STOPPED = 3;
+  INTERRUPTION_REASON_DAEMON_RESTARTED = 4;
+  INTERRUPTION_REASON_CANCELLED_BEFORE_DISPATCH = 5;
+}
+
+// BASR could not obtain an ACP result for this tracked prompt.
+message TurnInterrupted {
+  string turn = 1;
+  InterruptionReason reason = 2;
+  string message = 3;
 }
 
 message TitleChanged {
@@ -313,6 +351,7 @@ message Event {
     StatusChanged status_changed = 16;
     Failed failed = 17;
     ArchiveChanged archive_changed = 19;
+    TurnInterrupted turn_interrupted = 20;
   }
 }
 
@@ -333,10 +372,48 @@ message ForegroundRequest {
 // Acknowledges that the foreground state has been applied.
 message ForegroundResponse {}
 
-// Prompt completion arrives asynchronously in TurnFinished.
+// An ACP result arrives in TurnFinished; BASR interruptions use TurnInterrupted.
+message PromptSubmission {
+  // Client-generated BASR turn id, reused unchanged for retries.
+  string turn = 1;
+  // Native ACP PromptRequest with the public BASR session id.
+  AcpPayload prompt = 2;
+}
+
+enum PromptRejectionKind {
+  PROMPT_REJECTION_KIND_UNSPECIFIED = 0;
+  PROMPT_REJECTION_KIND_INVALID_REQUEST = 1;
+  PROMPT_REJECTION_KIND_BUSY = 2;
+  PROMPT_REJECTION_KIND_ARCHIVED = 3;
+  PROMPT_REJECTION_KIND_UNAVAILABLE = 4;
+  PROMPT_REJECTION_KIND_CONFLICT = 5;
+}
+
+message PromptRejection {
+  PromptRejectionKind kind = 1;
+  string message = 2;
+}
+
+message PromptSubmissionResponse {
+  oneof outcome {
+    TurnAccepted accepted = 1;
+    PromptRejection rejected = 2;
+  }
+}
+
+message PromptAcceptanceRequest {
+  string session = 1;
+  string turn = 2;
+}
+
+message PromptAcceptanceResponse {
+  TurnAccepted accepted = 1;
+}
+
+// BASR has registered this submission, not necessarily dispatched it to ACP.
 message TurnAccepted {
   string turn = 1;
-  // Cursor of the TurnStarted event. Zero means an older server omitted it.
+  // Cursor of the committed TurnStarted event; always greater than zero.
   uint64 cursor = 2;
 }
 

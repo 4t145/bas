@@ -1,6 +1,9 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
-use basr::model::{Cursor, Event, EventKind, SessionMeta, SessionStatus, TurnId, TurnReceipt};
+use basr::model::{
+    Cursor, Event, EventKind, PromptSubmission, PromptSubmissionOutcome, SessionMeta,
+    SessionStatus, TurnId, TurnReceipt,
+};
 
 use crate::attachment::Draft;
 
@@ -13,17 +16,41 @@ pub(super) enum Origin {
 enum Dispatch {
     Ready,
     Submitting {
+        turn: TurnId,
+        attempt: Attempt,
         draft: Draft,
         origin: Origin,
-        finished: Vec<(TurnId, Cursor)>,
+        finished: Option<Completion>,
     },
     Awaiting(TurnReceipt),
 }
 
-pub(super) enum Action {
-    Send(Draft),
-    Accepted(Origin),
-    Rejected { origin: Origin, draft: Draft },
+enum Attempt {
+    Sending,
+    Unknown(Arc<PromptSubmission>),
+    Resolving(Arc<PromptSubmission>),
+}
+
+struct Completion {
+    cursor: Cursor,
+    interrupted: bool,
+}
+
+pub(super) struct Send {
+    pub turn: TurnId,
+    pub draft: Draft,
+}
+
+pub(super) enum Settlement {
+    Accepted {
+        origin: Origin,
+        draft: Draft,
+    },
+    Rejected {
+        origin: Origin,
+        draft: Draft,
+        message: String,
+    },
 }
 
 struct Editing {
@@ -60,6 +87,68 @@ impl Default for SessionOutbox {
 }
 
 impl SessionOutbox {
+    #[cfg(test)]
+    pub fn turn(&self) -> Option<TurnId> {
+        match &self.dispatch {
+            Dispatch::Submitting { turn, .. } => Some(*turn),
+            _ => None,
+        }
+    }
+
+    pub fn unknown(&self) -> Option<&Arc<PromptSubmission>> {
+        match &self.dispatch {
+            Dispatch::Submitting {
+                attempt: Attempt::Unknown(submission) | Attempt::Resolving(submission),
+                ..
+            } => Some(submission),
+            _ => None,
+        }
+    }
+
+    pub fn resolving(&self) -> bool {
+        matches!(
+            self.dispatch,
+            Dispatch::Submitting {
+                attempt: Attempt::Resolving(_),
+                ..
+            }
+        )
+    }
+
+    pub fn resolve(&mut self) -> Option<Arc<PromptSubmission>> {
+        if self.resolving() {
+            return None;
+        }
+        let submission = self.unknown()?.clone();
+        if let Dispatch::Submitting { attempt, .. } = &mut self.dispatch {
+            *attempt = Attempt::Resolving(submission.clone());
+        }
+        Some(submission)
+    }
+
+    pub fn resolution_not_sent(&mut self, turn: TurnId) {
+        if let Dispatch::Submitting {
+            turn: pending,
+            attempt,
+            ..
+        } = &mut self.dispatch
+            && *pending == turn
+            && let Attempt::Resolving(submission) = attempt
+        {
+            *attempt = Attempt::Unknown(submission.clone());
+        }
+    }
+
+    pub fn composition_locked(&self) -> bool {
+        matches!(
+            self.dispatch,
+            Dispatch::Submitting {
+                attempt: Attempt::Sending,
+                ..
+            }
+        )
+    }
+
     pub fn sending(&self) -> bool {
         matches!(self.dispatch, Dispatch::Submitting { .. })
     }
@@ -92,6 +181,11 @@ impl SessionOutbox {
         self.paused = true;
         self.priority = false;
         self.interrupting = false;
+    }
+
+    pub fn retain_rejected_composition(&mut self, draft: Draft) {
+        self.queue.push_front(draft);
+        self.pause();
     }
 
     pub fn resume(&mut self) {
@@ -195,74 +289,139 @@ impl SessionOutbox {
         }
     }
 
-    pub fn start(&mut self, draft: Draft, origin: Origin) -> Action {
+    pub fn start(&mut self, draft: Draft, origin: Origin) -> Send {
         assert!(matches!(self.dispatch, Dispatch::Ready));
+        let turn = TurnId::new();
         self.dispatch = Dispatch::Submitting {
+            turn,
+            attempt: Attempt::Sending,
             draft: draft.clone(),
             origin,
-            finished: Vec::new(),
+            finished: None,
         };
-        Action::Send(draft)
+        Send { turn, draft }
     }
 
-    pub fn receipt(&mut self, receipt: Option<TurnReceipt>) -> Option<Action> {
-        if !self.sending() {
+    pub fn settle(
+        &mut self,
+        submission: Arc<PromptSubmission>,
+        result: Result<PromptSubmissionOutcome, String>,
+    ) -> Option<Settlement> {
+        let Dispatch::Submitting { turn, attempt, .. } = &mut self.dispatch else {
+            return None;
+        };
+        if *turn != submission.turn {
             return None;
         }
+        match attempt {
+            Attempt::Unknown(original) | Attempt::Resolving(original)
+                if !Arc::ptr_eq(original, &submission) && **original != *submission =>
+            {
+                return None;
+            }
+            _ => {}
+        }
+        let receipt = match result {
+            Ok(PromptSubmissionOutcome::Accepted(receipt))
+                if receipt.turn == *turn && receipt.cursor.raw() > 0 =>
+            {
+                receipt
+            }
+            Ok(PromptSubmissionOutcome::Rejected(rejection)) => {
+                return self.reject(rejection.message);
+            }
+            _ => {
+                let original = match attempt {
+                    Attempt::Sending => submission,
+                    Attempt::Unknown(original) | Attempt::Resolving(original) => original.clone(),
+                };
+                *attempt = Attempt::Unknown(original);
+                return None;
+            }
+        };
         let Dispatch::Submitting {
             draft,
             origin,
             finished,
+            ..
         } = std::mem::replace(&mut self.dispatch, Dispatch::Ready)
         else {
             return None;
         };
-        match receipt {
-            Some(receipt) => {
-                if !finished
-                    .iter()
-                    .any(|(turn, cursor)| *turn == receipt.turn && *cursor > receipt.cursor)
-                {
-                    self.dispatch = Dispatch::Awaiting(receipt);
-                }
-                Some(Action::Accepted(origin))
+        if let Some(completion) = finished.filter(|event| event.cursor > receipt.cursor) {
+            if completion.interrupted {
+                self.pause();
             }
-            None => {
-                if origin == Origin::Queue {
-                    self.queue.push_front(draft.clone());
-                    self.paused = true;
-                }
-                Some(Action::Rejected { origin, draft })
-            }
+        } else {
+            self.dispatch = Dispatch::Awaiting(receipt);
         }
+        Some(Settlement::Accepted { origin, draft })
+    }
+
+    pub fn not_sent(&mut self, turn: TurnId, message: String) -> Option<Settlement> {
+        if !matches!(self.dispatch, Dispatch::Submitting {
+            turn: pending, attempt: Attempt::Sending, ..
+        } if pending == turn)
+        {
+            return None;
+        }
+        self.reject(message)
+    }
+
+    fn reject(&mut self, message: String) -> Option<Settlement> {
+        let Dispatch::Submitting { draft, origin, .. } =
+            std::mem::replace(&mut self.dispatch, Dispatch::Ready)
+        else {
+            return None;
+        };
+        self.pause();
+        if origin == Origin::Queue {
+            self.queue.push_front(draft.clone());
+        }
+        Some(Settlement::Rejected {
+            origin,
+            draft,
+            message,
+        })
     }
 
     pub fn observe(&mut self, event: &Event) {
-        if let EventKind::TurnFinished { turn, .. } = event.kind {
+        if let EventKind::TurnFinished { turn, .. } | EventKind::TurnInterrupted { turn, .. } =
+            event.kind
+        {
+            let interrupted = matches!(event.kind, EventKind::TurnInterrupted { .. });
             match &mut self.dispatch {
-                Dispatch::Submitting { finished, .. } => finished.push((turn, event.cursor)),
+                Dispatch::Submitting {
+                    turn: submitted,
+                    finished,
+                    ..
+                } if *submitted == turn
+                    && finished
+                        .as_ref()
+                        .is_none_or(|previous| event.cursor > previous.cursor) =>
+                {
+                    *finished = Some(Completion {
+                        cursor: event.cursor,
+                        interrupted,
+                    });
+                }
                 Dispatch::Awaiting(receipt)
                     if receipt.turn == turn && event.cursor > receipt.cursor =>
                 {
                     self.dispatch = Dispatch::Ready;
+                    if interrupted {
+                        self.pause();
+                    }
                 }
                 _ => {}
             }
         }
     }
 
-    pub fn advance(&mut self, meta: &SessionMeta, allowed: bool) -> Option<Action> {
+    pub fn advance(&mut self, meta: &SessionMeta, allowed: bool) -> Option<Send> {
         if meta.archived {
             self.pause();
             return None;
-        }
-        if let Dispatch::Awaiting(receipt) = &self.dispatch
-            && receipt.cursor != Cursor::START
-            && meta.revision >= receipt.cursor
-            && meta.status == SessionStatus::Idle
-            && meta.active_turn.is_none()
-        {
-            self.dispatch = Dispatch::Ready;
         }
         if !allowed
             || (self.paused && !self.priority)
@@ -277,6 +436,16 @@ impl SessionOutbox {
         let draft = self.queue.pop_front()?;
         self.priority = false;
         Some(self.start(draft, Origin::Queue))
+    }
+
+    pub fn tracking_failed(&mut self, failed: TurnReceipt) -> bool {
+        if matches!(&self.dispatch, Dispatch::Awaiting(receipt) if *receipt == failed) {
+            self.dispatch = Dispatch::Ready;
+            self.pause();
+            true
+        } else {
+            false
+        }
     }
 }
 

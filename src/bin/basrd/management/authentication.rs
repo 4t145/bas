@@ -8,11 +8,11 @@ use std::{
 use anyhow::Context;
 use basr::{
     authentication::{Arguments, Execution, Invocation, Method},
-    config::AgentSpec,
+    config::{AgentSpec, ManagedAgent},
 };
 use serde::{Deserialize, Serialize};
 
-use super::{Record, Records, artifact, registry};
+use super::{Record, installation, registry};
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(super) struct LaunchBoundary {
@@ -90,57 +90,19 @@ enum Error {
 /// # Errors
 /// Rejects unsupported methods, mismatched commands, invalid process arguments,
 /// or legacy application arguments without a trusted launcher boundary.
-pub fn invocation(spec: &AgentSpec, program: &Path, method: &Method) -> anyhow::Result<Invocation> {
-    let record = if matches!(&method.execution, Execution::Terminal(terminal) if terminal.arguments != Arguments::Append)
-    {
-        managed_record(spec)?
-    } else {
-        None
-    };
+pub fn invocation(
+    spec: &AgentSpec,
+    managed: Option<&ManagedAgent>,
+    program: &Path,
+    method: &Method,
+) -> anyhow::Result<Invocation> {
+    // Provenance comes from the active catalog, never a matching executable or
+    // a global "last installed" record. A custom copy cannot inherit this trust.
+    let record = managed.map(installation::load_record).transpose()?;
+    if record.as_ref().is_some_and(|record| record.spec != *spec) {
+        return Err(Error::CommandMismatch.into());
+    }
     build(spec, program, method, record.as_ref())
-}
-
-/// # Errors
-/// Rejects invalid managed installation metadata or inaccessible storage.
-fn managed_record(spec: &AgentSpec) -> anyhow::Result<Option<Record>> {
-    let root = std::env::var_os("BASRD_ACP_DATA_DIR")
-        .map(PathBuf::from)
-        .or_else(|| dirs::data_local_dir().map(|path| path.join("basr/acp")))
-        .context("user data directory is unavailable")?;
-    artifact::reject_directory_links(&root)?;
-    let path = root.join("installations.json");
-    artifact::reject_file_link(&path)?;
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let mut records: Records =
-        serde_json::from_slice(&bytes).context("invalid managed installation metadata")?;
-    if records.schema_version != 1 {
-        return Err(super::Error::RecordsVersion.into());
-    }
-    let Some(record) = records
-        .agents
-        .remove(spec.id.as_str())
-        .filter(|record| record.spec == *spec)
-    else {
-        return Ok(None);
-    };
-    registry::validate_component(spec.id.as_str())?;
-    if record.manifest.id != spec.id.as_str()
-        || !record
-            .directory
-            .starts_with(root.join("agents").join(spec.id.as_str()))
-        || record
-            .directory
-            .components()
-            .any(|part| matches!(part, std::path::Component::ParentDir))
-    {
-        anyhow::bail!("managed installation metadata has an invalid identity or directory");
-    }
-    artifact::reject_directory_links(&record.directory)?;
-    Ok(Some(record))
 }
 
 /// # Errors

@@ -45,13 +45,14 @@ fn write_sessions(sessions: &[pb::Session], stdout: &mut impl Write) -> Result<(
     }
 
     for session in sessions {
-        let session = model::SessionMeta::try_from(session.clone())
+        let snapshot = model::SessionSnapshot::try_from(session.clone())
             .context("malformed session from the daemon")?;
+        let session = &snapshot.meta;
         crate::safe::safe_writeln!(
             stdout,
             "{}  {:<9} {:<10} {}{}",
             session.id,
-            session.status,
+            snapshot.status(),
             session.agent,
             session.title.as_deref().unwrap_or("-"),
             if session.archived { " [archived]" } else { "" }
@@ -71,11 +72,22 @@ pub fn session(session: &pb::Session) -> Result<()> {
 /// # Errors
 /// Returns an error for malformed metadata or a failed output write.
 fn write_session(session: &pb::Session, stdout: &mut impl Write) -> Result<()> {
-    let session = model::SessionMeta::try_from(session.clone())
+    let snapshot = model::SessionSnapshot::try_from(session.clone())
         .context("malformed session from the daemon")?;
+    let session = &snapshot.meta;
     crate::safe::safe_writeln!(stdout, "id        {}", session.id)?;
     crate::safe::safe_writeln!(stdout, "agent     {}", session.agent)?;
-    crate::safe::safe_writeln!(stdout, "status    {}", session.status)?;
+    crate::safe::safe_writeln!(stdout, "status    {}", snapshot.status())?;
+    if let Some(failure) = &snapshot.runtime.failure {
+        crate::safe::safe_writeln!(
+            stdout,
+            "committed {} (revision {})",
+            session.status,
+            session.revision.raw()
+        )?;
+        crate::safe::safe_writeln!(stdout, "runtime   {}", snapshot.runtime.id)?;
+        crate::safe::safe_writeln!(stdout, "failure   {}", failure)?;
+    }
     crate::safe::safe_writeln!(stdout, "archived  {}", session.archived)?;
     crate::safe::safe_writeln!(
         stdout,
@@ -106,6 +118,7 @@ fn write_session(session: &pb::Session, stdout: &mut impl Write) -> Result<()> {
 #[derive(Default)]
 pub struct Timeline {
     role: Option<model::Role>,
+    interruption: Option<(model::SessionId, String)>,
 }
 
 impl Timeline {
@@ -162,6 +175,9 @@ impl Timeline {
 
         match &decoded.kind {
             EventKind::Failed { message } => {
+                if self.interruption.take().as_ref() == Some(&(decoded.session, message.clone())) {
+                    return stdout.flush().context("cannot flush stdout");
+                }
                 crate::safe::safe_writeln!(stdout, "{:>6} ---- failed: {message}", decoded.cursor)
                     .context("cannot write to stdout")?;
             }
@@ -207,6 +223,7 @@ impl Timeline {
                 update => crate::safe::safe_writeln!(stdout, "{}", serde_json::to_string(update)?)?,
             },
             EventKind::TurnStarted { turn } => {
+                self.interruption = None;
                 crate::safe::safe_writeln!(
                     stdout,
                     "{:>6} ---- turn {turn} started",
@@ -220,11 +237,40 @@ impl Timeline {
                         .as_str()
                         .unwrap_or("unknown")
                         .to_owned(),
-                    Err(error) => format!("error: {error}"),
+                    Err(error) => format!("agent error: {}", error.message),
                 };
                 crate::safe::safe_writeln!(
                     stdout,
                     "{:>6} ---- turn {turn} finished ({stop})",
+                    decoded.cursor
+                )
+                .context("cannot write to stdout")?;
+            }
+            EventKind::TurnInterrupted { turn, reason } => {
+                use model::InterruptionReason;
+                self.interruption = match reason {
+                    InterruptionReason::BackendFailure { message }
+                    | InterruptionReason::DispatchFailure { message } => {
+                        Some((decoded.session, message.clone()))
+                    }
+                    _ => None,
+                };
+                let detail = match reason {
+                    InterruptionReason::BackendFailure { message } => {
+                        format!("backend failure: {message}")
+                    }
+                    InterruptionReason::DispatchFailure { message } => {
+                        format!("dispatch failure: {message}")
+                    }
+                    InterruptionReason::SessionStopped => "session stopped".into(),
+                    InterruptionReason::DaemonRestarted => "daemon restarted".into(),
+                    InterruptionReason::CancelledBeforeDispatch => {
+                        "cancelled before dispatch".into()
+                    }
+                };
+                crate::safe::safe_writeln!(
+                    stdout,
+                    "{:>6} ---- turn {turn} interrupted by BASR ({detail})",
                     decoded.cursor
                 )
                 .context("cannot write to stdout")?;
@@ -270,3 +316,6 @@ mod tests;
 
 #[cfg(test)]
 mod archive_tests;
+
+#[cfg(test)]
+mod runtime_tests;

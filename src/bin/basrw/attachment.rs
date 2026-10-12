@@ -13,6 +13,17 @@ pub(super) struct Draft {
     pub attachments: Vec<Attachment>,
 }
 
+impl Draft {
+    pub fn matches(&self, text: &str, attachments: &[Attachment]) -> bool {
+        self.text == text
+            && self
+                .attachments
+                .iter()
+                .map(|item| item.id)
+                .eq(attachments.iter().map(|item| item.id))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Attachment {
     pub id: uuid::Uuid,

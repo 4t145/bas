@@ -19,6 +19,7 @@ use tonic::{Code, transport::Endpoint};
 mod elicitations;
 mod foreground;
 mod permissions;
+mod tracking;
 
 const EVENT_CAPACITY: usize = 256;
 const HISTORY_PAGE_SIZE: u32 = 256;
@@ -47,10 +48,16 @@ pub(super) enum Command {
     Delete(SessionId),
     Prompt {
         session: SessionId,
+        turn: TurnId,
         text: String,
         attachments: Vec<Attachment>,
         capabilities: acp::PromptCapabilities,
         title: Option<String>,
+    },
+    ResolvePrompt {
+        session: SessionId,
+        submission: Arc<PromptSubmission>,
+        retry: bool,
     },
     Cancel(SessionId),
     SetConfig(acp::SetSessionConfigOptionRequest),
@@ -74,7 +81,7 @@ pub(super) enum Command {
 
 pub(super) struct Catalog {
     pub agents: Vec<pb::Agent>,
-    pub sessions: Vec<SessionMeta>,
+    pub sessions: Vec<SessionSnapshot>,
 }
 
 pub(super) enum Update {
@@ -112,7 +119,7 @@ pub(super) enum Update {
     Catalog(Result<Catalog, String>),
     Created {
         epoch: u64,
-        result: Result<SessionMeta, String>,
+        result: Result<SessionSnapshot, String>,
     },
     AuthenticationRequired {
         epoch: u64,
@@ -124,17 +131,24 @@ pub(super) enum Update {
     },
     Archived {
         session: SessionId,
-        result: Result<SessionMeta, String>,
+        result: Result<SessionSnapshot, String>,
     },
     Deleted {
         session: SessionId,
         result: Result<(), String>,
     },
-    Sent {
+    Submission {
         session: SessionId,
-        text: String,
-        attachments: Vec<Attachment>,
-        result: Result<TurnReceipt, String>,
+        submission: Arc<PromptSubmission>,
+        result: Result<PromptSubmissionOutcome, String>,
+    },
+    TrackedTurn {
+        event: Event,
+    },
+    TrackingFailed {
+        session: SessionId,
+        receipt: TurnReceipt,
+        message: String,
     },
     Cancelled {
         session: SessionId,
@@ -142,7 +156,7 @@ pub(super) enum Update {
     },
     Snapshot {
         epoch: u64,
-        session: SessionMeta,
+        session: SessionSnapshot,
         events: Vec<Event>,
     },
     Event {
@@ -248,9 +262,7 @@ async fn run(
                         let updates = updates.clone();
                         let refresh = refresh.clone();
                         tasks.spawn(async move {
-                            let update = execute(client, command).await;
-                            let _ = updates.send(update).await;
-                            refresh.notify_one();
+                            operation(client, command, updates, refresh).await;
                         });
                     }
                 }
@@ -263,6 +275,43 @@ async fn run(
                 }
             }
         }
+    }
+}
+
+async fn operation(
+    client: Client,
+    command: Command,
+    updates: mpsc::Sender<Update>,
+    refresh: Arc<Notify>,
+) {
+    let update = execute(client.clone(), command).await;
+    let accepted = match &update {
+        Update::Submission {
+            session,
+            result: Ok(PromptSubmissionOutcome::Accepted(receipt)),
+            ..
+        } => Some((*session, *receipt)),
+        _ => None,
+    };
+    if updates.send(update).await.is_err() {
+        return;
+    }
+    refresh.notify_one();
+    if let Some((session, receipt)) = accepted {
+        let result = tokio::select! {
+            result = tracking::track(client, session, receipt) => result,
+            _ = updates.closed() => return,
+        };
+        let update = match result {
+            Ok(event) => Update::TrackedTurn { event },
+            Err(message) => Update::TrackingFailed {
+                session,
+                receipt,
+                message,
+            },
+        };
+        let _ = updates.send(update).await;
+        refresh.notify_one();
     }
 }
 
@@ -451,31 +500,66 @@ async fn execute(mut client: Client, command: Command) -> Update {
         }
         Command::Prompt {
             session,
+            turn,
             text,
             attachments,
             capabilities,
             title,
         } => {
-            let result = request(async {
-                if let Some(title) = title {
+            let content = crate::attachment::prompt_content(&text, &attachments, &capabilities);
+            let submission = Arc::new(PromptSubmission {
+                turn,
+                request: acp::PromptRequest::new(session.to_string(), content),
+            });
+            if let Some(title) = title {
+                let prepared = request(async {
                     client
                         .set_title(pb::SetTitleRequest {
                             session: session.to_string(),
                             title,
                         })
                         .await?;
+                    Ok(())
+                })
+                .await;
+                if let Err(message) = prepared {
+                    return Update::Submission {
+                        session,
+                        submission,
+                        result: Ok(PromptSubmissionOutcome::Rejected(PromptRejection {
+                            kind: PromptRejectionKind::Unavailable,
+                            message,
+                        })),
+                    };
                 }
-                let content = crate::attachment::prompt_content(&text, &attachments, &capabilities);
-                let accepted = client
-                    .prompt_acp(&acp::PromptRequest::new(session.to_string(), content))
-                    .await?;
-                accepted.try_into().map_err(Into::into)
+            }
+            let result = request(async { Ok(client.submit_prompt(&submission).await?) }).await;
+            Update::Submission {
+                session,
+                submission,
+                result,
+            }
+        }
+        Command::ResolvePrompt {
+            session,
+            submission,
+            retry,
+        } => {
+            let result = request(async {
+                if retry {
+                    Ok(client.submit_prompt(&submission).await?)
+                } else {
+                    client
+                        .prompt_acceptance(session, submission.turn)
+                        .await?
+                        .map(PromptSubmissionOutcome::Accepted)
+                        .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("submission-unknown")))
+                }
             })
             .await;
-            Update::Sent {
+            Update::Submission {
                 session,
-                text,
-                attachments,
+                submission,
                 result,
             }
         }
@@ -505,7 +589,7 @@ async fn execute(mut client: Client, command: Command) -> Update {
 }
 
 struct Snapshot {
-    session: SessionMeta,
+    session: SessionSnapshot,
     events: Vec<Event>,
 }
 
@@ -563,6 +647,7 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                     events,
                 })) => {
                     cursor = Some(events.last().map_or(0, |event| event.cursor.raw()));
+                    let failure = meta.runtime.failure.as_ref().map(ToString::to_string);
                     if updates
                         .send(Update::Snapshot {
                             epoch,
@@ -574,11 +659,21 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                     {
                         return;
                     }
+                    if let Some(message) = failure {
+                        let _ = updates
+                            .send(Update::Stream {
+                                epoch,
+                                state: StreamState::Unavailable(message),
+                            })
+                            .await;
+                        return;
+                    }
                 }
                 Ok(Err(error)) => {
-                    if error.downcast_ref::<tonic::Status>().is_some_and(|status| {
-                        matches!(status.code(), Code::NotFound | Code::InvalidArgument)
-                    }) {
+                    if error
+                        .downcast_ref::<tonic::Status>()
+                        .is_some_and(|status| terminal_watch_status(status.code()))
+                    {
                         let _ = updates
                             .send(Update::Stream {
                                 epoch,
@@ -615,7 +710,7 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                 if error.code() == Code::DataLoss {
                     cursor = None;
                 }
-                if matches!(error.code(), Code::NotFound | Code::InvalidArgument) {
+                if terminal_watch_status(error.code()) {
                     let _ = updates
                         .send(Update::Stream {
                             epoch,
@@ -681,6 +776,15 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                     return;
                 }
                 Err(error) => {
+                    if terminal_watch_status(error.code()) {
+                        let _ = updates
+                            .send(Update::Stream {
+                                epoch,
+                                state: StreamState::Unavailable(error.to_string()),
+                            })
+                            .await;
+                        return;
+                    }
                     if error.code() == Code::DataLoss {
                         cursor = None;
                     }
@@ -692,6 +796,13 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
             }
         }
     }
+}
+
+fn terminal_watch_status(code: Code) -> bool {
+    matches!(
+        code,
+        Code::NotFound | Code::InvalidArgument | Code::FailedPrecondition
+    )
 }
 
 async fn retry(updates: &mpsc::Sender<Update>, epoch: u64, error: String) -> bool {

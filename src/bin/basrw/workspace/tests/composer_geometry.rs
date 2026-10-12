@@ -117,7 +117,7 @@ fn full_body_uses_shared_padding_for_initialization_history_and_composer(cx: &mu
                 view.update(
                     Update::Created {
                         epoch: fixture.initial_create.epoch,
-                        result: Ok(meta.clone()),
+                        result: Ok(meta.clone().into()),
                     },
                     window,
                     cx,
@@ -125,7 +125,7 @@ fn full_body_uses_shared_padding_for_initialization_history_and_composer(cx: &mu
                 view.update(
                     Update::Snapshot {
                         epoch: view.epoch,
-                        session: meta.clone(),
+                        session: meta.clone().into(),
                         events: vec![Event::new(
                             meta.id,
                             Cursor::from_raw(1),

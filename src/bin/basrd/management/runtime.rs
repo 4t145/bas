@@ -5,13 +5,20 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
+    io::{Read, Seek},
     path::{Path, PathBuf},
     process::Stdio,
+    time::Duration,
 };
+
+mod process;
 
 const MIN_NODE_MAJOR: u64 = 22;
 const NODE_INDEX: &str = "https://nodejs.org/dist/index.json";
 const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent";
+const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_VERSION_BYTES: u64 = 1024;
+const MAX_ERROR_BYTES: u64 = 8192;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Runtime {
@@ -44,7 +51,10 @@ pub struct Installed {
 /// # Errors
 /// Reports missing compatible runtimes, failed verified Node downloads or cancellation.
 pub async fn ensure(client: &reqwest::Client, root: &Path, progress: &Progress) -> Result<Runtime> {
-    if let Some(runtime) = system_runtime().await {
+    progress.check()?;
+    let system = system_runtime(progress).await;
+    progress.check()?;
+    if let Some(runtime) = system {
         return Ok(runtime);
     }
     let runtime_file = root.join("node-runtime.json");
@@ -136,23 +146,38 @@ pub async fn ensure(client: &reqwest::Client, root: &Path, progress: &Progress) 
     Ok(runtime)
 }
 
-async fn system_runtime() -> Option<Runtime> {
+async fn system_runtime(progress: &Progress) -> Option<Runtime> {
     let node = fs::canonicalize(which::which("node").ok()?).ok()?;
     let npm = which::which("npm").ok()?;
-    let version = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        tokio::process::Command::new(&node)
-            .arg("--version")
-            .kill_on_drop(true)
-            .output(),
-    )
+    let output = tempfile::NamedTempFile::new().ok()?;
+    let mut command = tokio::process::Command::new(&node);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(output.reopen().ok()?))
+        .stderr(Stdio::null());
+    let version = process::run(command, async {
+        tokio::select! {
+            () = tokio::time::sleep(VERSION_TIMEOUT) => {}
+            () = progress.closed() => {}
+        }
+    })
     .await
-    .ok()?
     .ok()?;
-    if !version.status.success() {
+    if !matches!(version, process::Outcome::Exited(status) if status.success()) {
         return None;
     }
-    let version = String::from_utf8(version.stdout).ok()?.trim().to_owned();
+    let mut bytes = Vec::new();
+    output
+        .reopen()
+        .ok()?
+        .take(MAX_VERSION_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_VERSION_BYTES {
+        return None;
+    }
+    let version = String::from_utf8(bytes).ok()?.trim().to_owned();
     if semver::Version::parse(version.strip_prefix('v')?)
         .ok()?
         .major
@@ -250,8 +275,7 @@ pub async fn install(
         )
         .env("npm_config_cache", root.join("npm-cache"))
         .env("npm_config_update_notifier", "false")
-        .stdin(Stdio::null())
-        .kill_on_drop(true);
+        .stdin(Stdio::null());
     run(command, progress).await?;
     artifact::adapt_tree(&staging.join("node_modules"))?;
     let package_root = staging.join("node_modules").join(name);
@@ -337,40 +361,27 @@ fn launch_path(
 }
 
 async fn run(mut command: tokio::process::Command, progress: &Progress) -> Result<()> {
-    #[cfg(unix)]
-    command.process_group(0);
+    progress.check()?;
     let log = tempfile::NamedTempFile::new()?;
     command
         .stdout(Stdio::from(log.reopen()?))
         .stderr(Stdio::from(log.reopen()?));
-    let mut child = command.spawn()?;
-    #[cfg(unix)]
-    let _group = ProcessGroup(child.id());
-    let status = tokio::select! { status = child.wait() => status?, _ = progress.closed() => return Err(Error::Cancelled.into()) };
+    let status = match process::run(command, progress.closed()).await? {
+        process::Outcome::Exited(status) => status,
+        process::Outcome::Cancelled => return Err(Error::Cancelled.into()),
+    };
     if !status.success() {
         let mut log_file = log.reopen()?;
-        use std::io::{Read, Seek};
         let length = log_file.metadata()?.len();
-        log_file.seek(std::io::SeekFrom::Start(length.saturating_sub(8192)))?;
-        let mut detail = String::new();
-        log_file.read_to_string(&mut detail)?;
+        log_file.seek(std::io::SeekFrom::Start(
+            length.saturating_sub(MAX_ERROR_BYTES),
+        ))?;
+        let mut bytes = Vec::new();
+        log_file.take(MAX_ERROR_BYTES).read_to_end(&mut bytes)?;
+        let detail = String::from_utf8_lossy(&bytes);
         anyhow::bail!("npm installation failed ({status}): {detail}");
     }
     Ok(())
-}
-
-#[cfg(unix)]
-struct ProcessGroup(Option<u32>);
-#[cfg(unix)]
-impl Drop for ProcessGroup {
-    fn drop(&mut self) {
-        if let Some(id) = self.0 {
-            let _ = nix::sys::signal::killpg(
-                nix::unistd::Pid::from_raw(id as i32),
-                nix::sys::signal::Signal::SIGKILL,
-            );
-        }
-    }
 }
 
 /// # Errors

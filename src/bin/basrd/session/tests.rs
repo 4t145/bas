@@ -1,6 +1,7 @@
 use basr::acp;
 mod archive;
 mod notices;
+mod persistence;
 mod recovery;
 
 use std::{
@@ -14,14 +15,14 @@ use std::{
 
 use async_trait::async_trait;
 use basr::model::{
-    ContentBlock, Cursor, Event, EventKind, Owner, SessionId, SessionMeta, SessionStatus,
-    StopReason, TurnId,
+    ContentBlock, Cursor, Event, EventKind, Owner, PromptRejection, PromptRejectionKind, SessionId,
+    SessionMeta, SessionStatus, StopReason, TurnId,
 };
 use tokio::sync::{Notify, mpsc};
 
 use super::{
     AttachError, AttachOptions, CreateError, CreateRequest, HistoryError, Limits, Registry,
-    Session, SessionError, history::Ring,
+    Session, SessionError, SubmissionError, history::Ring,
 };
 use crate::agent::{
     self, Agent, AgentSpec, Catalog, Driver, Kind, LaunchRequest, LocalHost, TurnUpdate, Update,
@@ -199,7 +200,7 @@ fn message(cursor: u64) -> Event {
     )
 }
 
-async fn finish(attachment: &mut super::Attachment) -> Result<StopReason, String> {
+async fn finish(attachment: &mut super::Attachment) -> Result<StopReason, acp::Error> {
     tokio::time::timeout(TIMEOUT, async {
         loop {
             if let EventKind::TurnFinished { result, .. } = attachment
@@ -367,7 +368,10 @@ async fn overlapping_turns_do_not_commit_rejected_prompts() {
     let session = pending_session(Limits::default()).await;
     assert!(matches!(
         session.prompt(Vec::new()).await,
-        Err(SessionError::EmptyPrompt)
+        Err(SubmissionError::Rejected(PromptRejection {
+            kind: PromptRejectionKind::InvalidRequest,
+            ..
+        }))
     ));
     let first = session
         .prompt(vec![ContentBlock::from("first")])
@@ -376,7 +380,10 @@ async fn overlapping_turns_do_not_commit_rejected_prompts() {
     assert_eq!(session.meta().status, SessionStatus::Working);
     assert!(matches!(
         session.prompt(vec![ContentBlock::from("rejected")]).await,
-        Err(SessionError::Busy)
+        Err(SubmissionError::Rejected(PromptRejection {
+            kind: PromptRejectionKind::Busy,
+            ..
+        }))
     ));
     session
         .apply(Update::Turn {
@@ -418,6 +425,76 @@ async fn overlapping_turns_do_not_commit_rejected_prompts() {
 }
 
 #[tokio::test]
+async fn undispatched_cancellation_is_an_interruption_and_session_can_continue() {
+    let session = pending_session(Limits::default()).await;
+    let turn = session
+        .prompt(vec!["cancel before dispatch".into()])
+        .await
+        .expect("prompt");
+    session
+        .apply(Update::Turn {
+            turn,
+            update: TurnUpdate::CancelledBeforeDispatch,
+        })
+        .await;
+    assert_eq!(session.meta().status, SessionStatus::Idle);
+    assert_eq!(session.meta().active_turn, None);
+    let history = session.page(None, 100).expect("history");
+    assert!(matches!(
+        history.events.last().expect("interruption").kind,
+        EventKind::TurnInterrupted {
+            reason: basr::model::InterruptionReason::CancelledBeforeDispatch,
+            ..
+        }
+    ));
+    assert!(
+        !history
+            .events
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::TurnFinished { .. }))
+    );
+    session
+        .prompt(vec!["continue".into()])
+        .await
+        .expect("next prompt");
+    session.shutdown().await;
+}
+
+#[tokio::test]
+async fn synchronous_dispatch_rejection_has_no_native_result() {
+    let registry = registry();
+    let session = registry.create(request()).await.expect("session");
+    let image = serde_json::from_value(serde_json::json!({
+        "type": "image", "data": "", "mimeType": "image/png"
+    }))
+    .expect("image");
+    session
+        .prompt(vec![image])
+        .await
+        .expect("accepted before dispatch failure");
+    let history = session.page(None, 100).expect("history");
+    assert!(matches!(
+        history.events.last().expect("interruption").kind,
+        EventKind::TurnInterrupted {
+            reason: basr::model::InterruptionReason::DispatchFailure { .. },
+            ..
+        }
+    ));
+    assert!(
+        !history
+            .events
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::TurnFinished { .. }))
+    );
+    assert_eq!(session.meta().status, SessionStatus::Idle);
+    session
+        .prompt(vec!["valid".into()])
+        .await
+        .expect("next prompt");
+    registry.shutdown().await;
+}
+
+#[tokio::test]
 async fn shutdown_is_terminal_and_closes_existing_and_new_attachments() {
     let session = pending_session(Limits::default()).await;
     let turn = session
@@ -426,7 +503,13 @@ async fn shutdown_is_terminal_and_closes_existing_and_new_attachments() {
         .expect("prompt");
     let mut attachment = session.attach(options(0)).await.expect("attach");
     session.shutdown().await;
-    assert_eq!(finish(&mut attachment).await, Ok(StopReason::Cancelled));
+    assert!(matches!(
+        attachment.recv().await.expect("interruption").kind,
+        EventKind::TurnInterrupted {
+            reason: basr::model::InterruptionReason::SessionStopped,
+            ..
+        }
+    ));
     assert!(matches!(
         attachment.recv().await.expect("stop event").kind,
         EventKind::StatusChanged {
@@ -451,7 +534,10 @@ async fn shutdown_is_terminal_and_closes_existing_and_new_attachments() {
         .await;
     assert!(matches!(
         session.prompt(vec![ContentBlock::from("late")]).await,
-        Err(SessionError::Inactive(SessionStatus::Stopped))
+        Err(SubmissionError::Rejected(PromptRejection {
+            kind: PromptRejectionKind::Unavailable,
+            ..
+        }))
     ));
     assert_eq!(session.meta().status, SessionStatus::Stopped);
     session.shutdown().await;
@@ -468,7 +554,10 @@ async fn backend_failure_is_replayable_and_terminal() {
     session
         .apply(Update::Failed("connection lost".into()))
         .await;
-    assert_eq!(finish(&mut attachment).await, Err("connection lost".into()));
+    assert!(matches!(
+        attachment.recv().await.expect("interruption").kind,
+        EventKind::TurnInterrupted { reason: basr::model::InterruptionReason::BackendFailure { message }, .. } if message == "connection lost"
+    ));
     assert_eq!(
         attachment.recv().await.expect("failure event").kind,
         EventKind::Failed {
@@ -522,10 +611,8 @@ async fn detaching_preserves_the_turn_and_removing_releases_the_session() {
         .await
         .expect("turn finishes without an attachment")
         .expect("completion notification");
-    assert_eq!(
-        completion.result.expect("successful turn").stop_reason,
-        StopReason::EndTurn
-    );
+    assert!(matches!(completion.outcome,
+        super::CompletionOutcome::Native(Ok(response)) if response.stop_reason == StopReason::EndTurn));
     let page = session.page(None, 100).expect("history");
     assert!(
         page.events
@@ -554,16 +641,14 @@ async fn completion_snapshots_do_not_retain_sessions() {
     registry.remove(session.id()).await.expect("remove");
     drop(session);
     assert!(weak.upgrade().is_none());
-    assert_eq!(
+    assert!(matches!(
         receiver
             .recv()
             .await
             .expect("completion snapshot")
-            .result
-            .expect("success")
-            .stop_reason,
-        StopReason::EndTurn
-    );
+            .outcome,
+        super::CompletionOutcome::Native(Ok(response)) if response.stop_reason == StopReason::EndTurn
+    ));
 }
 
 #[tokio::test]

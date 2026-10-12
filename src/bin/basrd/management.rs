@@ -2,6 +2,7 @@
 
 mod artifact;
 mod authentication;
+pub(crate) mod installation;
 mod registry;
 mod runtime;
 pub use authentication::invocation as authentication_invocation;
@@ -9,7 +10,7 @@ pub use authentication::invocation as authentication_invocation;
 use anyhow::{Context, Result};
 use basr::{
     config::{
-        AgentSpec, Store,
+        AgentRegistration, AgentSpec, Store,
         agent::{Command, Kind},
     },
     management::{Catalog, Entry, Source, Status},
@@ -17,8 +18,9 @@ use basr::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs, io::Write, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, mpsc};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -31,7 +33,7 @@ enum Error {
     #[error("agent {0} was not found in the ACP registry")]
     UnknownAgent(String),
     #[error(
-        "agent {0} is configured manually or its managed settings were edited; use another ID or remove the custom configuration first"
+        "agent {0} is configured manually; use another ID or remove the custom configuration first"
     )]
     RegistrationConflict(String),
     #[error("agent {0} is not a managed installation")]
@@ -59,31 +61,43 @@ enum Error {
 }
 
 #[derive(Clone)]
-struct Progress(Option<mpsc::Sender<AgentOperation>>);
+struct Progress {
+    sender: Option<mpsc::Sender<AgentOperation>>,
+    cancellation: CancellationToken,
+}
 impl Progress {
     async fn send(&self, phase: &str, message: &str) -> Result<()> {
-        if let Some(sender) = &self.0 {
-            sender
-                .send(AgentOperation {
+        self.check()?;
+        if let Some(sender) = &self.sender {
+            tokio::select! {
+                biased;
+                _ = self.closed() => return Err(Error::Cancelled.into()),
+                result = sender.send(AgentOperation {
                     phase: phase.into(),
                     message: message.into(),
                     spec_json: Vec::new(),
                     complete: false,
-                })
-                .await
-                .map_err(|_| Error::Cancelled)?;
+                }) => result.map_err(|_| Error::Cancelled)?,
+            }
         }
         Ok(())
     }
     async fn closed(&self) {
-        if let Some(sender) = &self.0 {
-            sender.closed().await;
-        } else {
-            std::future::pending::<()>().await;
+        tokio::select! {
+            _ = self.cancellation.cancelled() => {},
+            _ = async {
+                if let Some(sender) = &self.sender {
+                    sender.closed().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {},
         }
     }
     fn check(&self) -> Result<(), Error> {
-        if self.0.as_ref().is_some_and(mpsc::Sender::is_closed) {
+        if self.cancellation.is_cancelled()
+            || self.sender.as_ref().is_some_and(mpsc::Sender::is_closed)
+        {
             Err(Error::Cancelled)
         } else {
             Ok(())
@@ -92,7 +106,7 @@ impl Progress {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct Record {
+pub(crate) struct Record {
     manifest: registry::Manifest,
     directory: PathBuf,
     spec: AgentSpec,
@@ -101,20 +115,6 @@ struct Record {
     dependencies: BTreeMap<String, String>,
     #[serde(default)]
     launch: Option<authentication::LaunchBoundary>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct Records {
-    schema_version: u32,
-    agents: BTreeMap<String, Record>,
-}
-impl Default for Records {
-    fn default() -> Self {
-        Self {
-            schema_version: 1,
-            agents: BTreeMap::new(),
-        }
-    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -136,6 +136,9 @@ pub struct Manager {
     client: reqwest::Client,
     registry: Mutex<RegistryMemory>,
     mutation: Mutex<()>,
+    installations: TaskTracker,
+    stopping: CancellationToken,
+    admission: std::sync::Mutex<()>,
 }
 
 impl Manager {
@@ -180,6 +183,9 @@ impl Manager {
             client,
             registry: Mutex::new(RegistryMemory::default()),
             mutation: Mutex::new(()),
+            installations: TaskTracker::new(),
+            stopping: CancellationToken::new(),
+            admission: std::sync::Mutex::new(()),
         })
     }
 
@@ -189,27 +195,50 @@ impl Manager {
 
     /// # Errors
     /// Reports invalid installation metadata; registry outages are returned as catalog warnings.
-    pub async fn catalog(&self, specs: Vec<AgentSpec>, refresh: bool) -> Result<Catalog> {
-        let loaded = self.load_registry(refresh, &Progress(None)).await;
+    pub async fn catalog(
+        &self,
+        registrations: Vec<AgentRegistration>,
+        refresh: bool,
+    ) -> Result<Catalog> {
+        let loaded = self
+            .load_registry(
+                refresh,
+                &Progress {
+                    sender: None,
+                    cancellation: self.stopping.child_token(),
+                },
+            )
+            .await;
         let (registry, warning) = match loaded {
             Ok(loaded) => loaded,
             Err(error) => (None, Some(format!("ACP 目录暂不可用：{error}"))),
         };
-        let records = self.records()?;
-        let mut configured: BTreeMap<_, _> = specs
+        let mut configured: BTreeMap<_, _> = registrations
             .into_iter()
-            .map(|spec| (spec.id.as_str().to_owned(), spec))
+            .map(|registration| (registration.id().as_str().to_owned(), registration))
             .collect();
         let mut entries = Vec::new();
         if let Some(registry) = registry {
             for manifest in registry.agents {
-                let spec = configured.remove(&manifest.id);
-                let record = records.agents.get(&manifest.id);
-                let managed = record.is_some_and(|record| spec.as_ref() == Some(&record.spec));
+                let registration = configured.remove(&manifest.id);
+                let record = registration
+                    .as_ref()
+                    .and_then(AgentRegistration::managed)
+                    .map(installation::load_record)
+                    .transpose()?;
+                let spec = registration
+                    .as_ref()
+                    .map(AgentRegistration::resolve)
+                    .transpose()?;
+                let managed = record.is_some();
                 let custom = spec.is_some() && !managed;
+                let latest_version = manifest.version.clone();
+                let manifest = record
+                    .as_ref()
+                    .map_or(manifest, |record| record.manifest.clone());
                 let (status, message) = if let Some(spec) = &spec {
                     let ready = if managed {
-                        record.is_some_and(record_available)
+                        record.as_ref().is_some_and(record_available)
                     } else {
                         available(spec)
                     };
@@ -225,7 +254,11 @@ impl Manager {
                     } else {
                         (
                             Status::Missing,
-                            "启动程序不存在；请重新安装或检查高级配置".into(),
+                            if managed {
+                                "启动程序不存在；请重新安装".into()
+                            } else {
+                                "启动程序不存在；请检查自定义配置".into()
+                            },
                         )
                     }
                 } else {
@@ -242,15 +275,21 @@ impl Manager {
                         manifest.name
                     },
                     description: manifest.description,
-                    version: manifest.version,
+                    version: latest_version,
                     repository: manifest.repository,
                     license: manifest.license,
                     license_url: manifest.license_url,
                     icon: manifest.icon,
-                    installed_version: managed
-                        .then(|| record.map(|record| record.manifest.version.clone()))
-                        .flatten(),
-                    source: if custom {
+                    installed_version: record
+                        .as_ref()
+                        .map(|record| record.manifest.version.clone()),
+                    source: if custom
+                        && spec
+                            .as_ref()
+                            .is_some_and(|spec| spec.kind == Kind::Embedded)
+                    {
+                        Source::Embedded
+                    } else if custom {
                         Source::Custom
                     } else {
                         Source::Registry
@@ -261,12 +300,17 @@ impl Manager {
                 });
             }
         }
-        for (id, spec) in configured {
-            let record = records.agents.get(&id).filter(|record| record.spec == spec);
-            let source = if spec.kind == Kind::Embedded {
-                Source::Embedded
-            } else if record.is_some() {
+        for (id, registration) in configured {
+            let record = registration
+                .managed()
+                .map(installation::load_record)
+                .transpose()?;
+            let record = record.as_ref();
+            let spec = registration.resolve()?;
+            let source = if record.is_some() {
                 Source::Registry
+            } else if spec.kind == Kind::Embedded {
+                Source::Embedded
             } else {
                 Source::Custom
             };
@@ -275,7 +319,7 @@ impl Manager {
                 id,
                 description: record
                     .map_or_else(String::new, |record| record.manifest.description.clone()),
-                version: record.map_or_else(String::new, |record| record.manifest.version.clone()),
+                version: String::new(),
                 repository: record
                     .map_or_else(String::new, |record| record.manifest.repository.clone()),
                 license: record.map_or_else(String::new, |record| record.manifest.license.clone()),
@@ -291,8 +335,10 @@ impl Manager {
                 },
                 message: if record.map_or_else(|| available(&spec), record_available) {
                     String::new()
+                } else if record.is_some() {
+                    "启动程序不存在；请重新安装".into()
                 } else {
-                    "启动程序不存在；检查高级配置或重新安装".into()
+                    "启动程序不存在；请检查自定义配置".into()
                 },
                 spec: Some(spec),
             });
@@ -309,20 +355,56 @@ impl Manager {
     /// # Errors
     /// Reports unknown/unsupported agents, cancellation, download/runtime failures and settings conflicts.
     pub async fn install(
-        &self,
+        self: &Arc<Self>,
         id: &str,
         progress: mpsc::Sender<AgentOperation>,
     ) -> Result<AgentSpec> {
         registry::validate_component(id)?;
-        let progress = Progress(Some(progress));
-        let _guard = tokio::select! { guard = self.mutation.lock() => guard, _ = progress.closed() => return Err(Error::Cancelled.into()) };
+        let cancellation = self.stopping.child_token();
+        let _cancel_on_drop = cancellation.clone().drop_guard();
+        let task = {
+            // Registration and closing the tracker are atomic relative to one another.
+            let _admission = self.admission.lock().expect("installation admission lock");
+            if self.stopping.is_cancelled() {
+                return Err(Error::Cancelled.into());
+            }
+            let manager = Arc::clone(self);
+            let id = id.to_owned();
+            let progress = Progress {
+                sender: Some(progress),
+                cancellation,
+            };
+            self.installations
+                .spawn(async move { manager.install_owned(&id, progress).await })
+        };
+        // Dropping this waiter detaches the tracked task, never its cleanup.
+        task.await.context("installation task failed")?
+    }
+
+    /// Cancels installation work and waits for staging and process cleanup.
+    pub async fn shutdown(&self) {
+        {
+            let _admission = self.admission.lock().expect("installation admission lock");
+            self.stopping.cancel();
+            self.installations.close();
+        }
+        self.installations.wait().await;
+    }
+
+    async fn install_owned(&self, id: &str, progress: Progress) -> Result<AgentSpec> {
+        progress.check()?;
+        let _guard = tokio::select! {
+            biased;
+            _ = progress.closed() => return Err(Error::Cancelled.into()),
+            guard = self.mutation.lock() => guard,
+        };
+        progress.check()?;
         let _disk_lock = self.mutation_lock()?;
         let store = self.store.as_ref().ok_or(Error::NoStore)?;
         // Preserve this snapshot throughout downloads so external edits are never overwritten.
         let mut document = store.load()?;
         let old_agents = document.settings.daemon.agents.clone();
-        let mut records = self.records()?;
-        check_registration(id, &old_agents, &records)?;
+        installation::check_identity(id, &old_agents)?;
         progress
             .send("resolving", "正在读取 ACP 后端安装信息")
             .await?;
@@ -336,6 +418,7 @@ impl Manager {
         let selected = manifest.select()?;
         let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&manifest)?));
         let versions = self.root.join("agents").join(id);
+        progress.check()?;
         artifact::safe_directory(&versions)?;
         // Different runtime/dependency resolutions must never reuse a previous version's contents.
         let destination = versions.join(format!(
@@ -400,12 +483,9 @@ impl Manager {
                 (spec, Some(installed.runtime), installed.dependencies)
             }
         };
-        artifact::atomic_json(&staging.path().join("basr-installation.json"), &manifest)?;
         progress.send("registering", "正在保存后端启动配置").await?;
         progress.check()?;
-        fs::rename(staging.path(), &destination)?;
-        let mut prepared_directory = PreparedDirectory(Some(destination.clone()));
-        let mut record = Record {
+        let record = Record {
             manifest,
             directory: destination,
             spec: spec.clone(),
@@ -413,77 +493,37 @@ impl Manager {
             dependencies,
             launch: None,
         };
-        record.launch = authentication::LaunchBoundary::from_record(&record);
-        records.agents.insert(id.into(), record);
-        let mut agents = old_agents.clone();
-        if let Some(existing) = agents.iter_mut().find(|agent| agent.id.as_str() == id) {
-            *existing = spec.clone();
-        } else {
-            agents.push(spec.clone());
-        }
-        self.commit(store, &mut document, agents, old_agents, &records)?;
-        prepared_directory.0 = None;
+        let managed = installation::finalize(staging, record)?;
+        progress.check()?;
+        installation::activate(store, &mut document, managed)?;
         Ok(spec)
     }
 
     /// # Errors
-    /// Rejects custom/edited registrations, failed settings saves and record writes.
-    pub async fn remove(&self, id: &str) -> Result<Vec<AgentSpec>> {
+    /// Rejects custom registrations and failed settings saves.
+    pub async fn remove(&self, id: &str) -> Result<Vec<AgentRegistration>> {
         registry::validate_component(id)?;
         let _guard = self.mutation.lock().await;
         let _disk_lock = self.mutation_lock()?;
         let store = self.store.as_ref().ok_or(Error::NoStore)?;
         let mut document = store.load()?;
         let old_agents = document.settings.daemon.agents.clone();
-        let mut records = self.records()?;
-        if !records.agents.contains_key(id) {
+        if !old_agents
+            .iter()
+            .any(|agent| agent.id().as_str() == id && agent.managed().is_some())
+        {
             return Err(Error::NotManaged(id.into()).into());
         }
-        check_registration(id, &old_agents, &records)?;
         let mut agents: Vec<_> = old_agents
             .iter()
-            .filter(|agent| agent.id.as_str() != id)
+            .filter(|agent| agent.id().as_str() != id)
             .cloned()
             .collect();
         if agents.is_empty() {
-            agents.push(AgentSpec::embedded());
+            agents.push(AgentSpec::embedded().into());
         }
-        records.agents.remove(id);
-        self.commit(store, &mut document, agents.clone(), old_agents, &records)?;
+        store.save_agents(&mut document, agents.clone())?;
         Ok(agents)
-    }
-
-    fn records(&self) -> Result<Records> {
-        let path = self.root.join("installations.json");
-        artifact::reject_file_link(&path)?;
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Records::default());
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let records: Records =
-            serde_json::from_slice(&bytes).context("invalid managed installation metadata")?;
-        if records.schema_version != 1 {
-            return Err(Error::RecordsVersion.into());
-        }
-        for (id, record) in &records.agents {
-            registry::validate_component(id)?;
-            if id != &record.manifest.id
-                || record.spec.id.as_str() != id
-                || !record
-                    .directory
-                    .starts_with(self.root.join("agents").join(id))
-                || record
-                    .directory
-                    .components()
-                    .any(|part| matches!(part, std::path::Component::ParentDir))
-            {
-                anyhow::bail!("managed installation metadata has an invalid identity or directory");
-            }
-        }
-        Ok(records)
     }
 
     fn mutation_lock(&self) -> Result<DiskLock> {
@@ -503,36 +543,17 @@ impl Manager {
         Ok(DiskLock(file))
     }
 
-    fn commit(
-        &self,
-        store: &Store,
-        document: &mut basr::config::Document,
-        agents: Vec<AgentSpec>,
-        old_agents: Vec<AgentSpec>,
-        records: &Records,
-    ) -> Result<()> {
-        let path = self.root.join("installations.json");
-        artifact::reject_file_link(&path)?;
-        let mut prepared = tempfile::NamedTempFile::new_in(&self.root)?;
-        serde_json::to_writer_pretty(&mut prepared, records)?;
-        prepared.write_all(b"\n")?;
-        prepared.as_file().sync_all()?;
-        store.save_agents(document, agents)?;
-        if let Err(error) = prepared.persist(path) {
-            store
-                .save_agents(document, old_agents)
-                .context("failed to restore settings after installation metadata write failed")?;
-            return Err(error.into());
-        }
-        Ok(())
-    }
-
     async fn load_registry(
         &self,
         refresh: bool,
         progress: &Progress,
     ) -> Result<(Option<registry::Registry>, Option<String>)> {
-        let mut memory = self.registry.lock().await;
+        let mut memory = tokio::select! {
+            biased;
+            _ = progress.closed() => return Err(Error::Cancelled.into()),
+            memory = self.registry.lock() => memory,
+        };
+        progress.check()?;
         let cache_path = self.root.join("registry.json");
         if memory.registry.is_none() {
             artifact::reject_file_link(&cache_path)?;
@@ -584,27 +605,6 @@ impl Drop for DiskLock {
     fn drop(&mut self) {
         let _ = self.0.unlock();
     }
-}
-
-struct PreparedDirectory(Option<PathBuf>);
-impl Drop for PreparedDirectory {
-    fn drop(&mut self) {
-        if let Some(path) = &self.0 {
-            let _ = fs::remove_dir_all(path);
-        }
-    }
-}
-
-fn check_registration(id: &str, agents: &[AgentSpec], records: &Records) -> Result<(), Error> {
-    if let Some(existing) = agents.iter().find(|agent| agent.id.as_str() == id)
-        && records
-            .agents
-            .get(id)
-            .is_none_or(|record| record.spec != *existing)
-    {
-        return Err(Error::RegistrationConflict(id.into()));
-    }
-    Ok(())
 }
 
 fn available(spec: &AgentSpec) -> bool {

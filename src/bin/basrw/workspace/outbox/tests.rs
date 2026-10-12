@@ -1,5 +1,7 @@
 use super::*;
 mod archive;
+mod correlation;
+mod interruption;
 mod pending;
 use basr::{
     acp,
@@ -31,11 +33,24 @@ fn finish(meta: &SessionMeta, turn: TurnId, cursor: u64) -> Event {
     )
 }
 
-fn sent(action: Option<Action>) -> String {
-    let Some(Action::Send(draft)) = action else {
-        panic!("expected send")
-    };
-    draft.text
+fn sent(send: Option<Send>) -> String {
+    send.expect("expected send").draft.text
+}
+
+fn submission(send: Send) -> Arc<PromptSubmission> {
+    Arc::new(PromptSubmission {
+        turn: send.turn,
+        request: acp::PromptRequest::new("test-session", vec![send.draft.text.into()]),
+    })
+}
+
+fn rejected() -> Result<PromptSubmissionOutcome, String> {
+    Ok(PromptSubmissionOutcome::Rejected(
+        basr::model::PromptRejection {
+            kind: basr::model::PromptRejectionKind::Busy,
+            message: "busy".into(),
+        },
+    ))
 }
 
 #[test]
@@ -44,7 +59,9 @@ fn title_between_send_and_receipt_never_releases_the_next_draft() {
     let mut meta = idle(1);
     outbox.enqueue(draft("A"));
     outbox.enqueue(draft("B"));
-    assert_eq!(sent(outbox.advance(&meta, true)), "A");
+    let send = outbox.advance(&meta, true).expect("send A");
+    assert_eq!(send.draft.text, "A");
+    let submission = submission(send);
     let title = Event::new(
         meta.id,
         Cursor::from_raw(2),
@@ -56,13 +73,15 @@ fn title_between_send_and_receipt_never_releases_the_next_draft() {
     outbox.observe(&title);
     assert!(outbox.advance(&meta, true).is_none());
     let receipt = TurnReceipt {
-        turn: TurnId::new(),
+        turn: submission.turn,
         cursor: Cursor::from_raw(3),
     };
-    outbox.receipt(Some(receipt));
+    outbox.settle(submission, Ok(PromptSubmissionOutcome::Accepted(receipt)));
     assert!(outbox.advance(&meta, true).is_none());
-    // Polling an unsubscribed session may prove completion, without a timestamp.
+    // Even a newer Idle catalog cannot prove which turn completed.
     meta.revision = Cursor::from_raw(4);
+    assert!(outbox.advance(&meta, true).is_none());
+    outbox.observe(&finish(&meta, receipt.turn, 4));
     assert_eq!(sent(outbox.advance(&meta, true)), "B");
 }
 
@@ -72,36 +91,76 @@ fn events_before_receipt_wait_for_acceptance_and_match_the_turn() {
     let meta = idle(0);
     outbox.enqueue(draft("A"));
     outbox.enqueue(draft("B"));
-    outbox.advance(&meta, true);
-    let turn = TurnId::new();
+    let submission = submission(outbox.advance(&meta, true).expect("send A"));
+    let turn = submission.turn;
     outbox.observe(&finish(&meta, turn, 3));
     assert!(outbox.advance(&meta, true).is_none());
-    outbox.receipt(Some(TurnReceipt {
-        turn,
-        cursor: Cursor::from_raw(2),
-    }));
+    outbox.settle(
+        submission,
+        Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+            turn,
+            cursor: Cursor::from_raw(2),
+        })),
+    );
     assert_eq!(sent(outbox.advance(&meta, true)), "B");
 }
 
 #[test]
-fn legacy_receipts_need_the_specific_turn_even_after_newer_idle_catalogs() {
+fn unknown_retains_only_its_latest_completion_and_ignores_other_turns() {
+    let meta = idle(1);
+    let mut outbox = SessionOutbox::default();
+    let submission = submission(outbox.start(draft("original"), Origin::Composer));
+    let turn = submission.turn;
+    outbox.settle(submission.clone(), Err("transport failed".into()));
+    for cursor in 2..100 {
+        outbox.observe(&finish(&meta, TurnId::new(), cursor));
+    }
+    assert!(matches!(
+        &outbox.dispatch,
+        Dispatch::Submitting { finished: None, .. }
+    ));
+    outbox.observe(&finish(&meta, turn, 101));
+    outbox.observe(&finish(&meta, turn, 100));
+    outbox.observe(&finish(&meta, TurnId::new(), 102));
+    assert!(
+        matches!(&outbox.dispatch, Dispatch::Submitting { finished: Some(completion), .. }
+        if completion.cursor.raw() == 101)
+    );
+    outbox.settle(
+        submission,
+        Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+            turn,
+            cursor: Cursor::from_raw(2),
+        })),
+    );
+    assert!(matches!(outbox.dispatch, Dispatch::Ready));
+}
+
+#[test]
+fn receipts_need_the_specific_turn_even_after_newer_idle_catalogs() {
     let mut outbox = SessionOutbox::default();
     let meta = idle(100);
     outbox.enqueue(draft("A"));
     outbox.enqueue(draft("B"));
-    outbox.advance(&meta, true);
-    let turn = TurnId::new();
-    outbox.receipt(Some(TurnReceipt {
-        turn,
-        cursor: Cursor::START,
-    }));
+    let submission = submission(outbox.advance(&meta, true).expect("send A"));
+    let turn = submission.turn;
+    outbox.settle(
+        submission.clone(),
+        Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+            turn,
+            cursor: Cursor::from_raw(1),
+        })),
+    );
     outbox.observe(&finish(&meta, TurnId::new(), 101));
     assert!(outbox.advance(&meta, true).is_none());
     // A duplicated receipt must not reset Awaiting.
-    outbox.receipt(Some(TurnReceipt {
-        turn,
-        cursor: Cursor::START,
-    }));
+    outbox.settle(
+        submission,
+        Ok(PromptSubmissionOutcome::Accepted(TurnReceipt {
+            turn,
+            cursor: Cursor::from_raw(1),
+        })),
+    );
     assert!(outbox.advance(&meta, true).is_none());
     outbox.observe(&finish(&meta, turn, 102));
     assert_eq!(sent(outbox.advance(&meta, true)), "B");
@@ -136,8 +195,8 @@ fn cancelled_edits_and_failed_sends_keep_the_original_draft() {
     assert!(outbox.advance(&idle(0), true).is_none());
     outbox.begin_edit(draft(""));
     outbox.enqueue(draft("A'"));
-    outbox.advance(&idle(0), true);
-    outbox.receipt(None);
+    let submission = submission(outbox.advance(&idle(0), true).expect("send edited A"));
+    outbox.settle(submission, rejected());
     assert_eq!(outbox.front().expect("failed draft").text, "A'");
     assert_eq!(outbox.len(), 2);
     assert!(outbox.advance(&idle(0), true).is_none());
@@ -154,8 +213,8 @@ fn attachment_payloads_survive_failure_edit_and_cancel() {
     };
     let mut outbox = SessionOutbox::default();
     outbox.enqueue(draft.clone());
-    outbox.advance(&idle(0), true);
-    outbox.receipt(None);
+    let submission = submission(outbox.advance(&idle(0), true).expect("send attachment"));
+    outbox.settle(submission, rejected());
     assert_eq!(
         outbox.front().expect("failed draft").attachments[0].id,
         attachment.id

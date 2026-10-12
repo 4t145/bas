@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 
-use basr::service::DEFAULT_ADDRESS;
+use basr::{config::AgentRegistration, service::DEFAULT_ADDRESS};
 
 use crate::{
     agent::{AgentSpec, PermissionPolicy},
@@ -83,7 +83,7 @@ pub struct ParseNotifyError {
 pub struct Config {
     pub listen: SocketAddr,
     pub notify: Notify,
-    pub agents: Vec<AgentSpec>,
+    pub agents: Vec<AgentRegistration>,
     pub catalog_source: Option<super::CatalogSource>,
     pub limits: Limits,
     pub permissions: PermissionPolicy,
@@ -98,7 +98,7 @@ impl Default for Config {
                 .parse()
                 .expect("the default listen address is a valid socket address"),
             notify: Notify::default(),
-            agents: vec![AgentSpec::embedded()],
+            agents: vec![AgentSpec::embedded().into()],
             catalog_source: None,
             limits: Limits::default(),
             permissions: PermissionPolicy::default(),

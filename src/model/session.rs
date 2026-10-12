@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{AgentId, Cursor, Event, EventKind, SessionId, Timestamp, TurnId};
 
+mod runtime;
+pub use runtime::*;
+
 #[cfg(test)]
 mod tests;
 
@@ -32,7 +35,7 @@ impl Owner {
     }
 }
 
-/// Lifecycle of a session, as observed by attached clients.
+/// Lifecycle values used by committed metadata and runtime views.
 #[derive(
     Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, strum::Display, strum::EnumString,
 )]
@@ -51,14 +54,15 @@ pub enum SessionStatus {
     Failed,
 }
 
-/// Acceptance of a prompt, tied to the event that started its turn.
+/// BASR registered the client-owned submission. This is not proof of ACP dispatch
+/// or successful execution. The cursor identifies its committed start event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TurnReceipt {
     pub turn: TurnId,
     pub cursor: Cursor,
 }
 
-/// Everything the daemon records about a session besides its events.
+/// The last committed session metadata. Runtime health belongs to [`SessionSnapshot`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionMeta {
     pub id: SessionId,
@@ -87,6 +91,7 @@ pub struct SessionMeta {
     /// Last event included in this metadata snapshot, independent of replay retention.
     #[serde(default)]
     pub revision: Cursor,
+    /// Active turn at `revision`; a failed runtime may no longer be executing it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_turn: Option<TurnId>,
     /// Agent capabilities, authentication methods and implementation information.
@@ -160,7 +165,7 @@ impl SessionMeta {
                 self.status = SessionStatus::Working;
                 self.active_turn = Some(*turn);
             }
-            EventKind::TurnFinished { .. } => {
+            EventKind::TurnFinished { .. } | EventKind::TurnInterrupted { .. } => {
                 self.status = SessionStatus::Idle;
                 self.active_turn = None;
             }

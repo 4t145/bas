@@ -352,7 +352,7 @@ impl Workspace {
             .to_string()
             .parse()
             .expect("GUI uses daemon session ids");
-        if self.configuring.insert(session) {
+        if self.runtime_healthy(session) && self.configuring.insert(session) {
             self.command(Command::SetConfig(request));
             cx.notify();
         }
@@ -381,6 +381,9 @@ impl Workspace {
         let Some(session) = self.current() else {
             return row;
         };
+        if !self.runtime_healthy(session.id) {
+            return row;
+        }
         let Some(options) = session
             .acp
             .as_ref()

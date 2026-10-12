@@ -154,6 +154,151 @@ async fn install(daemon: &mut Daemon, id: &str) -> AgentSpec {
     .expect("local install deadline")
 }
 
+async fn start_profile(
+    path: &std::path::Path,
+    root: &std::path::Path,
+    fixture: &Fixture,
+) -> Daemon {
+    let mut command = command();
+    command
+        .env_remove("BASRD_AGENTS")
+        .env_remove("BASR_SETTINGS_FILE")
+        .env("BASRD_ACP_DATA_DIR", root)
+        .env(
+            "BASRD_ACP_REGISTRY_URL",
+            format!("http://{}/registry.json", fixture.address),
+        )
+        .arg("--settings-file")
+        .arg(path)
+        .args([
+            "--listen",
+            "127.0.0.1:0",
+            "--notify",
+            "never",
+            "--log-backend",
+            "stdout",
+        ]);
+    Daemon::start(command).await
+}
+
+fn registration(path: &std::path::Path) -> basr::config::AgentRegistration {
+    basr::config::Store::at(path.to_path_buf())
+        .load()
+        .expect("profile settings")
+        .settings
+        .daemon
+        .agents
+        .into_iter()
+        .find(|agent| agent.id().as_str() == "test-agent")
+        .expect("managed registration")
+}
+
+async fn check_installed(daemon: &mut Daemon, spec: &AgentSpec) {
+    let checked = daemon
+        .client
+        .check_agent(pb::CheckAgentRequest {
+            agent: spec.id.to_string(),
+            expected_spec_json: serde_json::to_vec(spec).expect("expected spec"),
+            connect: true,
+        })
+        .await
+        .expect("profile resolves installed agent")
+        .into_inner();
+    assert_eq!(checked.status(), pb::AgentCheckStatus::Connected);
+}
+
+#[tokio::test]
+async fn explicit_profiles_share_install_root_without_sharing_registrations() {
+    let directory = tempfile::tempdir().expect("profile directory");
+    let fixture = Fixture::new(directory.path()).await;
+    let root = directory.path().join("acp");
+    let a_path = directory.path().join("a.json");
+    let b_path = directory.path().join("b.json");
+    for path in [&a_path, &b_path] {
+        std::fs::write(
+            path,
+            serde_json::to_vec(&basr::config::Settings::default()).expect("default settings"),
+        )
+        .expect("profile");
+    }
+    let mut a = start_profile(&a_path, &root, &fixture).await;
+    let mut b = start_profile(&b_path, &root, &fixture).await;
+    let first = install(&mut a, "test-agent").await;
+    let a_registration = registration(&a_path);
+    assert!(a_registration.managed().is_some());
+    let first_b = install(&mut b, "test-agent").await;
+    check_installed(&mut b, &first_b).await;
+    fixture.index.lock().await["agents"][0]["version"] = "2.0.0".into();
+    catalog(&mut b, true).await;
+    let second = install(&mut b, "test-agent").await;
+    let b_registration = registration(&b_path);
+    assert_ne!(first.command, second.command);
+    assert_eq!(registration(&a_path), a_registration);
+    assert_eq!(
+        a_registration.resolve().expect("A still resolves v1"),
+        first
+    );
+
+    // Startup resolves the profile's immutable reference, not the last global install.
+    a.stop().await;
+    a = start_profile(&a_path, &root, &fixture).await;
+    check_installed(&mut a, &first).await;
+    check_installed(&mut b, &second).await;
+    let b_bytes = std::fs::read(&b_path).expect("B settings");
+    a.client
+        .remove_agent(pb::RemoveAgentRequest {
+            id: "test-agent".into(),
+        })
+        .await
+        .expect("remove only A");
+    assert_eq!(std::fs::read(&b_path).expect("B unchanged"), b_bytes);
+    assert_eq!(registration(&b_path), b_registration);
+    check_installed(&mut b, &second).await;
+
+    // An external profile edit is resolved by the running daemon's catalog watcher.
+    let store = basr::config::Store::at(a_path.clone());
+    let mut document = store.load().expect("A settings");
+    let mut agents = document.settings.daemon.agents.clone();
+    agents.push(a_registration.clone());
+    store
+        .save_agents(&mut document, agents)
+        .expect("restore A reference");
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let response = a
+                .client
+                .list_agents(pb::ListAgentsRequest {})
+                .await
+                .expect("A catalog")
+                .into_inner();
+            if response.agents.iter().any(|agent| agent.id == "test-agent") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("A reloads managed reference");
+    check_installed(&mut a, &first).await;
+    fixture.index.lock().await["agents"][0]["version"] = "3.0.0".into();
+    catalog(&mut a, true).await;
+    let third = install(&mut a, "test-agent").await;
+    assert_ne!(third.command, second.command);
+    assert_eq!(registration(&b_path), b_registration);
+    check_installed(&mut b, &second).await;
+    let a_bytes = std::fs::read(&a_path).expect("A settings");
+    b.client
+        .remove_agent(pb::RemoveAgentRequest {
+            id: "test-agent".into(),
+        })
+        .await
+        .expect("remove only B");
+    assert_eq!(std::fs::read(&a_path).expect("A unchanged"), a_bytes);
+    check_installed(&mut a, &third).await;
+    a.stop().await;
+    b.stop().await;
+}
+
 #[tokio::test]
 async fn discovery_install_update_remove_and_offline_cache_preserve_sessions() {
     let directory = tempfile::tempdir().expect("isolated management directory");
@@ -220,10 +365,12 @@ async fn discovery_install_update_remove_and_offline_cache_preserve_sessions() {
         .expect("managed removal");
     daemon
         .client
-        .prompt(pb::AcpPayload::from(&basr::acp::PromptRequest::new(
-            live.id,
-            vec!["still alive".into()],
-        )))
+        .prompt(pb::PromptSubmission::from(
+            &basr::model::PromptSubmission::new(basr::acp::PromptRequest::new(
+                live.id,
+                vec!["still alive".into()],
+            )),
+        ))
         .await
         .expect("existing process continues after update and removal");
     let saved = basr::config::Store::at(directory.path().join("settings.json"))

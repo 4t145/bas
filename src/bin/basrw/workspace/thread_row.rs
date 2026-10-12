@@ -117,11 +117,15 @@ impl Workspace {
         let disabled = !self.connected
             || self.archive_pending.contains(&id)
             || self.delete_pending.contains(&id);
-        let state = RowStatus::for_session(
-            session,
-            self.seen_replies.get(&id).copied().unwrap_or(0),
-            self.active == Some(id) && self.has_unread_reply(),
-        );
+        let state = if !self.runtime_healthy(id) {
+            RowStatus::Failed
+        } else {
+            RowStatus::for_session(
+                session,
+                self.seen_replies.get(&id).copied().unwrap_or(0),
+                self.active == Some(id) && self.has_unread_reply(),
+            )
+        };
         let group = SharedString::from(format!("thread-row-{id}"));
         let menu_session = session.clone();
         div()

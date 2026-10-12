@@ -3,15 +3,19 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     io::{BufRead, IsTerminal, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::Stdio,
 };
+
+mod control;
+mod process;
+
 const HELPER_FLAG: &str = "--basr-terminal-auth-helper";
 const INVOCATION_ENV: &str = "_BASR_TERMINAL_AUTH_INVOCATION";
-const RESULT_ENV: &str = "_BASR_TERMINAL_AUTH_RESULT";
+const CONTROL_ENV: &str = "_BASR_TERMINAL_AUTH_CONTROL";
 const LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
-const RESULT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 const TERMINAL_RESULT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+const CANCELLED_EXIT_CODE: i32 = 130;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +37,8 @@ pub(crate) enum Error {
     NoTerminal,
     #[error("{}", crate::i18n::tr!("auth-terminal-start-failed"))]
     Launch,
+    #[error("{}", crate::i18n::tr!("auth-terminal-control-failed"))]
+    Control(#[source] std::io::Error),
     #[error("{}", crate::i18n::tr!("auth-program-start-failed", error = .0.to_string()))]
     LoginLaunch(std::io::Error),
 }
@@ -60,7 +66,7 @@ impl Invocation {
             || self.env.iter().any(|(key, value)| {
                 key.is_empty()
                     || key == INVOCATION_ENV
-                    || key == RESULT_ENV
+                    || key == CONTROL_ENV
                     || key.contains(['=', '\0'])
                     || value.contains('\0')
             })
@@ -76,7 +82,7 @@ impl Invocation {
             .args(&self.args)
             .envs(&self.env)
             .env_remove(INVOCATION_ENV);
-        command.env_remove(RESULT_ENV);
+        command.env_remove(CONTROL_ENV);
         command
     }
 }
@@ -108,26 +114,39 @@ fn terminal() -> Result<Terminal, Error> {
 /// Reports unavailable terminal software or process launch failure, not auth completion.
 pub(crate) fn launch(invocation: Invocation) -> Result<Login, Error> {
     let helper = std::env::current_exe().map_err(|_| Error::Launch)?;
-    let directory = tempfile::tempdir().map_err(|_| Error::Launch)?;
-    let result = directory.path().join("result");
+    let control = control::Listener::bind().map_err(Error::Control)?;
     let child = terminal_command(&invocation, terminal()?, helper)?
-        .env(RESULT_ENV, &result)
+        .env(
+            CONTROL_ENV,
+            serde_json::to_string(control.endpoint()).map_err(|_| Error::InvalidCommand)?,
+        )
         .spawn()
         .map_err(|_| Error::Launch)?;
-    Ok(Login {
-        child,
-        result,
-        _directory: directory,
-    })
+    Ok(Login::new(child, control))
 }
 
 pub(crate) struct Login {
     child: tokio::process::Child,
-    result: PathBuf,
-    _directory: tempfile::TempDir,
+    control: Option<control::Listener>,
+}
+
+impl Drop for Login {
+    fn drop(&mut self) {
+        if self.control.is_some() {
+            // No helper has been authorised yet, so no login can be running.
+            let _ = self.child.start_kill();
+        }
+    }
 }
 
 impl Login {
+    fn new(child: tokio::process::Child, control: control::Listener) -> Self {
+        Self {
+            child,
+            control: Some(control),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) async fn complete(self) -> Result<(), String> {
         match self.complete_code().await? {
@@ -142,40 +161,60 @@ impl Login {
     /// # Errors
     /// Reports the helper's actual login failure or absence of completion feedback.
     pub(crate) async fn complete_code(self) -> Result<i32, String> {
-        let mut child = self.child;
-        let mut terminal = tokio::spawn(async move { child.wait().await });
-        tokio::time::timeout(LOGIN_TIMEOUT, async {
-            let mut terminal_exit: Option<(tokio::time::Instant, String)> = None;
+        self.complete_with_timeout(LOGIN_TIMEOUT).await
+    }
+
+    async fn complete_with_timeout(self, timeout: std::time::Duration) -> Result<i32, String> {
+        tokio::time::timeout(timeout, self.wait())
+            .await
+            .unwrap_or_else(|_| Err(crate::i18n::tr!("auth-check-after-terminal").into()))
+    }
+
+    async fn wait(mut self) -> Result<i32, String> {
+        let mut terminal_exit: Option<(tokio::time::Instant, String)> = None;
+        let mut controller = {
+            let accept = self
+                .control
+                .as_ref()
+                .expect("listener retained until helper authentication")
+                .accept();
+            tokio::pin!(accept);
             loop {
-                if let Ok(value) = tokio::fs::read_to_string(&self.result).await
-                    && let Ok(code) = value.trim().parse::<i32>()
-                {
-                    return Ok(code);
-                }
-                if let Some((closed_at, detail)) = &terminal_exit
-                    && tokio::time::Instant::now().duration_since(*closed_at)
-                        >= TERMINAL_RESULT_GRACE
-                {
-                    return Err(crate::i18n::tr!("auth-terminal-exited", detail = (detail).to_string()));
-                }
+                let deadline = terminal_exit
+                    .as_ref()
+                    .map(|(at, _)| *at + TERMINAL_RESULT_GRACE)
+                    .unwrap_or_else(|| tokio::time::Instant::now() + LOGIN_TIMEOUT);
                 tokio::select! {
-                    _ = tokio::time::sleep(RESULT_INTERVAL) => {},
-                    result = &mut terminal, if terminal_exit.is_none() => {
+                    result = &mut accept => break result.map_err(|error| Error::Control(error).to_string())?,
+                    result = self.child.wait(), if terminal_exit.is_none() => {
                         let detail = match result {
-                            Ok(Ok(status)) => status.code().map_or_else(
+                            Ok(status) => status.code().map_or_else(
                                 || crate::i18n::tr!("process-terminated").into(),
                                 |code| crate::i18n::tr!("terminal-exit-code", code = (code).to_string()),
                             ),
-                            Ok(Err(error)) => error.to_string(),
-                            Err(_) => crate::i18n::tr!("process-exit-unavailable").into(),
+                            Err(error) => error.to_string(),
                         };
                         terminal_exit = Some((tokio::time::Instant::now(), detail));
                     },
+                    _ = tokio::time::sleep_until(deadline), if terminal_exit.is_some() => {
+                        let (_, detail) = terminal_exit.as_ref().expect("terminal exited");
+                        return Err(crate::i18n::tr!("auth-terminal-exited", detail = detail.to_string()));
+                    }
                 }
             }
-        })
-        .await
-        .unwrap_or_else(|_| Err(crate::i18n::tr!("auth-check-after-terminal").into()))
+        };
+        self.control.take();
+        // The helper owns execution; the launcher may exit while the helper is
+        // still active, or keep a completed failure window open for its user.
+        let result = controller.result();
+        tokio::pin!(result);
+        let mut reaped = terminal_exit.is_some();
+        loop {
+            tokio::select! {
+                result = &mut result => return result.map_err(|error| Error::Control(error).to_string()),
+                _ = self.child.wait(), if !reaped => reaped = true,
+            }
+        }
     }
 }
 
@@ -209,7 +248,11 @@ pub(crate) fn run_helper_if_requested() {
     if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new(HELPER_FLAG)) {
         return;
     }
-    let result_path = std::env::var_os(RESULT_ENV).map(PathBuf::from);
+    let endpoint = std::env::var(CONTROL_ENV)
+        .map_err(|_| Error::InvalidCommand)
+        .and_then(|value| {
+            serde_json::from_str::<control::Endpoint>(&value).map_err(|_| Error::InvalidCommand)
+        });
     let invocation = (|| -> Result<Invocation, Error> {
         let value = std::env::var(INVOCATION_ENV).map_err(|_| Error::InvalidCommand)?;
         let invocation: Invocation =
@@ -218,27 +261,51 @@ pub(crate) fn run_helper_if_requested() {
         invocation.validate()?;
         Ok(invocation)
     })();
-    std::process::exit(execute_helper(
-        invocation,
-        result_path.as_deref(),
-        std::io::stdin().is_terminal(),
-    ));
+    let code = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(async {
+            match endpoint {
+                Ok(endpoint) => {
+                    execute_helper(invocation, endpoint, std::io::stdin().is_terminal()).await
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    1
+                }
+            }
+        }),
+        Err(_) => {
+            eprintln!("{}", crate::i18n::tr!("auth-terminal-start-failed"));
+            1
+        }
+    };
+    std::process::exit(code);
 }
 
-fn execute_helper(
+async fn execute_helper(
     invocation: Result<Invocation, Error>,
-    result_path: Option<&Path>,
+    endpoint: control::Endpoint,
     hold_failure: bool,
 ) -> i32 {
-    let status = invocation.and_then(|invocation| {
-        invocation
-            .agent_command()
-            .status()
-            .map_err(Error::LoginLaunch)
-    });
+    let mut helper = match endpoint.connect().await {
+        Ok(helper) => helper,
+        Err(error) => {
+            eprintln!("{}", Error::Control(error));
+            return 1;
+        }
+    };
+    let status = match invocation {
+        Ok(invocation) => process::run(invocation.agent_command(), helper.cancelled())
+            .await
+            .map_err(Error::LoginLaunch),
+        Err(error) => Err(error),
+    };
     let code = match status {
-        Ok(status) if status.success() => 0,
-        Ok(status) => {
+        Ok(process::Outcome::Cancelled) => return CANCELLED_EXIT_CODE,
+        Ok(process::Outcome::Exited(status)) if status.success() => 0,
+        Ok(process::Outcome::Exited(status)) => {
             let code = status.code().unwrap_or(1);
             eprintln!("{}", crate::i18n::tr!("auth-exit-failed", code = code));
             code
@@ -248,28 +315,16 @@ fn execute_helper(
             1
         }
     };
-    if let Some(path) = result_path {
-        // Report before waiting for acknowledgement; the GUI need not wait for the terminal to close.
-        let _ = publish_result(path, code);
-    }
-    if code != 0 && hold_failure {
+    // Completion transfers the failed window to the user; closing the control
+    // connection afterwards must not terminate that completed presentation.
+    let reported = helper.finish(code).await.is_ok();
+    if code != 0 && hold_failure && reported {
         eprint!("{}", crate::i18n::tr!("auth-terminal-close"));
         let _ = std::io::stderr().flush();
         let mut line = String::new();
         let _ = std::io::stdin().lock().read_line(&mut line);
     }
     code
-}
-
-/// # Errors
-/// Reports failure to atomically publish the helper's exit code.
-fn publish_result(path: &Path, code: i32) -> std::io::Result<()> {
-    let mut result = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
-    write!(result, "{code}")?;
-    result
-        .persist(path)
-        .map(|_| ())
-        .map_err(|error| error.error)
 }
 
 #[cfg(test)]

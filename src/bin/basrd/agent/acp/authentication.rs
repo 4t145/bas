@@ -236,6 +236,7 @@ pub async fn authenticate_expected(
 /// Reports stale descriptors, invalid responses, cancellation and failed agents.
 pub async fn interactive(
     spec: &AgentSpec,
+    managed: Option<&basr::config::ManagedAgent>,
     request: &pb::AuthenticateAgentRequest,
     events: mpsc::Sender<Result<pb::AuthenticationEvent, tonic::Status>>,
     mut inputs: mpsc::Receiver<pb::AuthenticationInput>,
@@ -258,6 +259,9 @@ pub async fn interactive(
         terminal: Mutex::default(),
     });
     let operation = async {
+        if let Some(managed) = managed {
+            crate::management::installation::validate_spec(managed, spec)?;
+        }
         let outcome = connection(
             spec,
             &request.method_id,
@@ -276,7 +280,7 @@ pub async fn interactive(
                 let program =
                     super::resolve_program(spec).context("Agent executable is missing")?;
                 let invocation =
-                    crate::management::authentication_invocation(spec, &program, &method)?;
+                    crate::management::authentication_invocation(spec, managed, &program, &method)?;
                 let (send, receive) = oneshot::channel();
                 *interaction.terminal.lock().await = Some(send);
                 interaction
@@ -287,6 +291,9 @@ pub async fn interactive(
                 let exit = receive.await.map_err(|_| Error::Cancelled)?;
                 if exit != 0 {
                     return Err(Error::TerminalExit(exit).into());
+                }
+                if let Some(managed) = managed {
+                    crate::management::installation::validate_spec(managed, spec)?;
                 }
                 super::check_connection(spec, timeout)
                     .await

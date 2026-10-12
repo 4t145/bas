@@ -1,5 +1,7 @@
 use super::*;
 mod fixture;
+mod lifecycle;
+mod persistence;
 
 #[tokio::test]
 async fn installation_registers_exact_boundaries_and_removal_keeps_credentials_and_versions() {
@@ -18,8 +20,11 @@ async fn installation_registers_exact_boundaries_and_removal_keeps_credentials_a
     assert!(executable.is_file());
     assert!(executable.is_absolute());
     assert!(!executable.to_string_lossy().contains(".install-"));
+    let managed = fixture::managed(&manager);
     assert_eq!(
-        manager.records().expect("installation records").agents["fixture-agent"].spec,
+        installation::load_record(&managed)
+            .expect("installation record")
+            .spec,
         spec
     );
     let settings = manager
@@ -27,7 +32,13 @@ async fn installation_registers_exact_boundaries_and_removal_keeps_credentials_a
         .expect("settings store")
         .load()
         .expect("saved settings");
-    assert!(settings.settings.daemon.agents.contains(&spec));
+    assert!(
+        settings
+            .settings
+            .daemon
+            .agents
+            .contains(&AgentRegistration::Managed(managed.clone()))
+    );
     let credentials = directory.path().join("provider-credentials");
     fs::write(&credentials, "retain").expect("credential fixture");
     let agents = manager
@@ -37,17 +48,11 @@ async fn installation_registers_exact_boundaries_and_removal_keeps_credentials_a
     assert!(
         agents
             .iter()
-            .all(|spec| spec.id.as_str() != "fixture-agent")
+            .all(|spec| spec.id().as_str() != "fixture-agent")
     );
     assert!(executable.is_file());
     assert!(credentials.is_file());
-    assert!(
-        !manager
-            .records()
-            .expect("remaining records")
-            .agents
-            .contains_key("fixture-agent")
-    );
+    assert!(installation::load_record(&managed).is_ok());
 }
 
 #[tokio::test]
@@ -60,7 +65,10 @@ async fn offline_refresh_uses_cached_registry_and_custom_missing_agents_remain_v
         Command::new(directory.path().join("absent"), []),
     );
     let initial = manager
-        .catalog(vec![AgentSpec::embedded(), missing.clone()], false)
+        .catalog(
+            vec![AgentSpec::embedded().into(), missing.clone().into()],
+            false,
+        )
         .await
         .expect("initial catalog");
     assert!(initial.warning.is_none());
@@ -81,13 +89,13 @@ async fn offline_refresh_uses_cached_registry_and_custom_missing_agents_remain_v
     let url = fixture.url.clone();
     drop(fixture);
     let offline = manager
-        .catalog(vec![missing], true)
+        .catalog(vec![missing.into()], true)
         .await
         .expect("cached offline catalog");
     assert!(offline.warning.expect("offline warning").contains("缓存"));
     assert!(
         manager
-            .catalog(vec![AgentSpec::embedded()], false)
+            .catalog(vec![AgentSpec::embedded().into()], false)
             .await
             .expect("subsequent cached catalog")
             .warning
@@ -102,7 +110,7 @@ async fn offline_refresh_uses_cached_registry_and_custom_missing_agents_remain_v
     let restarted = fixture::manager(&directory, &url);
     assert!(
         restarted
-            .catalog(vec![AgentSpec::embedded()], false)
+            .catalog(vec![AgentSpec::embedded().into()], false)
             .await
             .expect("cache after restart")
             .entries
@@ -124,12 +132,12 @@ async fn bad_checksum_and_manual_identity_leave_settings_and_records_untouched()
             .contains("checksum")
     );
     assert!(!manager.store().expect("settings store").path().exists());
-    assert!(manager.records().expect("records").agents.is_empty());
+    assert!(!manager.root.join("installations.json").exists());
     let store = manager.store().expect("settings store");
     let mut document = store.load().expect("default settings");
     let custom = AgentSpec::acp("fixture-agent", Command::new("custom-command", []));
     store
-        .save_agents(&mut document, vec![custom.clone()])
+        .save_agents(&mut document, vec![custom.clone().into()])
         .expect("custom registration");
     assert!(
         fixture::install(&manager)
@@ -145,7 +153,7 @@ async fn bad_checksum_and_manual_identity_leave_settings_and_records_untouched()
             .settings
             .daemon
             .agents,
-        vec![custom]
+        vec![AgentRegistration::Custom(custom)]
     );
 }
 
@@ -153,7 +161,7 @@ async fn bad_checksum_and_manual_identity_leave_settings_and_records_untouched()
 async fn settings_edits_during_download_are_preserved_without_registration() {
     let fixture = fixture::Fixture::serve(None, true).await;
     let directory = tempfile::tempdir().expect("temporary directory");
-    let manager = std::sync::Arc::new(fixture::manager(&directory, &fixture.url));
+    let manager = fixture::manager(&directory, &fixture.url);
     let install_manager = manager.clone();
     let installation = tokio::spawn(async move { fixture::install(&install_manager).await });
     fixture.started.notified().await;
@@ -161,7 +169,10 @@ async fn settings_edits_during_download_are_preserved_without_registration() {
     let mut document = store.load().expect("settings during download");
     let custom = AgentSpec::acp("external-edit", Command::new("external-command", []));
     store
-        .save_agents(&mut document, vec![AgentSpec::embedded(), custom.clone()])
+        .save_agents(
+            &mut document,
+            vec![AgentSpec::embedded().into(), custom.clone().into()],
+        )
         .expect("external settings edit");
     fixture.release.notify_one();
     assert!(
@@ -179,16 +190,22 @@ async fn settings_edits_during_download_are_preserved_without_registration() {
             .settings
             .daemon
             .agents
-            .contains(&custom)
+            .contains(&AgentRegistration::Custom(custom))
     );
-    assert!(manager.records().expect("records").agents.is_empty());
+    let retained = fs::read_dir(manager.root.join("agents/fixture-agent"))
+        .expect("versions")
+        .next()
+        .expect("retained version")
+        .expect("version path")
+        .path();
+    assert!(retained.join(basr::config::INSTALLATION_FILE).is_file());
 }
 
 #[tokio::test]
 async fn dropping_progress_stream_cancels_download_and_cleans_staging() {
     let fixture = fixture::Fixture::serve(None, true).await;
     let directory = tempfile::tempdir().expect("temporary directory");
-    let manager = std::sync::Arc::new(fixture::manager(&directory, &fixture.url));
+    let manager = fixture::manager(&directory, &fixture.url);
     let (sender, receiver) = mpsc::channel(32);
     let install_manager = manager.clone();
     let installation =
@@ -203,7 +220,7 @@ async fn dropping_progress_stream_cancels_download_and_cleans_staging() {
             .to_string()
             .contains("cancelled")
     );
-    assert!(manager.records().expect("records").agents.is_empty());
+    assert!(!manager.root.join("installations.json").exists());
     assert!(!manager.store().expect("settings store").path().exists());
     assert!(
         fs::read_dir(manager.root.join("agents/fixture-agent"))
@@ -211,28 +228,6 @@ async fn dropping_progress_stream_cancels_download_and_cleans_staging() {
             .next()
             .is_none()
     );
-}
-
-#[test]
-fn changed_managed_settings_are_never_overwritten_or_removed() {
-    let original = AgentSpec::acp("fixture", Command::new("original", []));
-    let manifest: registry::Manifest = serde_json::from_value(serde_json::json!({"id":"fixture","name":"Fixture","version":"1.0.0","distribution":{"npx":{"package":"fixture@1.0.0"}}})).expect("manifest");
-    let mut records = Records::default();
-    records.agents.insert(
-        "fixture".into(),
-        Record {
-            manifest,
-            directory: PathBuf::from("/fixture"),
-            spec: original.clone(),
-            runtime: None,
-            dependencies: BTreeMap::new(),
-            launch: None,
-        },
-    );
-    assert!(check_registration("fixture", std::slice::from_ref(&original), &records).is_ok());
-    let mut edited = original;
-    edited.env.insert("TOKEN".into(), "edited".into());
-    assert!(check_registration("fixture", &[edited], &records).is_err());
 }
 
 #[test]

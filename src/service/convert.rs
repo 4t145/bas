@@ -19,8 +19,16 @@ pub enum Error {
     MissingEventKind,
     #[error("the turn carries no outcome")]
     MissingOutcome,
+    #[error("submission carries no ACP prompt")]
+    MissingPrompt,
+    #[error("submission response carries no outcome")]
+    MissingSubmissionOutcome,
+    #[error("acceptance carries a zero cursor")]
+    InvalidReceipt,
     #[error("session metadata carries no owner")]
     MissingOwner,
+    #[error("session snapshot carries no runtime state")]
+    MissingRuntime,
     #[error("permission carries no ACP request")]
     MissingPermissionRequest,
     #[error("working directory is not valid UTF-8; the protocol requires UTF-8 paths")]
@@ -110,10 +118,11 @@ pub fn utf8_cwd(path: &std::path::Path) -> Result<&str, Error> {
     path.to_str().ok_or(Error::NonUtf8Cwd)
 }
 
-impl TryFrom<&model::SessionMeta> for pb::Session {
+impl TryFrom<&model::SessionSnapshot> for pb::Session {
     type Error = Error;
 
-    fn try_from(meta: &model::SessionMeta) -> Result<Self, Self::Error> {
+    fn try_from(snapshot: &model::SessionSnapshot) -> Result<Self, Self::Error> {
+        let meta = &snapshot.meta;
         Ok(Self {
             id: meta.id.to_string(),
             agent: meta.agent.to_string(),
@@ -140,15 +149,66 @@ impl TryFrom<&model::SessionMeta> for pb::Session {
                 .or_else(|| meta.initialization.as_ref().map(pb::AcpPayload::from)),
             acp: meta.acp.as_ref().map(pb::AcpPayload::from),
             available_commands: meta.available_commands.as_ref().map(pb::AcpPayload::from),
+            runtime: Some((&snapshot.runtime).into()),
         })
     }
 }
 
-impl TryFrom<pb::Session> for model::SessionMeta {
+impl From<&model::SessionRuntime> for pb::SessionRuntime {
+    fn from(runtime: &model::SessionRuntime) -> Self {
+        Self {
+            id: runtime.id.to_string(),
+            failure: runtime.failure.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl From<&model::RuntimeFailure> for pb::RuntimeFailure {
+    fn from(failure: &model::RuntimeFailure) -> Self {
+        match failure {
+            model::RuntimeFailure::Persistence { message } => Self {
+                kind: pb::runtime_failure::Kind::Persistence as i32,
+                message: message.clone(),
+            },
+        }
+    }
+}
+
+impl TryFrom<pb::RuntimeFailure> for model::RuntimeFailure {
+    type Error = Error;
+
+    fn try_from(failure: pb::RuntimeFailure) -> Result<Self, Self::Error> {
+        match pb::runtime_failure::Kind::try_from(failure.kind) {
+            Ok(pb::runtime_failure::Kind::Persistence) => Ok(Self::Persistence {
+                message: failure.message,
+            }),
+            Ok(pb::runtime_failure::Kind::Unspecified) | Err(_) => Err(Error::Unknown {
+                field: "runtime failure kind",
+                value: failure.kind.to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<pb::SessionRuntime> for model::SessionRuntime {
+    type Error = Error;
+
+    fn try_from(runtime: pb::SessionRuntime) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: runtime.id.parse().map_err(|_| Error::Unknown {
+                field: "session runtime id",
+                value: runtime.id,
+            })?,
+            failure: runtime.failure.map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
+impl TryFrom<pb::Session> for model::SessionSnapshot {
     type Error = Error;
 
     fn try_from(session: pb::Session) -> Result<Self, Self::Error> {
-        Ok(Self {
+        let meta = model::SessionMeta {
             id: model::SessionId::from_str(&session.id)?,
             agent: session.agent.into(),
             title: session.title,
@@ -173,6 +233,10 @@ impl TryFrom<pb::Session> for model::SessionMeta {
             initialization: session.initialization.map(|p| p.decode()).transpose()?,
             acp: session.acp.map(|p| p.decode()).transpose()?,
             available_commands: session.available_commands.map(|p| p.decode()).transpose()?,
+        };
+        Ok(Self {
+            meta,
+            runtime: session.runtime.ok_or(Error::MissingRuntime)?.try_into()?,
         })
     }
 }
@@ -190,12 +254,96 @@ impl TryFrom<pb::TurnAccepted> for model::TurnReceipt {
     type Error = Error;
 
     /// # Errors
-    /// Returns an error if the daemon returned an invalid turn identifier.
+    /// Rejects an invalid turn identifier or a cursor that cannot prove registration.
     fn try_from(receipt: pb::TurnAccepted) -> Result<Self, Self::Error> {
+        if receipt.cursor == 0 {
+            return Err(Error::InvalidReceipt);
+        }
         Ok(Self {
             turn: model::TurnId::from_str(&receipt.turn)?,
             cursor: model::Cursor::from_raw(receipt.cursor),
         })
+    }
+}
+
+impl From<&model::PromptSubmission> for pb::PromptSubmission {
+    fn from(submission: &model::PromptSubmission) -> Self {
+        Self {
+            turn: submission.turn.to_string(),
+            prompt: Some((&submission.request).into()),
+        }
+    }
+}
+
+impl TryFrom<pb::PromptSubmission> for model::PromptSubmission {
+    type Error = Error;
+
+    fn try_from(submission: pb::PromptSubmission) -> Result<Self, Self::Error> {
+        Ok(Self {
+            turn: submission.turn.parse()?,
+            request: submission.prompt.ok_or(Error::MissingPrompt)?.decode()?,
+        })
+    }
+}
+
+impl From<model::PromptSubmissionOutcome> for pb::PromptSubmissionResponse {
+    fn from(outcome: model::PromptSubmissionOutcome) -> Self {
+        use model::{PromptRejectionKind as Kind, PromptSubmissionOutcome as Outcome};
+        let outcome = match outcome {
+            Outcome::Accepted(receipt) => {
+                pb::prompt_submission_response::Outcome::Accepted(receipt.into())
+            }
+            Outcome::Rejected(rejection) => {
+                let kind = match rejection.kind {
+                    Kind::InvalidRequest => pb::PromptRejectionKind::InvalidRequest,
+                    Kind::Busy => pb::PromptRejectionKind::Busy,
+                    Kind::Archived => pb::PromptRejectionKind::Archived,
+                    Kind::Unavailable => pb::PromptRejectionKind::Unavailable,
+                    Kind::Conflict => pb::PromptRejectionKind::Conflict,
+                };
+                pb::prompt_submission_response::Outcome::Rejected(pb::PromptRejection {
+                    kind: kind as i32,
+                    message: rejection.message,
+                })
+            }
+        };
+        Self {
+            outcome: Some(outcome),
+        }
+    }
+}
+
+impl TryFrom<pb::PromptSubmissionResponse> for model::PromptSubmissionOutcome {
+    type Error = Error;
+
+    fn try_from(response: pb::PromptSubmissionResponse) -> Result<Self, Self::Error> {
+        use model::PromptRejectionKind as Kind;
+        Ok(
+            match response.outcome.ok_or(Error::MissingSubmissionOutcome)? {
+                pb::prompt_submission_response::Outcome::Accepted(receipt) => {
+                    Self::Accepted(receipt.try_into()?)
+                }
+                pb::prompt_submission_response::Outcome::Rejected(rejection) => {
+                    let kind = match pb::PromptRejectionKind::try_from(rejection.kind) {
+                        Ok(pb::PromptRejectionKind::InvalidRequest) => Kind::InvalidRequest,
+                        Ok(pb::PromptRejectionKind::Busy) => Kind::Busy,
+                        Ok(pb::PromptRejectionKind::Archived) => Kind::Archived,
+                        Ok(pb::PromptRejectionKind::Unavailable) => Kind::Unavailable,
+                        Ok(pb::PromptRejectionKind::Conflict) => Kind::Conflict,
+                        Ok(pb::PromptRejectionKind::Unspecified) | Err(_) => {
+                            return Err(Error::Unknown {
+                                field: "prompt rejection kind",
+                                value: rejection.kind.to_string(),
+                            });
+                        }
+                    };
+                    Self::Rejected(model::PromptRejection {
+                        kind,
+                        message: rejection.message,
+                    })
+                }
+            },
+        )
     }
 }
 
@@ -249,8 +397,34 @@ impl From<&model::Event> for pb::Event {
                     turn: turn.to_string(),
                     outcome: Some(match result {
                         Ok(response) => pb::turn_finished::Outcome::Response(response.into()),
-                        Err(error) => pb::turn_finished::Outcome::Error(error.clone()),
+                        Err(error) => pb::turn_finished::Outcome::Error(error.into()),
                     }),
+                })
+            }
+            model::EventKind::TurnInterrupted { turn, reason } => {
+                use model::InterruptionReason as Reason;
+                let (reason, message) = match reason {
+                    Reason::BackendFailure { message } => {
+                        (pb::InterruptionReason::BackendFailure, message.clone())
+                    }
+                    Reason::DispatchFailure { message } => {
+                        (pb::InterruptionReason::DispatchFailure, message.clone())
+                    }
+                    Reason::SessionStopped => {
+                        (pb::InterruptionReason::SessionStopped, String::new())
+                    }
+                    Reason::DaemonRestarted => {
+                        (pb::InterruptionReason::DaemonRestarted, String::new())
+                    }
+                    Reason::CancelledBeforeDispatch => (
+                        pb::InterruptionReason::CancelledBeforeDispatch,
+                        String::new(),
+                    ),
+                };
+                Kind::TurnInterrupted(pb::TurnInterrupted {
+                    turn: turn.to_string(),
+                    reason: reason as i32,
+                    message,
                 })
             }
             model::EventKind::TitleChanged { title } => Kind::TitleChanged(pb::TitleChanged {
@@ -294,9 +468,35 @@ impl TryFrom<pb::Event> for model::Event {
                     turn: value.turn.parse()?,
                     result: match value.outcome.ok_or(Error::MissingOutcome)? {
                         pb::turn_finished::Outcome::Response(payload) => Ok(payload.decode()?),
-                        pb::turn_finished::Outcome::Error(error) => Err(error),
+                        pb::turn_finished::Outcome::Error(payload) => Err(payload.decode()?),
                     },
                 },
+                Kind::TurnInterrupted(value) => {
+                    use model::InterruptionReason as Reason;
+                    let reason = match pb::InterruptionReason::try_from(value.reason) {
+                        Ok(pb::InterruptionReason::BackendFailure) => Reason::BackendFailure {
+                            message: value.message,
+                        },
+                        Ok(pb::InterruptionReason::DispatchFailure) => Reason::DispatchFailure {
+                            message: value.message,
+                        },
+                        Ok(pb::InterruptionReason::SessionStopped) => Reason::SessionStopped,
+                        Ok(pb::InterruptionReason::DaemonRestarted) => Reason::DaemonRestarted,
+                        Ok(pb::InterruptionReason::CancelledBeforeDispatch) => {
+                            Reason::CancelledBeforeDispatch
+                        }
+                        Ok(pb::InterruptionReason::Unspecified) | Err(_) => {
+                            return Err(Error::Unknown {
+                                field: "interruption reason",
+                                value: value.reason.to_string(),
+                            });
+                        }
+                    };
+                    model::EventKind::TurnInterrupted {
+                        turn: value.turn.parse()?,
+                        reason,
+                    }
+                }
                 Kind::TitleChanged(value) => model::EventKind::TitleChanged { title: value.title },
                 Kind::ArchiveChanged(value) => model::EventKind::ArchiveChanged {
                     archived: value.archived,

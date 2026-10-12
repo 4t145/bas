@@ -5,6 +5,7 @@ mod archive;
 mod authentication;
 mod management;
 mod permissions;
+mod submission;
 
 use basr::{
     model::{ContentBlock, Cursor, Owner},
@@ -216,15 +217,19 @@ async fn grpc_reports_history_gaps_invalid_cursors_busy_and_missing_sessions() {
         .await
         .expect("first prompt");
     let error = service
-        .prompt(Request::new(pb::AcpPayload::from(
-            &basr::acp::PromptRequest::new(
+        .prompt(Request::new(pb::PromptSubmission::from(
+            &basr::model::PromptSubmission::new(basr::acp::PromptRequest::new(
                 session.id().to_string(),
                 vec![basr::acp::ContentBlock::from("second")],
-            ),
+            )),
         )))
         .await
-        .expect_err("busy");
-    assert_eq!(error.code(), Code::FailedPrecondition);
+        .expect("explicit rejection")
+        .into_inner();
+    assert!(
+        matches!(error.outcome, Some(pb::prompt_submission_response::Outcome::Rejected(rejection))
+        if rejection.kind == pb::PromptRejectionKind::Busy as i32)
+    );
     registry.remove(session.id()).await.expect("remove");
     let error = service
         .delete_session(Request::new(pb::DeleteSessionRequest {

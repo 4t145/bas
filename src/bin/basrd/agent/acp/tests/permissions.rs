@@ -28,10 +28,10 @@ async fn native_acp_tool_waits_for_gui_permission_and_receives_the_selected_opti
             .expect("first snapshot")
             .expect("valid snapshot");
         let receipt = session
-            .accept_prompt(v1::PromptRequest::new(
+            .accept_prompt(basr::model::PromptSubmission::new(v1::PromptRequest::new(
                 session.id().to_string(),
                 vec!["run pwd".into()],
-            ))
+            )))
             .await
             .expect("start turn");
         let snapshot = tokio::time::timeout(TIMEOUT, approvals.next())
@@ -128,10 +128,10 @@ async fn agent_cancelled_permission_is_removed_without_cancelling_the_successor_
         .expect("first snapshot")
         .expect("valid snapshot");
     let receipt = session
-        .accept_prompt(v1::PromptRequest::new(
+        .accept_prompt(basr::model::PromptSubmission::new(v1::PromptRequest::new(
             session.id().to_string(),
             vec!["run command".into()],
-        ))
+        )))
         .await
         .expect("start turn");
     let old: PendingPermission = tokio::time::timeout(TIMEOUT, approvals.next())

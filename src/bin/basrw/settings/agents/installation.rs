@@ -301,14 +301,20 @@ impl Agents {
         if self.local_editable {
             if !self.dirty(cx) {
                 match self.store.load() {
-                    Ok(document) => self.document = Some(document),
+                    Ok(document) => self.accept_document(document),
                     Err(error) => {
                         self.message =
                             crate::i18n::tr!("settings-load-error", error = (error).to_string())
                     }
                 }
             }
-            let specs = self.catalog();
+            let specs: Vec<_> = self
+                .registry
+                .as_ref()
+                .into_iter()
+                .flat_map(|catalog| &catalog.entries)
+                .filter_map(|entry| entry.spec.clone())
+                .collect();
             self.checks
                 .retain(|id, _| specs.iter().any(|spec| spec.id == *id));
             for spec in specs {
@@ -326,6 +332,11 @@ impl Agents {
             } else {
                 crate::i18n::tr!("catalog-remote").into()
             };
+        }
+        if let Some(id) = self.pending_reveal.take()
+            && self.local_editable
+        {
+            self.reveal(&id, cx);
         }
     }
 
@@ -379,6 +390,17 @@ impl Agents {
                     if let Ok(operation) = update
                         && operation.complete
                     {
+                        if !page.dirty(cx) {
+                            match page.store.load() {
+                                Ok(document) => page.accept_document(document),
+                                Err(error) => {
+                                    page.message = crate::i18n::tr!(
+                                        "settings-load-error",
+                                        error = error.to_string()
+                                    )
+                                }
+                            }
+                        }
                         page.notify_agent_change(None, cx);
                         if let Ok(spec) =
                             serde_json::from_slice::<basr::config::AgentSpec>(&operation.spec_json)
@@ -534,7 +556,7 @@ impl Agents {
         let update = entry
             .installed_version
             .as_ref()
-            .is_some_and(|version| version != &entry.version);
+            .is_some_and(|version| !entry.version.is_empty() && version != &entry.version);
         let palette = Palette::current(cx);
         let action = if busy {
             let id = entry.id.clone();

@@ -1,6 +1,9 @@
 use std::{collections::BTreeMap, num::NonZeroUsize, path::PathBuf, sync::Arc, time::Duration};
 
-use basr::model::{AgentId, Event, EventKind, Owner, SessionId, SessionMeta, SessionStatus};
+use basr::{
+    config::AgentRegistration,
+    model::{AgentId, Owner, SessionId, SessionMeta, SessionStatus},
+};
 use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
@@ -81,6 +84,30 @@ struct PendingSession {
     registered: bool,
 }
 
+impl PendingSession {
+    /// # Errors
+    /// Returns storage creation failures without acquiring permission to delete the record.
+    async fn create(
+        meta: SessionMeta,
+        storage: Option<Arc<dyn Storage>>,
+    ) -> Result<Self, storage::Error> {
+        // The write and its compensation share an owner even after startup is cancelled.
+        // Dropping the detached task's unclaimed result drops the successful-create guard.
+        tokio::spawn(async move {
+            if let Some(storage) = &storage {
+                storage.create(meta.clone(), None).await?;
+            }
+            Ok(Self {
+                id: meta.id,
+                storage,
+                registered: false,
+            })
+        })
+        .await
+        .expect("session creation task panicked")
+    }
+}
+
 impl Drop for PendingSession {
     fn drop(&mut self) {
         if !self.registered
@@ -133,45 +160,19 @@ impl Registry {
         let sessions = Arc::get_mut(&mut self.sessions)
             .expect("registry is uniquely owned during recovery")
             .get_mut();
-        for mut meta in storage.list().await? {
+        for meta in storage.list().await? {
             let running = matches!(meta.status, SessionStatus::Idle | SessionStatus::Working);
-            if meta.status == SessionStatus::Starting {
-                let event = Event::new(
-                    meta.id,
-                    meta.revision.next(),
-                    EventKind::Failed {
-                        message: "daemon stopped during session startup".to_owned(),
-                    },
-                );
-                meta.apply_event(&event);
-                storage.commit(meta.clone(), &[event]).await?;
-            } else if meta.status == SessionStatus::Working {
-                if let Some(turn) = meta.active_turn {
-                    let event = Event::new(
-                        meta.id,
-                        meta.revision.next(),
-                        EventKind::TurnFinished {
-                            turn,
-                            result: Err("daemon stopped before this turn finished".to_owned()),
-                        },
-                    );
-                    meta.apply_event(&event);
-                    storage.commit(meta.clone(), &[event]).await?;
-                } else {
-                    meta.set_status(SessionStatus::Idle);
-                    storage.commit(meta.clone(), &[]).await?;
-                }
-            }
-            sessions.insert(
-                meta.id,
-                Session::with_storage(
-                    meta,
-                    self.limits,
-                    self.completions.clone(),
-                    Some(Arc::clone(storage)),
-                    !running,
-                ),
+            let session = Session::with_storage(
+                meta,
+                self.limits,
+                self.completions.clone(),
+                Some(Arc::clone(storage)),
+                !running,
             );
+            if let Err(error) = session.recover().await {
+                tracing::error!(session = %session.id(), %error, "could not commit session recovery");
+            }
+            sessions.insert(session.id(), session);
         }
         Ok(())
     }
@@ -201,7 +202,7 @@ impl Registry {
     #[cfg(test)]
     pub fn replace_catalog(&self, catalog: Arc<Catalog>) {
         let mut current = self.catalog.write().expect("catalog lock poisoned");
-        if current.specs().eq(catalog.specs()) {
+        if current.registrations().eq(catalog.registrations()) {
             return;
         }
         *current = catalog;
@@ -214,12 +215,12 @@ impl Registry {
     /// Preserves the current catalog on read or validation failure.
     pub fn reload_catalog(
         &self,
-        load: impl FnOnce() -> anyhow::Result<Vec<agent::AgentSpec>>,
-    ) -> anyhow::Result<Vec<agent::AgentSpec>> {
+        load: impl FnOnce() -> anyhow::Result<Vec<AgentRegistration>>,
+    ) -> anyhow::Result<Vec<AgentRegistration>> {
         let mut current = self.catalog.write().expect("catalog lock poisoned");
         let agents = load()?;
-        let catalog = Catalog::from_specs(agents.clone())?;
-        if !current.specs().eq(catalog.specs()) {
+        let catalog = Catalog::from_registrations(agents.clone())?;
+        if !current.registrations().eq(catalog.registrations()) {
             *current = Arc::new(catalog);
         }
         Ok(agents)
@@ -275,14 +276,7 @@ impl Registry {
         let mut meta = SessionMeta::new(id, request.agent, request.owner);
         meta.cwd = Some(cwd.clone());
         meta.title = request.title;
-        if let Some(storage) = &self.storage {
-            storage.create(meta.clone(), None).await?;
-        }
-        let mut pending = PendingSession {
-            id,
-            storage: self.storage.clone(),
-            registered: false,
-        };
+        let mut pending = PendingSession::create(meta.clone(), self.storage.clone()).await?;
         let session = Session::with_storage(
             meta,
             self.limits,
@@ -343,10 +337,12 @@ impl Registry {
     }
 
     async fn restore(&self, session: &Arc<Session>) -> Result<(), CreateError> {
+        session.check_health()?;
         if session.is_restored() {
             return Ok(());
         }
         let gate = Arc::clone(&session.restore_gate).lock_owned().await;
+        session.check_health()?;
         if session.is_restored() {
             return Ok(());
         }
@@ -394,6 +390,7 @@ impl Registry {
             .transpose()?
             .unwrap_or_default();
         let agent = catalog.restore(launch, backend_session_id).await?;
+        session.check_health()?;
         // ACP requires all session/load replay notifications before its response.
         // The SDK dispatches notification callbacks serially in wire order; this
         // barrier drains their queued updates before normal publication resumes.
@@ -412,6 +409,7 @@ impl Registry {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn list(&self) -> Vec<SessionMeta> {
         let mut metas: Vec<_> = self
             .sessions
@@ -422,6 +420,18 @@ impl Registry {
             .collect();
         metas.sort_by_key(|meta| (meta.created_at, meta.id));
         metas
+    }
+
+    pub async fn snapshots(&self) -> Vec<basr::model::SessionSnapshot> {
+        let mut snapshots: Vec<_> = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .map(|session| session.snapshot())
+            .collect();
+        snapshots.sort_by_key(|snapshot| (snapshot.meta.created_at, snapshot.meta.id));
+        snapshots
     }
 
     /// # Errors

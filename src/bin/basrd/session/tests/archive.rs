@@ -25,7 +25,10 @@ async fn running_embedded_turn_survives_archive_and_restore_keeps_history() {
     assert!(session.set_archived(true).await.archived);
     assert!(matches!(
         session.prompt(vec!["blocked".into()]).await,
-        Err(SessionError::Archived)
+        Err(SubmissionError::Rejected(PromptRejection {
+            kind: PromptRejectionKind::Archived,
+            ..
+        }))
     ));
     assert!(session.meta().archived);
     assert_eq!(registry.list().await.len(), 1);
@@ -117,15 +120,22 @@ async fn archival_is_metadata_for_starting_stopped_and_failed_sessions() {
         assert_eq!(session.set_archived(true).await, archived);
         assert!(matches!(
             session.prompt(vec!["blocked".into()]).await,
-            Err(SessionError::Archived)
+            Err(SubmissionError::Rejected(PromptRejection {
+                kind: PromptRejectionKind::Unavailable,
+                ..
+            }))
         ));
         let restored = session.set_archived(false).await;
         assert_eq!(restored.status, status);
         assert_eq!(restored.revision, archived.revision.next());
         assert_eq!(session.set_archived(false).await, restored);
-        assert!(
-            matches!(session.prompt(vec!["not revived".into()]).await, Err(SessionError::Inactive(actual)) if actual == status)
-        );
+        assert!(matches!(
+            session.prompt(vec!["not revived".into()]).await,
+            Err(SubmissionError::Rejected(PromptRejection {
+                kind: PromptRejectionKind::Unavailable,
+                ..
+            }))
+        ));
         let page = session.page(None, 100).expect("terminal history");
         let mut replay = session.attach(options(100)).await.expect("terminal attach");
         for event in page.events {

@@ -5,15 +5,15 @@ use tonic::{Request, Response, Status};
 
 use basr::{
     acp,
-    model::{Cursor, Owner, SessionId},
+    model::{
+        Cursor, Owner, PromptRejection, PromptRejectionKind, PromptSubmission,
+        PromptSubmissionOutcome, SessionId, TurnReceipt,
+    },
 };
 
 use crate::{
     agent::AgentSpec,
-    session::{
-        AttachError, AttachOptions, CreateError, CreateRequest, HistoryError, Registry, Session,
-        SessionError,
-    },
+    session::{AttachOptions, CreateError, CreateRequest, Registry, Session, SubmissionError},
 };
 
 use basr::service::{
@@ -21,7 +21,7 @@ use basr::service::{
     pb::basr_server::{Basr, BasrServer},
 };
 
-use super::pagination::PageEncoder;
+use super::{pagination::PageEncoder, status::metadata_error};
 
 /// History page size used when a client does not ask for one.
 const DEFAULT_PAGE: usize = 128;
@@ -108,14 +108,19 @@ impl Basr for Service {
                 "Only ACP agents support authentication",
             ));
         }
+        catalog
+            .validate(&spec)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
         let program = crate::agent::acp::resolve_program(&spec)
             .ok_or_else(|| Status::failed_precondition("Agent executable is missing"))?;
+        let managed = catalog.managed(&spec.id).cloned();
         let registry = Arc::clone(&self.registry);
         let (send, receive) = tokio::sync::mpsc::channel(32);
         let task = tokio::spawn(async move {
             let (controls, controls_receive) = tokio::sync::mpsc::channel(16);
             let operation = crate::agent::acp::authenticate_interactive(
                 &spec,
+                managed.as_ref(),
                 &start,
                 send.clone(),
                 controls_receive,
@@ -168,17 +173,12 @@ impl Basr for Service {
         request: Request<pb::ListAgentCatalogRequest>,
     ) -> Result<Response<pb::ListAgentCatalogResponse>, Status> {
         let manager = self.manager()?;
-        let specs = self
-            .registry
-            .catalog()
-            .specs()
-            .map(|spec| spec.as_ref().clone())
-            .collect();
+        let registrations = self.registry.catalog().registrations().cloned().collect();
         let local = request
             .remote_addr()
             .is_some_and(|address| address.ip().is_loopback());
         let mut catalog = manager
-            .catalog(specs, request.into_inner().refresh)
+            .catalog(registrations, request.into_inner().refresh)
             .await
             .map_err(|error| Status::unavailable(error.to_string()))?;
         if !local {
@@ -293,6 +293,9 @@ impl Basr for Service {
                 "Only ACP agents support authentication",
             ));
         }
+        catalog
+            .validate(spec)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
         let program = crate::agent::acp::resolve_program(spec)
             .ok_or_else(|| Status::failed_precondition("Agent executable is missing"))?;
         let expected_method = if request.expected_method_json.is_empty() {
@@ -377,6 +380,9 @@ impl Basr for Service {
             .ok_or_else(|| {
                 Status::failed_precondition("Agent configuration changed; save and retry")
             })?;
+        catalog
+            .validate(spec)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
         let mut response = pb::CheckAgentResponse {
             status: Check::Connected.into(),
             message: "Embedded agent is ready".into(),
@@ -454,7 +460,7 @@ impl Basr for Service {
             .await?;
 
         Ok(Response::new(pb::CreateSessionResponse {
-            session: Some(pb::Session::try_from(&session.meta()).map_err(metadata_error)?),
+            session: Some(pb::Session::try_from(&session.snapshot()).map_err(metadata_error)?),
         }))
     }
 
@@ -465,10 +471,10 @@ impl Basr for Service {
         let include_archived = request.into_inner().include_archived;
         let sessions = self
             .registry
-            .list()
+            .snapshots()
             .await
             .iter()
-            .filter(|session| include_archived || !session.archived)
+            .filter(|session| include_archived || !session.meta.archived)
             .map(pb::Session::try_from)
             .collect::<Result<_, _>>()
             .map_err(metadata_error)?;
@@ -483,7 +489,7 @@ impl Basr for Service {
         let session = self.session(&request.into_inner().session).await?;
 
         Ok(Response::new(pb::GetSessionResponse {
-            session: Some(pb::Session::try_from(&session.meta()).map_err(metadata_error)?),
+            session: Some(pb::Session::try_from(&session.snapshot()).map_err(metadata_error)?),
         }))
     }
 
@@ -557,14 +563,75 @@ impl Basr for Service {
 
     async fn prompt(
         &self,
-        request: Request<pb::AcpPayload>,
-    ) -> Result<Response<pb::TurnAccepted>, Status> {
-        let request: acp::PromptRequest = decode(request)?;
-        let session = self.session(&request.session_id.to_string()).await?;
-        self.registry.ensure_restored(&session).await?;
-        let receipt = session.accept_prompt(request).await?;
+        request: Request<pb::PromptSubmission>,
+    ) -> Result<Response<pb::PromptSubmissionResponse>, Status> {
+        let submission = match PromptSubmission::try_from(request.into_inner()) {
+            Ok(submission) => submission,
+            Err(error) => {
+                return submission_response(Err(PromptRejection {
+                    kind: PromptRejectionKind::InvalidRequest,
+                    message: error.to_string(),
+                }
+                .into()));
+            }
+        };
+        let session = match self
+            .session(&submission.request.session_id.to_string())
+            .await
+        {
+            Ok(session) => session,
+            Err(error) => {
+                return submission_response(Err(PromptRejection {
+                    kind: if error.code() == tonic::Code::InvalidArgument {
+                        PromptRejectionKind::InvalidRequest
+                    } else {
+                        PromptRejectionKind::Unavailable
+                    },
+                    message: error.message().to_owned(),
+                }
+                .into()));
+            }
+        };
+        match session.known_submission(&submission).await {
+            Ok(Some(receipt)) => return submission_response(Ok(receipt)),
+            Ok(None) => {}
+            Err(error) => return submission_response(Err(error)),
+        }
+        if let Err(error) = self.registry.ensure_restored(&session).await {
+            // Another caller may have registered this identity while restoration
+            // was pending. An accepted submission remains queryable when inactive.
+            return match session.known_submission(&submission).await {
+                Ok(Some(receipt)) => submission_response(Ok(receipt)),
+                Err(error) => submission_response(Err(error)),
+                Ok(None) if matches!(error, CreateError::Storage(_) | CreateError::Session(_)) => {
+                    Err(error.into())
+                }
+                Ok(None) => submission_response(Err(PromptRejection {
+                    kind: PromptRejectionKind::Unavailable,
+                    message: Status::from(error).message().to_owned(),
+                }
+                .into())),
+            };
+        }
+        submission_response(session.accept_prompt(submission).await)
+    }
 
-        Ok(Response::new(receipt.into()))
+    async fn get_prompt_acceptance(
+        &self,
+        request: Request<pb::PromptAcceptanceRequest>,
+    ) -> Result<Response<pb::PromptAcceptanceResponse>, Status> {
+        let request = request.into_inner();
+        let turn = request
+            .turn
+            .parse()
+            .map_err(|error: basr::model::ParseIdError| {
+                Status::invalid_argument(error.to_string())
+            })?;
+        let session = self.session(&request.session).await?;
+        let accepted = session.prompt_acceptance(turn).await?;
+        Ok(Response::new(pb::PromptAcceptanceResponse {
+            accepted: accepted.map(Into::into),
+        }))
     }
 
     async fn cancel(
@@ -756,9 +823,9 @@ impl Basr for Service {
     ) -> Result<Response<pb::SetArchivedResponse>, Status> {
         let request = request.into_inner();
         let session = self.session(&request.session).await?;
-        let meta = session.try_set_archived(request.archived).await?;
+        let snapshot = session.try_set_archived(request.archived).await?;
         Ok(Response::new(pb::SetArchivedResponse {
-            session: Some(pb::Session::try_from(&meta).map_err(metadata_error)?),
+            session: Some(pb::Session::try_from(&snapshot).map_err(metadata_error)?),
         }))
     }
 
@@ -824,114 +891,15 @@ fn authentication_check(
     }
 }
 
-fn acp_status(error: &acp::Error) -> Status {
-    acp_status_raw(error, &serde_json::to_value(error).expect("ACP error JSON"))
-}
-
-fn acp_status_raw(error: &acp::Error, raw: &serde_json::Value) -> Status {
-    let code = match error.code {
-        acp::ErrorCode::AuthRequired => tonic::Code::Unauthenticated,
-        acp::ErrorCode::InvalidParams | acp::ErrorCode::InvalidRequest => {
-            tonic::Code::InvalidArgument
-        }
-        acp::ErrorCode::MethodNotFound => tonic::Code::Unimplemented,
-        _ => tonic::Code::Unknown,
+fn submission_response(
+    result: Result<TurnReceipt, SubmissionError>,
+) -> Result<Response<pb::PromptSubmissionResponse>, Status> {
+    let outcome = match result {
+        Ok(receipt) => PromptSubmissionOutcome::Accepted(receipt),
+        Err(SubmissionError::Rejected(rejection)) => PromptSubmissionOutcome::Rejected(rejection),
+        Err(SubmissionError::Unknown(error)) => return Err(error.into()),
     };
-    Status::with_details(
-        code,
-        error.message.clone(),
-        serde_json::to_vec(raw).expect("ACP error JSON").into(),
-    )
-}
-
-impl From<SessionError> for Status {
-    fn from(error: SessionError) -> Self {
-        match &error {
-            SessionError::Busy | SessionError::Archived | SessionError::Inactive(_) => {
-                Status::failed_precondition(error.to_string())
-            }
-            SessionError::EmptyPrompt => Status::invalid_argument(error.to_string()),
-            SessionError::History(error) => (*error).into(),
-            SessionError::Storage(crate::storage::Error::Expired { .. }) => {
-                Status::data_loss(error.to_string())
-            }
-            SessionError::Storage(
-                crate::storage::Error::Future { .. } | crate::storage::Error::EmptyPage,
-            ) => Status::invalid_argument(error.to_string()),
-            SessionError::Storage(_) => Status::unavailable(error.to_string()),
-            SessionError::CommitTask(_) => Status::unavailable(error.to_string()),
-            SessionError::Agent(crate::agent::Error::AcpRaw { error, raw }) => {
-                acp_status_raw(error, raw)
-            }
-            SessionError::Agent(crate::agent::Error::Acp(error)) => {
-                let code = match error.code {
-                    acp::ErrorCode::InvalidParams | acp::ErrorCode::InvalidRequest => {
-                        tonic::Code::InvalidArgument
-                    }
-                    acp::ErrorCode::MethodNotFound => tonic::Code::Unimplemented,
-                    _ => tonic::Code::Unknown,
-                };
-                Status::with_details(
-                    code,
-                    error.message.clone(),
-                    serde_json::to_vec(error).expect("ACP error JSON").into(),
-                )
-            }
-            SessionError::Agent(crate::agent::Error::Unsupported { .. }) => {
-                Status::unimplemented(error.to_string())
-            }
-            SessionError::Agent(_) => Status::unavailable(error.to_string()),
-        }
-    }
-}
-
-impl From<HistoryError> for Status {
-    fn from(error: HistoryError) -> Self {
-        match error {
-            HistoryError::Expired { .. } => Status::data_loss(error.to_string()),
-            HistoryError::Future { .. } | HistoryError::EmptyPage => {
-                Status::invalid_argument(error.to_string())
-            }
-        }
-    }
-}
-
-impl From<CreateError> for Status {
-    fn from(error: CreateError) -> Self {
-        match error {
-            CreateError::UnknownAgent(_) => Status::not_found(error.to_string()),
-            CreateError::NotResumable(_) => Status::failed_precondition(error.to_string()),
-            CreateError::Cwd(_) => Status::invalid_argument(error.to_string()),
-            CreateError::Timeout => Status::deadline_exceeded(error.to_string()),
-            CreateError::Session(error) => error.into(),
-            CreateError::Storage(crate::storage::Error::NotFound(_)) => {
-                Status::not_found(error.to_string())
-            }
-            CreateError::Storage(_) => Status::unavailable(error.to_string()),
-            CreateError::Agent(crate::agent::Error::Acp(acp_error)) => acp_status(&acp_error),
-            CreateError::Agent(crate::agent::Error::AcpRaw { error, raw }) => {
-                acp_status_raw(&error, &raw)
-            }
-            CreateError::Agent(crate::agent::Error::Unsupported { .. }) => {
-                Status::failed_precondition(error.to_string())
-            }
-            CreateError::Agent(_) | CreateError::Stopping => Status::unavailable(error.to_string()),
-        }
-    }
-}
-
-impl From<AttachError> for Status {
-    fn from(error: AttachError) -> Self {
-        match error {
-            AttachError::Lagged(_) => Self::data_loss(error.to_string()),
-            AttachError::Closed => Self::unavailable(error.to_string()),
-            AttachError::Storage(_) => Self::unavailable(error.to_string()),
-        }
-    }
-}
-
-fn metadata_error(error: basr::service::Error) -> Status {
-    Status::failed_precondition(error.to_string())
+    Ok(Response::new(outcome.into()))
 }
 
 fn local_management<T>(request: &Request<T>) -> Result<(), Status> {

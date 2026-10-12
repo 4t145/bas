@@ -1,14 +1,15 @@
 use std::{
+    collections::HashMap,
     future::Future,
     sync::{Arc, Mutex, MutexGuard, Weak},
 };
 
 use basr::acp;
 use basr::model::{
-    Cursor, Event, EventKind, SessionId, SessionMeta, SessionStatus, StopReason, TurnId,
-    TurnReceipt, TurnResult,
+    Cursor, Event, EventKind, InterruptionReason, PromptResult, RuntimeFailure, SessionId,
+    SessionMeta, SessionRuntime, SessionSnapshot, SessionStatus, TurnId, TurnReceipt,
 };
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::task::AbortOnDropHandle;
 
 #[cfg(test)]
@@ -17,23 +18,28 @@ use super::{AttachOptions, Attachment, HistoryError, Limits, history::Ring};
 use crate::agent::{self, Agent, TurnUpdate, Update};
 use crate::storage::{self, Storage};
 
+mod submission;
+pub use submission::SubmissionError;
+
 /// A detached snapshot; notification delivery never retains the session.
 #[derive(Clone, Debug)]
 pub struct Completion {
     pub session: SessionMeta,
-    pub result: TurnResult,
+    pub outcome: CompletionOutcome,
+}
+
+#[derive(Clone, Debug)]
+pub enum CompletionOutcome {
+    Native(PromptResult),
+    Interrupted(InterruptionReason),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    #[error("a turn is already running")]
-    Busy,
-    #[error("session is archived")]
-    Archived,
+    #[error(transparent)]
+    Runtime(#[from] RuntimeFailure),
     #[error("session is {0:?}")]
     Inactive(SessionStatus),
-    #[error("a prompt must contain at least one content block")]
-    EmptyPrompt,
     #[error(transparent)]
     Agent(#[from] agent::Error),
     #[error(transparent)]
@@ -65,6 +71,8 @@ impl Drop for Foreground {
 /// All mutations and broadcasts share one lock. Backend methods only enqueue work.
 struct State {
     meta: SessionMeta,
+    runtime: SessionRuntime,
+    failure: watch::Sender<Option<RuntimeFailure>>,
     history: Ring,
     cursor: Cursor,
     active: Option<TurnId>,
@@ -75,6 +83,8 @@ struct State {
     startup_config: Option<acp::ConfigOptionUpdate>,
     startup_mode: Option<acp::CurrentModeUpdate>,
     storage: Option<Arc<dyn Storage>>,
+    // Used only by sessions without a Storage backend; follows the session lifetime.
+    acceptances: HashMap<TurnId, storage::PromptAcceptance>,
     restored: bool,
     deleted: bool,
 }
@@ -98,19 +108,24 @@ impl Session {
     ) -> Arc<Self> {
         let (events, _) = broadcast::channel(limits.live_capacity.get());
         let cursor = meta.revision;
+        let events = (!matches!(meta.status, SessionStatus::Stopped | SessionStatus::Failed))
+            .then_some(events);
         Arc::new(Self {
             state: Mutex::new(State {
                 meta,
+                runtime: SessionRuntime::default(),
+                failure: watch::channel(None).0,
                 history: Ring::new(limits.history_capacity),
                 cursor,
                 active: None,
                 agent: None,
-                events: Some(events),
+                events,
                 completions,
                 foreground_viewers: 0,
                 startup_config: None,
                 startup_mode: None,
                 storage,
+                acceptances: HashMap::new(),
                 restored,
                 deleted: false,
             }),
@@ -122,6 +137,38 @@ impl Session {
 
     pub(super) fn is_restored(&self) -> bool {
         self.lock().restored
+    }
+
+    /// # Errors
+    /// A failed recovery commit terminates this loaded runtime without altering its metadata.
+    pub(super) async fn recover(self: &Arc<Self>) -> Result<(), SessionError> {
+        self.owned(|session| async move {
+            let _gate = session.transaction.lock().await;
+            let mut meta = session.meta();
+            let events = match meta.status {
+                SessionStatus::Starting => vec![EventKind::Failed {
+                    message: "daemon stopped during session startup".to_owned(),
+                }],
+                SessionStatus::Working => match meta.active_turn {
+                    Some(turn) => vec![EventKind::TurnInterrupted {
+                        turn,
+                        reason: InterruptionReason::DaemonRestarted,
+                    }],
+                    None => {
+                        meta.set_status(SessionStatus::Idle);
+                        Vec::new()
+                    }
+                },
+                _ => return Ok(()),
+            };
+            session.publish_with_meta_locked(events, &mut meta).await?;
+            let mut state = session.lock();
+            if state.terminal() {
+                state.events.take();
+            }
+            Ok(())
+        })
+        .await
     }
 
     pub(super) async fn restore_agent(
@@ -136,6 +183,7 @@ impl Session {
             let (mut meta, updates) = {
                 let state = session.lock();
                 if state.terminal() || state.deleted {
+                    state.check_health()?;
                     return Err(SessionError::Inactive(state.meta.status));
                 }
                 let mut meta = state.meta.clone();
@@ -222,6 +270,7 @@ impl Session {
             let mut state = session.lock();
             state.restored = false;
             state.deleted = true;
+            state.acceptances.clear();
             state.events.take();
             Ok(())
         })
@@ -253,6 +302,18 @@ impl Session {
         self.lock().meta.clone()
     }
 
+    pub fn snapshot(&self) -> SessionSnapshot {
+        let state = self.lock();
+        SessionSnapshot {
+            meta: state.meta.clone(),
+            runtime: state.runtime.clone(),
+        }
+    }
+
+    pub(super) fn check_health(&self) -> Result<(), SessionError> {
+        self.lock().check_health()
+    }
+
     /// Changes only archival metadata, including for starting or terminal sessions.
     /// Repeating the current value does not publish an event or advance revision.
     #[cfg(test)]
@@ -260,16 +321,22 @@ impl Session {
         self.try_set_archived(archived)
             .await
             .expect("archival metadata must be committed")
+            .meta
     }
 
+    /// Captures the operation's snapshot before another mutation can overtake its reply.
+    ///
+    /// # Errors
+    /// Rejects failed/deleted instances or a failed persistence commit.
     pub async fn try_set_archived(
         self: &Arc<Self>,
         archived: bool,
-    ) -> Result<SessionMeta, SessionError> {
+    ) -> Result<SessionSnapshot, SessionError> {
         self.owned(move |session| async move {
             let _gate = session.transaction.lock().await;
             let changed = {
                 let state = session.lock();
+                state.check_health()?;
                 if state.deleted {
                     return Err(SessionError::Inactive(SessionStatus::Stopped));
                 }
@@ -280,12 +347,16 @@ impl Session {
                     .publish_locked([EventKind::ArchiveChanged { archived }])
                     .await?;
             }
-            Ok(session.meta())
+            Ok(session.snapshot())
         })
         .await
     }
 
     pub(super) fn listen(self: &Arc<Self>, mut inbox: mpsc::Receiver<Update>) {
+        let state = self.lock();
+        if state.terminal() || state.deleted {
+            return;
+        }
         let weak = Arc::downgrade(self);
         let task = AbortOnDropHandle::new(tokio::spawn(async move {
             while let Some(update) = inbox.recv().await {
@@ -309,6 +380,7 @@ impl Session {
             .updates_task
             .lock()
             .expect("update task lock is not poisoned") = Some(task);
+        drop(state);
     }
 
     /// # Errors
@@ -319,6 +391,7 @@ impl Session {
             let mut meta = {
                 let state = session.lock();
                 if state.terminal() {
+                    state.check_health()?;
                     return Err(SessionError::Inactive(state.meta.status));
                 }
                 let mut meta = state.meta.clone();
@@ -369,8 +442,9 @@ impl Session {
     }
 
     pub async fn try_attach(&self, options: AttachOptions) -> Result<Attachment, SessionError> {
-        let (storage, id, cursor, events) = {
+        let (storage, id, cursor, events, mut failure) = {
             let state = self.lock();
+            state.check_health()?;
             state.check_cursor(options.cursor)?;
             if state.storage.is_none() {
                 let backlog = match options.cursor {
@@ -381,6 +455,7 @@ impl Session {
                     backlog,
                     options.cursor.unwrap_or(Cursor::START),
                     state.events.as_ref().map(broadcast::Sender::subscribe),
+                    state.failure.subscribe(),
                 ));
             }
             (
@@ -388,19 +463,30 @@ impl Session {
                 state.meta.id,
                 state.cursor,
                 state.events.as_ref().map(broadcast::Sender::subscribe),
+                state.failure.subscribe(),
             )
         };
         if options.cursor.is_none() && !storage.is_persistent() {
-            let backlog = storage.tail(id, options.replay).await?;
-            return Ok(Attachment::new(backlog, Cursor::START, events));
+            let backlog = tokio::select! {
+                biased;
+                error = super::attachment::wait_failure(&mut failure) => return Err(error.into()),
+                result = storage.tail(id, options.replay) => result?,
+            };
+            return Ok(Attachment::new(backlog, Cursor::START, events, failure));
         }
         let after = options.cursor.unwrap_or_else(|| {
             Cursor::from_raw(cursor.raw().saturating_sub(options.replay as u64))
         });
         if options.cursor.is_some() {
-            storage.page(id, Some(after), 1).await?;
+            tokio::select! {
+                biased;
+                error = super::attachment::wait_failure(&mut failure) => return Err(error.into()),
+                result = storage.page(id, Some(after), 1) => { result?; }
+            }
         }
-        Ok(Attachment::persistent(after, cursor, storage, id, events))
+        Ok(Attachment::persistent(
+            after, cursor, storage, id, events, failure,
+        ))
     }
 
     /// # Errors
@@ -473,72 +559,18 @@ impl Session {
     /// Accepts exactly one turn and commits the user message before its updates.
     ///
     /// # Errors
-    /// Rejects empty prompts, overlapping turns, archived/inactive sessions and unsupported content.
+    /// Reports explicit rejection or unknown acceptance; backend failures after acceptance are events.
     #[cfg(test)]
     pub async fn prompt(
         self: &Arc<Self>,
         content: Vec<acp::ContentBlock>,
-    ) -> Result<TurnId, SessionError> {
-        self.accept_prompt(acp::PromptRequest::new(self.id().to_string(), content))
-            .await
-            .map(|receipt| receipt.turn)
-    }
-
-    /// Accepts a turn and returns the cursor of its TurnStarted event under the same lock.
-    ///
-    /// # Errors
-    /// Rejects empty prompts, overlapping turns, archived/inactive sessions and backend refusals.
-    pub async fn accept_prompt(
-        self: &Arc<Self>,
-        request: acp::PromptRequest,
-    ) -> Result<TurnReceipt, SessionError> {
-        self.owned(move |session| async move {
-            let _gate = session.transaction.lock().await;
-            let started_at = {
-                let state = session.lock();
-                if state.meta.archived {
-                    return Err(SessionError::Archived);
-                }
-                state.require_ready()?;
-                if state.active.is_some() {
-                    return Err(SessionError::Busy);
-                }
-                if request.prompt.is_empty() {
-                    return Err(SessionError::EmptyPrompt);
-                }
-                state.cursor.next()
-            };
-            let turn = TurnId::new();
-            let mut events = vec![EventKind::TurnStarted { turn }];
-            events.extend(request.prompt.iter().cloned().map(|content| {
-                EventKind::Acp(acp::SessionUpdate::UserMessageChunk(
-                    acp::ContentChunk::new(content).meta(request.meta.clone()),
-                ))
-            }));
-            session.publish_locked(events).await?;
-            let result = {
-                let mut state = session.lock();
-                state.active = Some(turn);
-                state
-                    .agent
-                    .as_mut()
-                    .expect("ready backend")
-                    .prompt(turn, request)
-            };
-            if let Err(error) = result {
-                if matches!(error, agent::Error::Backend { .. }) {
-                    session.fail_locked(error.to_string()).await?;
-                } else {
-                    session.finish_locked(Err(error.to_string())).await?;
-                }
-                return Err(error.into());
-            }
-            Ok(TurnReceipt {
-                turn,
-                cursor: started_at,
-            })
-        })
+    ) -> Result<TurnId, SubmissionError> {
+        self.accept_prompt(basr::model::PromptSubmission::new(acp::PromptRequest::new(
+            self.id().to_string(),
+            content,
+        )))
         .await
+        .map(|receipt| receipt.turn)
     }
 
     /// # Errors
@@ -591,8 +623,9 @@ impl Session {
                 .expect("ready backend")
                 .set_config_option(request)
         }
-        .await?;
-        Ok(response)
+        .await;
+        self.check_health()?;
+        Ok(response?)
     }
 
     /// # Errors
@@ -610,8 +643,9 @@ impl Session {
                 .expect("ready backend")
                 .set_mode(request)
         }
-        .await?;
-        Ok(response)
+        .await;
+        self.check_health()?;
+        Ok(response?)
     }
 
     /// Titles are daemon metadata, including for backends without a rename operation.
@@ -624,6 +658,7 @@ impl Session {
             let _gate = session.transaction.lock().await;
             let changed = {
                 let state = session.lock();
+                state.check_health()?;
                 if state.deleted
                     || !matches!(
                         state.meta.status,
@@ -653,26 +688,18 @@ impl Session {
 
     async fn shutdown_owned(&self) {
         let _gate = self.transaction.lock().await;
-        if !self.lock().terminal() {
-            let finished = match self
-                .finish_locked(Ok(acp::PromptResponse::new(StopReason::Cancelled)))
-                .await
-            {
-                Ok(()) => true,
-                Err(error) => {
-                    tracing::error!(%error, "could not commit turn completion during shutdown");
-                    false
-                }
-            };
-            if finished
-                && let Err(error) = self
-                    .publish_locked([EventKind::StatusChanged {
+        let needs_shutdown = !self.lock().terminal();
+        if needs_shutdown
+            && let Err(error) = self
+                .interrupt_locked(
+                    InterruptionReason::SessionStopped,
+                    Some(EventKind::StatusChanged {
                         status: SessionStatus::Stopped,
-                    }])
-                    .await
-            {
-                tracing::error!(%error, "could not commit session shutdown status");
-            }
+                    }),
+                )
+                .await
+        {
+            tracing::error!(%error, "could not commit session shutdown status");
         }
         let agent = {
             let mut state = self.lock();
@@ -735,17 +762,19 @@ impl Session {
                             session.publish_locked([EventKind::Acp(update)]).await
                         }
                         TurnUpdate::Finished(result) => session.finish_locked(result).await,
+                        TurnUpdate::CancelledBeforeDispatch => {
+                            session
+                                .interrupt_locked(InterruptionReason::CancelledBeforeDispatch, None)
+                                .await
+                        }
                     }
                 }
                 Update::Turn { .. } => Ok(()),
                 Update::Barrier(_) => Ok(()),
             };
             if let Err(error) = result {
-                let mut state = session.lock();
+                let state = session.lock();
                 tracing::error!(session = %state.meta.id, %error, "session storage commit failed");
-                state.events.take();
-                state.agent.take();
-                state.meta.status = SessionStatus::Failed;
             }
         })
         .await;
@@ -788,8 +817,18 @@ impl Session {
         kinds: impl IntoIterator<Item = EventKind>,
         meta: &mut SessionMeta,
     ) -> Result<(), SessionError> {
+        self.publish_submission_locked(kinds, meta, None).await
+    }
+
+    async fn publish_submission_locked(
+        &self,
+        kinds: impl IntoIterator<Item = EventKind>,
+        meta: &mut SessionMeta,
+        acceptance: Option<storage::PromptAcceptance>,
+    ) -> Result<(), SessionError> {
         let (events, storage) = {
             let state = self.lock();
+            state.check_health()?;
             let mut events = Vec::new();
             for kind in kinds {
                 let mut event = Event::new(meta.id, Cursor::START, kind);
@@ -810,11 +849,20 @@ impl Session {
         if events.is_empty() && *meta == self.meta() {
             return Ok(());
         }
-        if let Some(storage) = storage {
-            storage.commit(meta.clone(), &events).await?;
+        if let Some(storage) = storage
+            && let Err(error) = storage.commit(meta.clone(), &events, acceptance).await
+        {
+            return Err(self.persistence_failed(error).into());
         }
         let mut state = self.lock();
         state.meta = meta.clone();
+        if state.storage.is_none()
+            && let Some(acceptance) = acceptance
+        {
+            state
+                .acceptances
+                .insert(acceptance.receipt.turn, acceptance);
+        }
         for event in events {
             state.cursor = event.cursor;
             if state.meta.status == SessionStatus::Starting {
@@ -836,7 +884,26 @@ impl Session {
         Ok(())
     }
 
-    async fn finish_locked(&self, result: TurnResult) -> Result<(), SessionError> {
+    fn persistence_failed(&self, error: storage::Error) -> RuntimeFailure {
+        let mut state = self.lock();
+        let failure = state
+            .runtime
+            .failure
+            .get_or_insert_with(|| RuntimeFailure::Persistence {
+                message: error.to_string(),
+            })
+            .clone();
+        state.active = None;
+        state.restored = false;
+        state.failure.send_replace(Some(failure.clone()));
+        state.events.take();
+        // Drivers own abort-on-drop tasks. Do not await cleanup while holding session locks.
+        state.agent.take();
+        self.updates_task.lock().expect("update task lock").take();
+        failure
+    }
+
+    async fn finish_locked(&self, result: PromptResult) -> Result<(), SessionError> {
         let active = self.lock().active;
         if let Some(turn) = active {
             self.publish_locked([EventKind::TurnFinished {
@@ -844,29 +911,59 @@ impl Session {
                 result: result.clone(),
             }])
             .await?;
-            let mut state = self.lock();
-            state.active = None;
-            if let Some(completions) = &state.completions
-                && state.foreground_viewers == 0
-            {
-                let completion = Completion {
-                    session: state.meta.clone(),
-                    result,
-                };
-                if let Err(error) = completions.try_send(completion) {
-                    tracing::warn!(%error, session = %state.meta.id, "completion notification was not queued");
-                }
-            }
+            self.complete_locked(CompletionOutcome::Native(result));
         }
         Ok(())
+    }
+
+    async fn interrupt_locked(
+        &self,
+        reason: InterruptionReason,
+        terminal: Option<EventKind>,
+    ) -> Result<(), SessionError> {
+        let active = self.lock().active;
+        let mut events = Vec::new();
+        if let Some(turn) = active {
+            events.push(EventKind::TurnInterrupted {
+                turn,
+                reason: reason.clone(),
+            });
+        }
+        events.extend(terminal);
+        self.publish_locked(events).await?;
+        if active.is_some() {
+            self.complete_locked(CompletionOutcome::Interrupted(reason));
+        }
+        Ok(())
+    }
+
+    fn complete_locked(&self, outcome: CompletionOutcome) {
+        let mut state = self.lock();
+        state.active = None;
+        if let Some(completions) = &state.completions
+            && state.foreground_viewers == 0
+        {
+            let completion = Completion {
+                session: state.meta.clone(),
+                outcome,
+            };
+            if let Err(error) = completions.try_send(completion) {
+                tracing::warn!(%error, session = %state.meta.id, "completion notification was not queued");
+            }
+        }
     }
 
     async fn fail_locked(&self, message: String) -> Result<(), SessionError> {
         if self.lock().terminal() {
             return Ok(());
         }
-        self.finish_locked(Err(message.clone())).await?;
-        self.publish_locked([EventKind::Failed { message }]).await?;
+        self.interrupt_locked(
+            InterruptionReason::BackendFailure {
+                message: message.clone(),
+            },
+            Some(EventKind::Failed { message }),
+        )
+        .await?;
         let mut state = self.lock();
         state.events.take();
         state.agent.take();
@@ -881,14 +978,23 @@ impl Session {
 }
 
 impl State {
+    fn check_health(&self) -> Result<(), SessionError> {
+        match &self.runtime.failure {
+            Some(failure) => Err(failure.clone().into()),
+            None => Ok(()),
+        }
+    }
+
     fn terminal(&self) -> bool {
-        matches!(
-            self.meta.status,
-            SessionStatus::Stopped | SessionStatus::Failed
-        )
+        self.runtime.failure.is_some()
+            || matches!(
+                self.meta.status,
+                SessionStatus::Stopped | SessionStatus::Failed
+            )
     }
 
     fn require_ready(&self) -> Result<(), SessionError> {
+        self.check_health()?;
         if self.deleted
             || !self.restored
             || self.agent.is_none()

@@ -22,9 +22,11 @@ mod queue;
 mod rename;
 mod reply;
 mod restore;
+mod runtime;
 mod settings;
 mod sidebar;
 mod status;
+mod submission;
 mod thought;
 mod thread_actions;
 mod thread_row;
@@ -139,6 +141,7 @@ pub(super) struct Workspace {
     restore_on_connect: bool,
     server: SocketAddr,
     sessions: Vec<SessionMeta>,
+    runtimes: runtime::Runtimes,
     catalog_ids: HashSet<SessionId>,
     removed_sessions: HashSet<SessionId>,
     agents: Vec<pb::Agent>,
@@ -440,6 +443,7 @@ impl Workspace {
             restore_on_connect: false,
             server,
             sessions: Vec::new(),
+            runtimes: runtime::Runtimes::default(),
             catalog_ids: HashSet::new(),
             removed_sessions: HashSet::new(),
             agents: Vec::new(),
@@ -529,7 +533,7 @@ impl Workspace {
     fn command(&mut self, command: Command) {
         self.error = None;
         let prompt = match &command {
-            Command::Prompt { session, .. } => Some(*session),
+            Command::Prompt { session, turn, .. } => Some((*session, *turn)),
             _ => None,
         };
         let permission = match &command {
@@ -549,12 +553,13 @@ impl Workspace {
                     Err(crate::i18n::tr!("connection-reopen").into()),
                 );
             }
-            if let Some(session) = prompt
+            if let Some((session, turn)) = prompt
                 && let Some(outbox) = self.outboxes.get_mut(&session)
-                && let Some(outbox::Action::Rejected {
+                && let Some(outbox::Settlement::Rejected {
                     origin: outbox::Origin::Composer,
                     draft,
-                }) = outbox.receipt(None)
+                    ..
+                }) = outbox.not_sent(turn, crate::i18n::tr!("connection-reopen").into())
             {
                 self.drafts.insert(session, draft);
             }
@@ -572,8 +577,10 @@ impl Workspace {
     }
 
     fn composer_error(&self, cx: &App) -> Option<String> {
-        self.error
-            .clone()
+        self.active
+            .and_then(|id| self.runtimes.failure(id))
+            .map(ToString::to_string)
+            .or_else(|| self.error.clone())
             .or_else(|| self.approval_error.clone())
             .or_else(|| self.authentication_hint())
             .or_else(|| self.connection_error.clone())
@@ -811,8 +818,9 @@ impl Workspace {
     }
 
     fn working(&self) -> bool {
-        self.current()
-            .is_some_and(|session| session.status == SessionStatus::Working)
+        self.current().is_some_and(|session| {
+            self.runtime_healthy(session.id) && session.status == SessionStatus::Working
+        })
     }
 
     fn can_send(&self, cx: &App) -> bool {
@@ -826,6 +834,7 @@ impl Workspace {
             && self.stream == StreamState::Live
             && self.current().is_some_and(|session| {
                 matches!(session.status, SessionStatus::Idle | SessionStatus::Working)
+                    && self.runtime_healthy(session.id)
                     && !self.archive_blocked(session.id)
                     && !self.cancelling.contains(&session.id)
                     && !self.sending(session.id)
@@ -922,6 +931,7 @@ impl Workspace {
             event.kind,
             basr::model::EventKind::TurnStarted { .. }
                 | basr::model::EventKind::TurnFinished { .. }
+                | basr::model::EventKind::TurnInterrupted { .. }
                 | basr::model::EventKind::StatusChanged {
                     status: SessionStatus::Working
                 }
@@ -954,59 +964,12 @@ impl Workspace {
         cx.notify();
     }
 
-    fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_send(cx) {
-            return;
-        }
-        let Some(session) = self.active else {
-            return;
-        };
-        let text = self.composer.read(cx).value().to_string();
-        if self.working()
-            || self
-                .outboxes
-                .get(&session)
-                .is_some_and(outbox::SessionOutbox::pending)
-        {
-            self.enqueue_draft(session, text, window, cx);
-            return;
-        }
-        self.error = None;
-        if self.composer_fills_thread() {
-            self.composer_expanded = false;
-            self.sync_composer_mode(cx);
-        }
-        self.commands_dismissed = true;
-        self.list.set_follow_mode(FollowMode::Tail);
-        let outbox::Action::Send(draft) = self.outboxes.entry(session).or_default().start(
-            Draft {
-                text: text.clone(),
-                attachments: self.attachments.clone(),
-            },
-            outbox::Origin::Composer,
-        ) else {
-            unreachable!("starting a submission returns its network action");
-        };
-        let title = self.current().filter(|meta| meta.title.is_none()).map(|_| {
-            text.lines()
-                .find(|line| !line.trim().is_empty())
-                .or_else(|| self.attachments.first().map(|item| item.name.as_str()))
-                .unwrap_or_default()
-                .chars()
-                .take(48)
-                .collect()
-        });
-        self.command(Command::Prompt {
-            session,
-            text: draft.text,
-            attachments: draft.attachments,
-            capabilities: self.prompt_capabilities(),
-            title,
-        });
-        cx.notify();
-    }
-
     fn update(&mut self, update: Update, window: &mut Window, cx: &mut Context<Self>) {
+        if let Update::Snapshot { session, .. } = &update
+            && !self.removed_sessions.contains(&session.meta.id)
+        {
+            self.runtimes.observe(session, false);
+        }
         match update {
             Update::Elicitations {
                 epoch,
@@ -1052,12 +1015,20 @@ impl Workspace {
                     // a session whose removal has already been confirmed.
                     catalog
                         .sessions
-                        .retain(|meta| !self.removed_sessions.contains(&meta.id));
-                    let catalog_ids: HashSet<_> =
-                        catalog.sessions.iter().map(|meta| meta.id).collect();
+                        .retain(|snapshot| !self.removed_sessions.contains(&snapshot.meta.id));
+                    for snapshot in &catalog.sessions {
+                        self.runtimes.observe(snapshot, true);
+                    }
+                    let mut sessions: Vec<_> = catalog
+                        .sessions
+                        .into_iter()
+                        .map(|snapshot| snapshot.meta)
+                        .collect();
+                    let catalog_ids: HashSet<_> = sessions.iter().map(|meta| meta.id).collect();
                     // Catalog requests are serial, but create receipts can overtake them.
                     // Only disappearance after a prior catalog observation proves removal.
                     for removed in self.catalog_ids.difference(&catalog_ids) {
+                        self.runtimes.remove(*removed);
                         self.drafts.remove(removed);
                         self.outboxes.remove(removed);
                         self.unstarted_sessions.remove(removed);
@@ -1074,7 +1045,7 @@ impl Workspace {
                         }
                     }
                     self.catalog_ids = catalog_ids;
-                    for meta in &mut catalog.sessions {
+                    for meta in &mut sessions {
                         if let Some(old) = self.sessions.iter().find(|old| old.id == meta.id) {
                             let incoming = std::mem::replace(meta, old.clone());
                             crate::conversation::merge_meta(meta, &incoming);
@@ -1088,10 +1059,8 @@ impl Workspace {
                             self.record_user_prompt(meta.id);
                         }
                     }
-                    catalog
-                        .sessions
-                        .sort_by_key(|session| std::cmp::Reverse(session.updated_at));
-                    self.sessions = catalog.sessions;
+                    sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
+                    self.sessions = sessions;
                     self.agents = catalog.agents;
                     // An older catalog can arrive after choosing a newly installed agent.
                     if !self.creating
@@ -1132,12 +1101,14 @@ impl Workspace {
                     self.creating = false;
                 }
                 match result {
-                    Ok(session) if self.removed_sessions.contains(&session.id) => {
+                    Ok(session) if self.removed_sessions.contains(&session.meta.id) => {
                         if current {
                             self.error = Some(crate::i18n::tr!("session-deleted").into());
                         }
                     }
                     Ok(session) => {
+                        self.runtimes.observe(&session, false);
+                        let session = session.meta;
                         let id = session.id;
                         if current
                             && session.status != SessionStatus::Working
@@ -1194,6 +1165,10 @@ impl Workspace {
                 self.archive_pending.remove(&session);
                 match result {
                     Ok(incoming) => {
+                        if !self.removed_sessions.contains(&session) {
+                            self.runtimes.observe(&incoming, false);
+                        }
+                        let incoming = incoming.meta;
                         // A newer restore snapshot must not erase this successful archive's
                         // queue pause, even when its metadata revision wins the merge.
                         if incoming.archived
@@ -1228,6 +1203,7 @@ impl Workspace {
                 self.delete_pending.remove(&session);
                 match result {
                     Ok(()) => {
+                        self.runtimes.remove(session);
                         self.removed_sessions.insert(session);
                         self.pending_renames.remove(&session);
                         self.rename_retries.remove(&session);
@@ -1274,52 +1250,13 @@ impl Workspace {
                     }
                 }
             }
-            Update::Sent {
+            Update::Submission {
                 session,
-                text,
-                attachments,
+                submission,
                 result,
             } => {
-                if result.is_ok() {
-                    self.record_user_prompt(session);
-                }
-                let action = self
-                    .outboxes
-                    .get_mut(&session)
-                    .and_then(|outbox| outbox.receipt(result.as_ref().ok().copied()));
-                match action {
-                    Some(outbox::Action::Accepted(outbox::Origin::Composer)) => {
-                        if let Some(draft) = self.drafts.get_mut(&session) {
-                            if draft.text == text {
-                                draft.text.clear();
-                            }
-                            draft
-                                .attachments
-                                .retain(|item| !attachments.iter().any(|sent| sent.id == item.id));
-                        }
-                        if self.active == Some(session) {
-                            self.attachments
-                                .retain(|item| !attachments.iter().any(|sent| sent.id == item.id));
-                        }
-                        if self.active == Some(session)
-                            && self.composer.read(cx).value().as_ref() == text
-                        {
-                            self.composer
-                                .update(cx, |input, cx| input.set_value("", window, cx));
-                        }
-                    }
-                    Some(outbox::Action::Rejected { origin, draft }) => {
-                        if origin == outbox::Origin::Composer {
-                            self.drafts.insert(session, draft);
-                        }
-                        let error = result.expect_err("rejection requires an RPC error");
-                        self.error = Some(crate::i18n::tr!(
-                            "message-send-error",
-                            session = (session).to_string(),
-                            error = (error).to_string()
-                        ))
-                    }
-                    _ => {}
+                if !self.apply_submission(session, submission, result, window, cx) {
+                    return;
                 }
             }
             Update::Cancelled { session, result } => {
@@ -1336,7 +1273,8 @@ impl Workspace {
                 epoch,
                 session,
                 events,
-            } if epoch == self.epoch && self.active == Some(session.id) => {
+            } if epoch == self.epoch && self.active == Some(session.meta.id) => {
+                let session = session.meta;
                 self.markdown.borrow_mut().clear();
                 self.images.borrow_mut().clear();
                 let known = self
@@ -1344,7 +1282,21 @@ impl Workspace {
                     .iter()
                     .find(|meta| meta.id == session.id)
                     .unwrap_or(&session);
-                let mut conversation = Conversation::new(known.clone());
+                // A failed runtime may have partial display content not represented by
+                // this history page. Keep it while replaying committed history idempotently.
+                let mut conversation = if !self.runtime_healthy(session.id)
+                    && self
+                        .conversation
+                        .as_ref()
+                        .is_some_and(|old| old.session.id == session.id)
+                {
+                    self.conversation
+                        .take()
+                        .expect("current conversation was checked")
+                } else {
+                    Conversation::new(known.clone())
+                };
+                conversation.merge_meta(known);
                 conversation.merge_meta(&session);
                 if let Some(old) = &self.conversation
                     && old.session.id == session.id
@@ -1429,6 +1381,30 @@ impl Workspace {
                     }
                 }
             }
+            Update::TrackedTurn { event } => {
+                // Tracking skips intermediate metadata events. Only the complete
+                // foreground stream or catalog may advance SessionMeta's revision.
+                if let Some(outbox) = self.outboxes.get_mut(&event.session) {
+                    outbox.observe(&event);
+                }
+            }
+            Update::TrackingFailed {
+                session,
+                receipt,
+                message,
+            } => {
+                if self
+                    .outboxes
+                    .get_mut(&session)
+                    .is_some_and(|outbox| outbox.tracking_failed(receipt))
+                {
+                    self.error = Some(crate::i18n::tr!(
+                        "turn-tracking-failed",
+                        session = session.to_string(),
+                        message = message
+                    ));
+                }
+            }
             Update::Stream { epoch, state } if epoch == self.epoch => self.stream = state,
             Update::Permissions { epoch, pending } if epoch == self.epoch => {
                 self.approval_error = None;
@@ -1464,6 +1440,11 @@ impl Workspace {
             Update::Elicitations { .. } | Update::ElicitationUnavailable { .. } => {}
         }
         self.pause_archived();
+        for (id, outbox) in &mut self.outboxes {
+            if self.runtimes.failure(*id).is_some() {
+                outbox.pause();
+            }
+        }
         self.flush_queue(cx);
     }
 }

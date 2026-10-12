@@ -45,6 +45,8 @@ fn legacy_import_is_read_only_and_explicit_paths_are_isolated() {
     assert_eq!(document.settings.appearance.ui_font_size, Some(23.));
     assert_eq!(
         document.settings.daemon.agents[0]
+            .as_custom()
+            .expect("legacy custom agent")
             .command()
             .expect("command")
             .args,
@@ -82,6 +84,10 @@ fn broken_legacy_is_not_silently_discarded() {
     for (filename, value) in [
         ("appearance.json", r#"{"ui_font_size":0}"#),
         ("agents.json", "[]"),
+        (
+            "agents.json",
+            r#"[{"id":"managed","installation":{"path":"/basr-installation.json","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}]"#,
+        ),
     ] {
         let path = dir.path().join(filename);
         fs::write(&path, value).expect("write invalid legacy");
@@ -132,7 +138,7 @@ fn busy_invalid_and_io_failures_preserve_document_and_file() {
     assert!(matches!(store.load(), Err(Error::Io { .. })));
     assert!(
         store
-            .save_agents(&mut document, vec![AgentSpec::embedded()])
+            .save_agents(&mut document, vec![AgentSpec::embedded().into()])
             .is_err()
     );
 }
@@ -158,7 +164,7 @@ fn managed_links_are_readable_but_never_overwritten_or_treated_as_missing() {
     );
     assert!(
         store
-            .save_agents(&mut document, vec![AgentSpec::embedded()])
+            .save_agents(&mut document, vec![AgentSpec::embedded().into()])
             .is_err()
     );
     assert_eq!(fs::read_to_string(&target).expect("target unchanged"), "{}");
@@ -210,7 +216,10 @@ fn concurrent_sections_retry_busy_without_lost_updates() {
                             },
                         )
                     } else {
-                        store.save_agents(&mut document, vec!["dummy".parse().expect("agent")])
+                        store.save_agents(
+                            &mut document,
+                            vec!["dummy".parse::<AgentSpec>().expect("agent").into()],
+                        )
                     };
                     match result {
                         Err(Error::Busy { .. }) => std::thread::yield_now(),
@@ -228,5 +237,38 @@ fn concurrent_sections_retry_busy_without_lost_updates() {
     }
     let final_settings = store.load().expect("load").settings;
     assert_eq!(final_settings.appearance.ui_font_size, Some(21.));
-    assert_eq!(final_settings.daemon.agents[0].id.as_str(), "dummy");
+    assert_eq!(final_settings.daemon.agents[0].id().as_str(), "dummy");
+}
+
+#[test]
+fn appearance_saves_preserve_unavailable_managed_references() {
+    use crate::config::{InstallationRef, ManagedAgent};
+    let (dir, store) = fixture();
+    let managed = AgentRegistration::Managed(ManagedAgent {
+        id: "installed".into(),
+        installation: InstallationRef::from_bytes(
+            dir.path()
+                .join("missing")
+                .join(crate::config::INSTALLATION_FILE),
+            b"not published yet",
+        )
+        .expect("structural reference"),
+    });
+    let mut document = store.load().expect("settings");
+    store
+        .save_agents(&mut document, vec![managed.clone()])
+        .expect("save reference without resolution");
+    store
+        .save_appearance(
+            &mut document,
+            Appearance {
+                ui_font_size: Some(21.),
+                ..Appearance::default()
+            },
+        )
+        .expect("appearance save");
+    assert_eq!(
+        store.load().expect("reload").settings.daemon.agents,
+        vec![managed]
+    );
 }

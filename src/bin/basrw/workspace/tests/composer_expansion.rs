@@ -62,12 +62,12 @@ fn new_thread_editor_fills_the_content_area_until_the_first_prompt(cx: &mut Test
         fixture.view.update(cx, |view, cx| {
             view.select_agent("embedded".into(), window, cx);
             view.update(
-                Update::Created { epoch: view.epoch, result: Ok(meta.clone()) },
+                Update::Created { epoch: view.epoch, result: Ok(meta.clone().into()) },
                 window,
                 cx,
             );
             view.update(
-                Update::Snapshot { epoch: view.epoch, session: meta, events: Vec::new() },
+                Update::Snapshot { epoch: view.epoch, session: meta.into(), events: Vec::new() },
                 window,
                 cx,
             );
@@ -96,7 +96,7 @@ fn startup_information_keeps_the_new_thread_editor_expanded(cx: &mut TestAppCont
             view.update(
                 Update::Created {
                     epoch: fixture.initial_create.epoch,
-                    result: Ok(meta.clone()),
+                    result: Ok(meta.clone().into()),
                 },
                 window,
                 cx,
@@ -104,7 +104,7 @@ fn startup_information_keeps_the_new_thread_editor_expanded(cx: &mut TestAppCont
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: meta.clone(),
+                    session: meta.clone().into(),
                     events: vec![Event::new(
                         meta.id,
                         Cursor::from_raw(1),
@@ -166,7 +166,7 @@ fn expanding_an_initialized_unused_compact_thread_fills_the_editor_until_first_s
             view.update(
                 Update::Created {
                     epoch: fixture.initial_create.epoch,
-                    result: Ok(meta.clone()),
+                    result: Ok(meta.clone().into()),
                 },
                 window,
                 cx,
@@ -174,7 +174,7 @@ fn expanding_an_initialized_unused_compact_thread_fills_the_editor_until_first_s
             view.update(
                 Update::Snapshot {
                     epoch: view.epoch,
-                    session: meta.clone(),
+                    session: meta.clone().into(),
                     events: vec![Event::new(
                         meta.id,
                         Cursor::from_raw(1),
@@ -215,24 +215,25 @@ fn expanding_an_initialized_unused_compact_thread_fills_the_editor_until_first_s
         assert!(editor.size.height > body.size.height / 2.);
         while fixture.commands.try_recv().is_ok() {}
         window.click("send-message", cx);
+        let command = fixture.commands.try_recv().expect("prompt");
         assert!(
-            matches!(fixture.commands.try_recv(), Ok(Command::Prompt { session, text, attachments, .. })
-                if session == meta.id && text == draft && attachments[0].id == attachment.id)
+            matches!(&command, Command::Prompt { session, text, attachments, .. }
+                if *session == meta.id && text == &draft && attachments[0].id == attachment.id)
         );
+        let submission = submission::payload(command);
         fixture.view.update(cx, |view, cx| {
-            let accepted = receipt(2);
-            view.update(
-                Update::Sent {
-                    session: meta.id,
-                    text: draft.clone(),
-                    attachments: vec![attachment.clone()],
-                    result: Ok(accepted),
-                },
-                window,
-                cx,
-            );
+            let accepted = basr::model::TurnReceipt {
+                turn: submission.turn,
+                cursor: Cursor::from_raw(2),
+            };
+            view.update(submission::accepted_at(meta.id, &submission, 2), window, cx);
             for (cursor, kind) in [
-                (2, EventKind::TurnStarted { turn: accepted.turn }),
+                (
+                    2,
+                    EventKind::TurnStarted {
+                        turn: accepted.turn,
+                    },
+                ),
                 (
                     3,
                     EventKind::Acp(basr::acp::SessionUpdate::UserMessageChunk(
@@ -243,7 +244,9 @@ fn expanding_an_initialized_unused_compact_thread_fills_the_editor_until_first_s
                     4,
                     EventKind::TurnFinished {
                         turn: accepted.turn,
-                        result: Ok(basr::acp::PromptResponse::new(basr::acp::StopReason::EndTurn)),
+                        result: Ok(basr::acp::PromptResponse::new(
+                            basr::acp::StopReason::EndTurn,
+                        )),
                     },
                 ),
             ] {

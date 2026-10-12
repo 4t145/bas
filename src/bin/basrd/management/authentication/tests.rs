@@ -66,6 +66,39 @@ fn installed_node_entrypoint_survives_legacy_application_argument_replacement() 
         runtime: Some(super::super::runtime::Runtime {node: node.clone(),npm_cli: directory.path().join("npm-cli.js"),version:"1.0.0".into()}),
         dependencies: BTreeMap::new(), launch: None,
     };
+    let mut descriptor = serde_json::to_value(&record).expect("record");
+    descriptor["schema_version"] = 1.into();
+    let bytes = serde_json::to_vec(&descriptor).expect("descriptor");
+    let path = directory.path().join(basr::config::INSTALLATION_FILE);
+    let managed = basr::config::ManagedAgent {
+        id: spec.id.clone(),
+        installation: basr::config::InstallationRef::from_bytes(path.clone(), &bytes)
+            .expect("managed reference"),
+    };
+    std::fs::write(&path, &bytes).expect("descriptor file");
+    let legacy = method(Arguments::ReplaceApplication, None);
+    assert!(
+        invocation(&spec, None, &node, &legacy).is_err(),
+        "a byte-identical custom spec cannot inherit the managed login boundary"
+    );
+    let managed_plan = invocation(&spec, Some(&managed), &node, &legacy)
+        .expect("explicit managed provenance authorizes the boundary");
+    assert_eq!(
+        managed_plan.args,
+        [
+            entry.to_string_lossy().into_owned(),
+            "--auth-type=openai".into()
+        ]
+    );
+    let mut wrong = managed.clone();
+    wrong.id = "different-agent".into();
+    assert!(invocation(&spec, Some(&wrong), &node, &legacy).is_err());
+    let mut tampered = bytes.clone();
+    tampered.push(b'\n');
+    std::fs::write(&path, tampered).expect("tampered descriptor");
+    assert!(invocation(&spec, Some(&managed), &node, &legacy).is_err());
+    std::fs::remove_file(&path).expect("missing descriptor");
+    assert!(invocation(&spec, Some(&managed), &node, &legacy).is_err());
     let plan = build(
         &spec,
         &node,

@@ -232,13 +232,15 @@ fn immediate_queue_send_waits_for_cancel_and_completion_and_keeps_other_drafts_p
                 }),
             }, window, cx);
         });
-        let Command::Prompt { text, .. } = fixture.commands.try_recv().expect("send selected draft") else {
+        let command = fixture.commands.try_recv().expect("send selected draft");
+        let Command::Prompt { text, .. } = &command else {
             panic!("expected selected prompt");
         };
         assert_eq!(text, "B");
-        let accepted = receipt(2);
+        let submission = submission::payload(command);
+        let accepted = basr::model::TurnReceipt { turn: submission.turn, cursor: Cursor::from_raw(2) };
         fixture.view.update(cx, |view, cx| {
-            view.update(Update::Sent { session: meta.id, text: "B".into(), attachments: Vec::new(), result: Ok(accepted) }, window, cx);
+            view.update(submission::accepted_at(meta.id, &submission, 2), window, cx);
             view.update(Update::Event {
                 epoch: view.epoch,
                 event: Event::new(meta.id, Cursor::from_raw(3), EventKind::TurnFinished {

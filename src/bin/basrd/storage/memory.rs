@@ -4,20 +4,24 @@ use std::{
     sync::Mutex,
 };
 
-use basr::model::{Cursor, Event, SessionId, SessionMeta};
+use basr::model::{Cursor, Event, SessionId, SessionMeta, TurnId};
 use futures::future::BoxFuture;
 
 use super::{
-    Error, Page, ResumeData, Storage, StoredSession, check_page, validate_commit, validate_create,
+    Error, Page, PromptAcceptance, ResumeData, Storage, StoredSession, check_page,
+    validate_acceptance, validate_commit, validate_create,
 };
 
 struct Entry {
     session: StoredSession,
     events: VecDeque<Event>,
     evicted_through: Cursor,
+    acceptances: HashMap<TurnId, PromptAcceptance>,
 }
 
 /// In-process storage retaining at most `capacity` events per session.
+/// Acceptance receipts survive event eviction until session deletion: memory grows
+/// by one hash/receipt and map entry per accepted prompt, never by its payload.
 pub struct Memory {
     capacity: NonZeroUsize,
     sessions: Mutex<HashMap<SessionId, Entry>>,
@@ -51,6 +55,7 @@ impl Storage for Memory {
                     session: StoredSession { meta, resume },
                     events: VecDeque::new(),
                     evicted_through: Cursor::START,
+                    acceptances: HashMap::new(),
                 },
             );
             Ok(())
@@ -61,10 +66,17 @@ impl Storage for Memory {
         &'a self,
         meta: SessionMeta,
         events: &'a [Event],
+        acceptance: Option<PromptAcceptance>,
     ) -> BoxFuture<'a, Result<(), Error>> {
         Box::pin(async move {
             let mut sessions = self.sessions.lock().expect("storage lock is not poisoned");
             let entry = sessions.get_mut(&meta.id).ok_or(Error::NotFound(meta.id))?;
+            if let Some(acceptance) = acceptance {
+                if entry.acceptances.contains_key(&acceptance.receipt.turn) {
+                    return Err(Error::SubmissionExists(acceptance.receipt.turn));
+                }
+                validate_acceptance(events, acceptance)?;
+            }
             validate_commit(&entry.session.meta, &meta, events)?;
             for event in events {
                 if entry.events.len() == self.capacity.get() {
@@ -77,7 +89,24 @@ impl Storage for Memory {
                 entry.events.push_back(event.clone());
             }
             entry.session.meta = meta;
+            if let Some(acceptance) = acceptance {
+                entry
+                    .acceptances
+                    .insert(acceptance.receipt.turn, acceptance);
+            }
             Ok(())
+        })
+    }
+
+    fn acceptance(
+        &self,
+        session: SessionId,
+        turn: TurnId,
+    ) -> BoxFuture<'_, Result<Option<PromptAcceptance>, Error>> {
+        Box::pin(async move {
+            let sessions = self.sessions.lock().expect("storage lock is not poisoned");
+            let entry = sessions.get(&session).ok_or(Error::NotFound(session))?;
+            Ok(entry.acceptances.get(&turn).copied())
         })
     }
 

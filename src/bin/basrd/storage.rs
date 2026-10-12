@@ -11,7 +11,7 @@ mod memory;
 pub use localdb::LocalDb;
 pub use memory::Memory;
 
-use basr::model::{Cursor, Event, SessionId, SessionMeta};
+use basr::model::{Cursor, Event, SessionId, SessionMeta, TurnId, TurnReceipt};
 use futures::future::BoxFuture;
 
 #[cfg(test)]
@@ -58,6 +58,14 @@ pub struct Page {
     pub next: Option<Cursor>,
 }
 
+/// Small acceptance ledger entry retained until its session is deleted,
+/// independently of history eviction. It never stores a second prompt payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PromptAcceptance {
+    pub receipt: TurnReceipt,
+    pub fingerprint: [u8; 32],
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("session {0} does not exist")]
@@ -66,6 +74,8 @@ pub enum Error {
     AlreadyExists(SessionId),
     #[error("invalid commit: {0}")]
     InvalidCommit(&'static str),
+    #[error("submission {0} is already registered")]
+    SubmissionExists(TurnId),
     #[error("history page limit must be greater than zero")]
     EmptyPage,
     #[error("cursor {requested} is ahead of latest {latest}")]
@@ -114,7 +124,17 @@ pub trait Storage: Send + Sync {
         &'a self,
         meta: SessionMeta,
         events: &'a [Event],
+        acceptance: Option<PromptAcceptance>,
     ) -> BoxFuture<'a, Result<(), Error>>;
+    /// Reads a registered submission without changing history or starting a backend.
+    ///
+    /// # Errors
+    /// Fails for a missing session, malformed records or storage I/O failures.
+    fn acceptance(
+        &self,
+        session: SessionId,
+        turn: TurnId,
+    ) -> BoxFuture<'_, Result<Option<PromptAcceptance>, Error>>;
     /// Replaces private backend data when it becomes available after session creation.
     ///
     /// # Errors
@@ -203,6 +223,18 @@ fn check_page(after: Option<Cursor>, limit: usize, latest: Cursor) -> Result<(),
         && requested > latest
     {
         return Err(Error::Future { requested, latest });
+    }
+    Ok(())
+}
+
+fn validate_acceptance(events: &[Event], acceptance: PromptAcceptance) -> Result<(), Error> {
+    if acceptance.receipt.cursor == Cursor::START
+        || !events.iter().any(|event| {
+            event.cursor == acceptance.receipt.cursor
+                && matches!(event.kind, basr::model::EventKind::TurnStarted { turn } if turn == acceptance.receipt.turn)
+        })
+    {
+        return Err(Error::InvalidCommit("acceptance requires its TurnStarted event"));
     }
     Ok(())
 }

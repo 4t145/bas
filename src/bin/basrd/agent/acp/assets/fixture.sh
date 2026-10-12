@@ -180,7 +180,7 @@ while IFS= read -r request; do
             elif [ "$BASR_FIXTURE_MODE" = prompt_error ]; then
                 printf '\n   \n'
                 printf '%s\n' '{"jsonrpc":"2.0","method":"fixture/unknown","params":{}}'
-                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"fixture prompt rejected"}}\n' "$id"
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"fixture prompt rejected","data":{"field":"prompt","retryable":true}}}\n' "$id"
                 BASR_FIXTURE_MODE=normal
             elif [ "$BASR_FIXTURE_MODE" = interactive_permission ]; then
                 printf '%s\n' '{"jsonrpc":"2.0","id":"permission","method":"session/request_permission","params":{"sessionId":"fixture","toolCall":{"toolCallId":"execute","title":"run command","kind":"execute","status":"pending","rawInput":{"command":"pwd"}},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"reject-once","name":"Reject once","kind":"reject_once"}]}}'
@@ -242,6 +242,10 @@ while IFS= read -r request; do
             ;;
         *'"method":"session/set_config_option"'*)
             printf '%s\n' "$request" > "$BASR_FIXTURE_PID.config"
+            if [ "$BASR_FIXTURE_MODE" = auth_operation ]; then
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Sign in required","data":{"reason":"expired"}}}\n' "$id"
+                continue
+            fi
             case "$request" in
                 *'"value":"invalid"'*)
                     printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"invalid config value","data":{"configId":"model"}}}\n' "$id"
@@ -258,6 +262,10 @@ while IFS= read -r request; do
             ;;
         *'"method":"session/set_mode"'*)
             printf '%s\n' "$request" > "$BASR_FIXTURE_PID.mode"
+            if [ "$BASR_FIXTURE_MODE" = auth_operation ]; then
+                printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Sign in required","data":{"reason":"expired"}}}\n' "$id"
+                continue
+            fi
             printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
             if [ "$BASR_FIXTURE_MODE" = mode_notification ]; then
                 printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"current_mode_update","currentModeId":"code"}}}'

@@ -10,6 +10,12 @@ impl Workspace {
             .is_some_and(outbox::SessionOutbox::sending)
     }
 
+    pub(super) fn composition_locked(&self, session: SessionId) -> bool {
+        self.outboxes
+            .get(&session)
+            .is_some_and(outbox::SessionOutbox::composition_locked)
+    }
+
     pub(super) fn enqueue_draft(
         &mut self,
         session: SessionId,
@@ -17,7 +23,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.archive_blocked(session) {
+        if self.archive_blocked(session) || !self.runtime_healthy(session) {
             return;
         }
         let restored = self
@@ -45,7 +51,7 @@ impl Workspace {
         }
         let sessions = self.sessions.clone();
         for session in sessions {
-            if self.archive_blocked(session.id) {
+            if self.archive_blocked(session.id) || !self.runtime_healthy(session.id) {
                 continue;
             }
             let allowed =
@@ -54,11 +60,12 @@ impl Workspace {
                 .outboxes
                 .get_mut(&session.id)
                 .and_then(|outbox| outbox.advance(&session, allowed));
-            if let Some(outbox::Action::Send(draft)) = action {
+            if let Some(send) = action {
                 self.command(Command::Prompt {
                     session: session.id,
-                    text: draft.text,
-                    attachments: draft.attachments,
+                    turn: send.turn,
+                    text: send.draft.text,
+                    attachments: send.draft.attachments,
                     capabilities: session
                         .initialization
                         .as_ref()
@@ -154,6 +161,7 @@ impl Workspace {
 
     fn queue_send_ready(&self, session: SessionId) -> bool {
         self.active == Some(session)
+            && self.runtime_healthy(session)
             && self.approval_error.is_none()
             && self.connection_status() == status::ConnectionStatus::Connected
             && self.stream == StreamState::Live
@@ -243,7 +251,7 @@ impl Workspace {
     pub(super) fn render_queue_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let session = self.active?;
         let outbox = self.outboxes.get(&session)?;
-        if outbox.len() == 0 {
+        if outbox.len() == 0 && outbox.unknown().is_none() {
             return None;
         }
         let editing = outbox.editing();
@@ -262,6 +270,42 @@ impl Workspace {
                         .border_1()
                         .border_color(cx.theme().border)
                         .bg(cx.theme().muted.opacity(0.35))
+                        .when(outbox.unknown().is_some(), |panel| {
+                            panel.child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_3()
+                                    .py_1()
+                                    .child(caption(crate::i18n::tr!("submission-unknown"), cx))
+                                    .child(
+                                        Button::new("query-submission")
+                                            .ghost()
+                                            .xsmall()
+                                            .label(crate::i18n::tr!("submission-query"))
+                                            .disabled(outbox.resolving())
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.resolve_submission(session, false, cx)
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("retry-submission")
+                                            .ghost()
+                                            .xsmall()
+                                            .label(crate::i18n::tr!("submission-retry"))
+                                            .disabled(
+                                                outbox.resolving()
+                                                    || self.archive_blocked(session)
+                                                    || !self.runtime_healthy(session),
+                                            )
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.resolve_submission(session, true, cx)
+                                            })),
+                                    ),
+                            )
+                        })
                         .child(
                             div()
                                 .flex()

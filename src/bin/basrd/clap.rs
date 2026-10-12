@@ -68,7 +68,11 @@ impl Args {
     pub fn config(&self) -> Result<Config> {
         let (agents, catalog_source) = if let Some(agents) = &self.agents {
             (
-                config::parse_agents(agents).context("invalid agent catalog")?,
+                config::parse_agents(agents)
+                    .context("invalid agent catalog")?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
                 None,
             )
         } else {

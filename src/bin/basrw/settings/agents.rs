@@ -6,9 +6,9 @@ pub(crate) mod check;
 mod installation;
 pub(crate) use crate::authentication::terminal::run_helper_if_requested;
 use basr::config::{
-    Document, Store,
-    agent::{AgentSpec, Command, Kind, ValidationError},
-    validate_agents,
+    AgentRegistration, Document, Store,
+    agent::{AgentSpec, Command, Kind},
+    validate_registrations,
 };
 use gpui_kit::{
     App, Context, Entity, Render, ScrollHandle, Subscription, Task, TestSupportExt, Window,
@@ -136,11 +136,13 @@ enum DraftError {
     #[error("{}", crate::i18n::tr!("agent-invalid-grace", error = .0.to_string()))]
     Grace(#[source] std::num::ParseIntError),
     #[error("{0}")]
-    Validation(#[from] ValidationError),
+    Validation(#[from] basr::config::RegistrationError),
     #[error("{0}")]
     Store(#[from] basr::config::Error),
     #[error("{}", crate::i18n::tr!("agent-local-required"))]
     ReadOnly,
+    #[error("{}", crate::i18n::tr!("auth-config-changed"))]
+    Changed,
 }
 
 pub(super) struct Agents {
@@ -151,6 +153,7 @@ pub(super) struct Agents {
     deleting: bool,
     form: Form<Entity<InputState>>,
     message: String,
+    registration_errors: String,
     /// Section the sidebar asked to reveal; consumed by the next render.
     pub(super) scroll_to: Option<usize>,
     scroll: ScrollHandle,
@@ -159,6 +162,7 @@ pub(super) struct Agents {
     show_installation: bool,
     registry: Option<basr::management::Catalog>,
     registry_loading: bool,
+    pending_reveal: Option<String>,
     registry_task: Option<Task<()>>,
     operations: HashMap<String, installation::Operation>,
     registry_search: Entity<InputState>,
@@ -208,6 +212,7 @@ impl Agents {
             deleting: false,
             form,
             message: String::new(),
+            registration_errors: String::new(),
             scroll_to: None,
             scroll: ScrollHandle::new(),
             checks: HashMap::new(),
@@ -215,6 +220,7 @@ impl Agents {
             show_installation: true,
             registry: None,
             registry_loading: false,
+            pending_reveal: None,
             registry_task: None,
             operations: HashMap::new(),
             registry_search,
@@ -230,8 +236,34 @@ impl Agents {
     fn catalog(&self) -> Vec<AgentSpec> {
         self.document
             .as_ref()
-            .map(|document| document.settings.daemon.agents.clone())
+            .map(|document| {
+                document
+                    .settings
+                    .daemon
+                    .agents
+                    .iter()
+                    .filter_map(AgentRegistration::as_custom)
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
+    }
+
+    fn accept_document(&mut self, document: Document) {
+        self.registration_errors = document
+            .settings
+            .daemon
+            .agents
+            .iter()
+            .filter_map(|registration| {
+                registration
+                    .resolve()
+                    .err()
+                    .map(|error| format!("{}: {error}", registration.id()))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.document = Some(document);
     }
 
     fn display_catalog(&self) -> Vec<AgentSpec> {
@@ -241,6 +273,7 @@ impl Agents {
             return catalog
                 .entries
                 .iter()
+                .filter(|entry| entry.source != basr::management::Source::Registry)
                 .filter_map(|entry| entry.spec.clone())
                 .collect();
         }
@@ -248,6 +281,7 @@ impl Agents {
     }
 
     pub(super) fn open_installation(&mut self, cx: &mut Context<Self>) {
+        self.pending_reveal = None;
         self.show_installation = true;
         self.scroll_to = Some(0);
         self.refresh_registry(false, cx);
@@ -255,6 +289,7 @@ impl Agents {
     }
 
     pub(super) fn show_section(&mut self, section: Option<usize>, cx: &mut Context<Self>) {
+        self.pending_reveal = None;
         self.show_installation = section
             .is_none_or(|index| index >= self.display_catalog().len() && self.draft.is_none());
         self.scroll_to = Some(if self.show_installation {
@@ -267,6 +302,49 @@ impl Agents {
     }
 
     pub(super) fn reveal(&mut self, id: &str, cx: &mut Context<Self>) -> Option<usize> {
+        self.pending_reveal = None;
+        let managed = self.document.as_ref().and_then(|document| {
+            document
+                .settings
+                .daemon
+                .agents
+                .iter()
+                .find(|registration| registration.id().as_str() == id)
+                .and_then(AgentRegistration::managed)
+                .cloned()
+        });
+        if let Some(managed) = managed {
+            self.show_installation = true;
+            self.scroll_to = Some(0);
+            if self.registry.is_none() && !self.local_editable {
+                // Recognize ownership immediately, but wait for the daemon's profile check
+                // before launching a connection/authentication probe.
+                self.pending_reveal = Some(id.to_owned());
+                self.refresh_registry(false, cx);
+            } else {
+                match managed.resolve() {
+                    Ok(spec) => self.start_check(spec, true, cx),
+                    Err(error) => self.message = error.to_string(),
+                }
+            }
+            cx.notify();
+            return Some(0);
+        }
+        if let Some(entry) = self.registry.as_ref().and_then(|catalog| {
+            catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == id && entry.source == basr::management::Source::Registry)
+        }) {
+            let spec = entry.spec.clone();
+            self.show_installation = true;
+            self.scroll_to = Some(0);
+            if let Some(spec) = spec {
+                self.start_check(spec, true, cx);
+            }
+            cx.notify();
+            return Some(0);
+        }
         let entry = self
             .catalog()
             .into_iter()
@@ -463,7 +541,7 @@ impl Agents {
         } else {
             match self.store.load() {
                 Ok(document) => {
-                    self.document = Some(document);
+                    self.accept_document(document);
                     self.draft = None;
                     self.selected = None;
                     self.deleting = false;
@@ -495,6 +573,14 @@ impl Agents {
     ) {
         if !self.local_editable {
             self.message = crate::i18n::tr!("agent-edit-mismatch").into();
+        } else if selected.is_some_and(|index| self.catalog().get(index) != Some(&spec))
+            || self.document.as_ref().is_some_and(|document| {
+                document.settings.daemon.agents.iter().any(|registration| {
+                    registration.id() == &spec.id && registration.managed().is_some()
+                })
+            })
+        {
+            self.message = DraftError::Changed.to_string();
         } else if self.dirty(cx) {
             self.message = crate::i18n::tr!("agent-save-before-switch").into();
         } else {
@@ -516,7 +602,7 @@ impl Agents {
     ///
     /// # Errors
     /// Rejects missing editor state, malformed form values, and invalid catalogs.
-    fn candidate(&self, cx: &App) -> Result<Vec<AgentSpec>, DraftError> {
+    fn candidate(&self, cx: &App) -> Result<Vec<AgentRegistration>, DraftError> {
         if !self.local_editable {
             return Err(DraftError::ReadOnly);
         }
@@ -529,8 +615,22 @@ impl Agents {
             .agents
             .clone();
         let mut spec = self.draft.clone().ok_or(DraftError::NotSelected)?;
+        // Display indices address custom entries only. Never use them as registration indices.
+        let selected = self
+            .selected
+            .map(|index| {
+                catalog
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, registration)| registration.as_custom().is_some())
+                    .nth(index)
+                    .filter(|(_, registration)| registration.as_custom() == Some(&spec))
+                    .map(|(index, _)| index)
+                    .ok_or(DraftError::Changed)
+            })
+            .transpose()?;
         if self.deleting {
-            catalog.remove(self.selected.ok_or(DraftError::UnsavedDeletion)?);
+            catalog.remove(selected.ok_or(DraftError::UnsavedDeletion)?);
         } else {
             let form = self.form.values(cx);
             spec.id = form.id.into();
@@ -549,13 +649,13 @@ impl Agents {
                 let millis = form.grace.parse::<u64>().map_err(DraftError::Grace)?;
                 spec.cancellation_grace = Duration::from_millis(millis);
             }
-            if let Some(index) = self.selected {
-                catalog[index] = spec;
+            if let Some(index) = selected {
+                catalog[index] = spec.into();
             } else {
-                catalog.push(spec);
+                catalog.push(spec.into());
             }
         }
-        validate_agents(&catalog)?;
+        validate_registrations(&catalog)?;
         Ok(catalog)
     }
 
@@ -579,8 +679,16 @@ impl Agents {
                 self.message = crate::i18n::tr!("settings-saved").into();
                 self.notify_agent_change(None, cx);
                 let catalog = self.catalog();
-                self.checks
-                    .retain(|id, _| catalog.iter().any(|spec| spec.id == *id));
+                if let Some(document) = &self.document {
+                    self.checks.retain(|id, _| {
+                        document
+                            .settings
+                            .daemon
+                            .agents
+                            .iter()
+                            .any(|registration| registration.id() == id)
+                    });
+                }
                 if !deleting && let Some(spec) = catalog.get(index).cloned() {
                     if connected {
                         // Changing an advanced value does not change the checked transport.
@@ -1024,6 +1132,15 @@ impl Render for Agents {
                                 .text_size(crate::ui::SMALL)
                                 .text_color(cx.theme().muted_foreground)
                                 .child(self.message.clone()),
+                        )
+                    })
+                    .when(!self.registration_errors.is_empty(), |header| {
+                        header.child(
+                            div()
+                                .id("agents-registration-errors")
+                                .test_support()
+                                .text_size(crate::ui::SMALL)
+                                .child(self.registration_errors.clone()),
                         )
                     }),
             )

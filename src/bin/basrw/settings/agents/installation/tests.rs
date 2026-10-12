@@ -58,6 +58,139 @@ fn catalog(path: std::path::PathBuf) -> Catalog {
     }
 }
 
+#[cfg(feature = "gui-tests")]
+#[gpui_kit::test]
+fn managed_registration_keeps_registry_actions_without_an_advanced_editor(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use basr::config::{AgentSpec, Store, agent::Command};
+    use gpui_kit::{component::Root, px, size, test::TestWindowExt};
+    let directory = tempfile::tempdir().expect("profile");
+    let path = directory.path().join("settings.json");
+    let store = Store::at(path.clone());
+    let spec = AgentSpec::acp("codex", Command::new("/managed/acp", []));
+    let registration = super::super::tests::managed_fixture(directory.path(), &spec);
+    let mut document = store.load().expect("document");
+    store
+        .save_agents(&mut document, vec![registration.clone()])
+        .expect("managed");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::init_default(cx);
+    });
+    let mut view = None;
+    let window = cx.open_window(size(px(960.), px(900.)), |window, cx| {
+        let page = cx.new(|cx| Agents::new(store.clone(), window, cx));
+        view = Some(page.clone());
+        Root::new(page, window, cx)
+    });
+    let view = view.expect("page");
+    cx.update_window(window.into(), |_, window, cx| {
+        let mut registry = catalog(path.clone());
+        registry.entries.truncate(1);
+        registry.entries[0].icon.clear();
+        registry.entries[0].spec = Some(spec.clone());
+        registry.entries[0].installed_version = Some(registry.entries[0].version.clone());
+        registry.entries[0].status = Status::Installed;
+        view.update(cx, |page, cx| {
+            page.local_editable = false;
+            page.registry_loading = true;
+            assert_eq!(page.reveal("codex", cx), Some(0));
+            assert_eq!(page.pending_reveal.as_deref(), Some("codex"));
+            assert!(
+                page.checks.is_empty(),
+                "do not probe before verifying the profile"
+            );
+            assert!(page.show_installation);
+            let mut other_profile = registry.clone();
+            other_profile.settings_path = Some(directory.path().join("other-settings.json"));
+            page.apply_catalog(other_profile, true, cx);
+            assert!(page.pending_reveal.is_none());
+            assert!(
+                page.checks.is_empty(),
+                "another profile must not execute the pending probe"
+            );
+            assert!(
+                page.display_catalog().is_empty(),
+                "managed is never an advanced entry"
+            );
+            page.registry = None;
+            assert_eq!(page.reveal("codex", cx), Some(0));
+            page.registry_loading = false;
+            page.apply_catalog(registry.clone(), true, cx);
+            assert!(page.pending_reveal.is_none());
+            assert!(page.checks.contains_key(&spec.id));
+            assert!(page.show_installation);
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.find("agents-registry-check-codex").visible());
+        assert!(window.find("agents-remove-codex").visible());
+        assert!(window.try_find("agents-edit-0").is_none());
+        view.update(cx, |page, cx| {
+            page.apply_check(
+                &spec,
+                super::super::check::Status::AuthenticationRequired {
+                    program: "/managed/acp".into(),
+                    methods: vec![basr::authentication::Method {
+                        id: "login".into(),
+                        name: "Registry account".into(),
+                        description: None,
+                        raw: serde_json::json!({"id":"login"}),
+                        source: basr::authentication::Source::Initialize,
+                        execution: basr::authentication::Execution::Agent,
+                    }],
+                },
+            );
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(
+            window.find("authentication-method-0").visible(),
+            "login stays on the registry card"
+        );
+        registry.entries[0].version = "next-version".into();
+        view.update(cx, |page, cx| {
+            page.apply_catalog(registry.clone(), true, cx);
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(
+            window.find("agents-install-codex").visible(),
+            "update remains available"
+        );
+        registry.entries[0].version.clear();
+        view.update(cx, |page, cx| {
+            page.apply_catalog(registry, true, cx);
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(
+            window.try_find("agents-install-codex").is_none(),
+            "unknown latest version is not an update"
+        );
+        assert!(window.find("agents-registry-check-codex").visible());
+        window.click("agents-configure", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("agents-edit-0").is_none());
+        assert!(window.try_find("agents-delete").is_none());
+        view.update(cx, |page, _| {
+            page.local_editable = false;
+            assert!(page.display_catalog().is_empty());
+        });
+        assert_eq!(
+            store
+                .load()
+                .expect("unchanged ownership")
+                .settings
+                .daemon
+                .agents,
+            vec![registration]
+        );
+    })
+    .expect("managed registry actions");
+}
+
 #[test]
 fn local_settings_must_match_the_daemon_file() {
     let directory = tempfile::tempdir().expect("fixture directory");
@@ -309,7 +442,7 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
     let spec = AgentSpec::acp("codex", Command::new("/fixture/agent", []));
     let mut document = store.load().expect("fixture document");
     store
-        .save_agents(&mut document, vec![spec.clone()])
+        .save_agents(&mut document, vec![spec.clone().into()])
         .expect("fixture agent configuration");
     let method = Method {
         id: "terminal".into(),

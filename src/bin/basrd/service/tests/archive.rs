@@ -2,6 +2,54 @@ use super::*;
 use basr::{acp, model::SessionId};
 
 #[tokio::test]
+async fn archive_reply_keeps_its_committed_snapshot_when_a_restore_overtakes_it() {
+    let registry = registry(100);
+    let session = create(&registry).await;
+    let service = Service::new(registry.clone());
+    let mut events = session
+        .try_attach(crate::session::AttachOptions {
+            cursor: Some(session.meta().revision),
+            replay: 0,
+        })
+        .await
+        .expect("attach before archive");
+    let mut archive = Box::pin(service.set_archived(Request::new(pb::SetArchivedRequest {
+        session: session.id().to_string(),
+        archived: true,
+    })));
+    assert!(futures::poll!(&mut archive).is_pending());
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("archive commits independently of its response waiter")
+        .expect("committed archive event");
+    assert!(matches!(
+        event.kind,
+        basr::model::EventKind::ArchiveChanged { archived: true }
+    ));
+    let restored = service
+        .set_archived(Request::new(pb::SetArchivedRequest {
+            session: session.id().to_string(),
+            archived: false,
+        }))
+        .await
+        .expect("restore")
+        .into_inner()
+        .session
+        .expect("restored snapshot");
+    let archived = archive
+        .await
+        .expect("earlier archive response")
+        .into_inner()
+        .session
+        .expect("archive snapshot");
+    assert!(archived.archived);
+    assert!(!restored.archived);
+    assert!(archived.revision < restored.revision);
+    assert_eq!(archived.runtime, restored.runtime);
+    registry.shutdown().await;
+}
+
+#[tokio::test]
 async fn archive_rpc_filters_lists_but_preserves_identity_history_and_delete() {
     use tokio_stream::wrappers::TcpListenerStream;
 
@@ -107,10 +155,16 @@ async fn archive_rpc_filters_lists_but_preserves_identity_history_and_delete() {
     drop(attach);
     let prompt = acp::PromptRequest::new(id.clone(), vec!["hello".into()]);
     let error = service
-        .prompt(Request::new((&prompt).into()))
+        .prompt(Request::new(
+            (&basr::model::PromptSubmission::new(prompt.clone())).into(),
+        ))
         .await
-        .expect_err("blocked");
-    assert_eq!(error.code(), Code::FailedPrecondition);
+        .expect("explicit rejection")
+        .into_inner();
+    assert!(
+        matches!(error.outcome, Some(pb::prompt_submission_response::Outcome::Rejected(rejection))
+        if rejection.kind == pb::PromptRejectionKind::Archived as i32)
+    );
     assert_eq!(session.meta().revision, Cursor::from_raw(archived.revision));
     service
         .cancel(Request::new(
@@ -131,7 +185,9 @@ async fn archive_rpc_filters_lists_but_preserves_identity_history_and_delete() {
     assert_eq!(restored.id, id);
     assert!(!restored.archived);
     service
-        .prompt(Request::new((&prompt).into()))
+        .prompt(Request::new(
+            (&basr::model::PromptSubmission::new(prompt.clone())).into(),
+        ))
         .await
         .expect("recover prompt");
     service

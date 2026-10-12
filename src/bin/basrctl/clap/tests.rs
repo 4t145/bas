@@ -67,3 +67,61 @@ fn remove_help_describes_permanent_not_recoverable_removal() {
     assert!(help.contains("Permanently stop"));
     assert!(help.contains("not recoverable archive"));
 }
+
+#[test]
+fn prompt_submission_is_optional_and_retry_id_is_preserved() {
+    let turn = basr::model::TurnId::new();
+    let turn_text = turn.to_string();
+    let parsed = Args::try_parse_from([
+        "basrctl",
+        "prompt",
+        "session",
+        "--submission",
+        &turn_text,
+        "hello",
+        "world",
+    ])
+    .expect("explicit retry");
+    assert!(matches!(
+        parsed.command,
+        Command::Prompt { submission: Some(id), text, .. }
+            if id == turn && text == ["hello", "world"]
+    ));
+    let parsed =
+        Args::try_parse_from(["basrctl", "prompt", "session", "hello"]).expect("new submission");
+    assert!(matches!(
+        parsed.command,
+        Command::Prompt {
+            submission: None,
+            ..
+        }
+    ));
+    assert!(
+        Args::try_parse_from([
+            "basrctl",
+            "prompt",
+            "session",
+            "--submission",
+            "not-a-turn",
+            "hello",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn prompt_status_requires_session_and_turn() {
+    let session = basr::model::SessionId::new();
+    let turn = basr::model::TurnId::new();
+    let parsed = Args::try_parse_from([
+        "basrctl",
+        "prompt-status",
+        &session.to_string(),
+        &turn.to_string(),
+    ])
+    .expect("read-only status command");
+    assert!(matches!(parsed.command,
+        Command::PromptStatus { session: id, turn: submission } if id == session && submission == turn
+    ));
+    assert!(Args::try_parse_from(["basrctl", "prompt-status", &session.to_string()]).is_err());
+}

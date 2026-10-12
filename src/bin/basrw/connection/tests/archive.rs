@@ -15,8 +15,8 @@ async fn catalog_requests_and_keeps_archived_metadata() {
         panic!("expected full catalog");
     };
     assert_eq!(catalog.sessions.len(), 1);
-    assert_eq!(catalog.sessions[0].id, fixture.session);
-    assert!(catalog.sessions[0].archived);
+    assert_eq!(catalog.sessions[0].meta.id, fixture.session);
+    assert!(catalog.sessions[0].meta.archived);
 }
 
 #[tokio::test]

@@ -90,7 +90,7 @@ fn clipboard_read_survives_initializing_its_current_draft(cx: &mut TestAppContex
             view.update(
                 Update::Created {
                     epoch: fixture.initial_create.epoch,
-                    result: Ok(session.clone()),
+                    result: Ok(session.clone().into()),
                 },
                 window,
                 cx,

@@ -36,17 +36,57 @@ impl Client {
             .max_encoding_message_size(super::MAX_MESSAGE_SIZE)
     }
 
-    /// Sends a complete ACP prompt; completion arrives as a TurnFinished event.
+    /// Submit once using a client-owned identity. This method never resends.
     /// # Errors
-    /// Returns the daemon's rejection or a transport failure.
-    pub async fn prompt_acp(
+    /// A transport or malformed-response error leaves acceptance unknown.
+    /// Explicit rejection is a successful RPC with a Rejected outcome.
+    pub async fn submit_prompt(
         &mut self,
-        request: &crate::acp::PromptRequest,
-    ) -> Result<pb::TurnAccepted, tonic::Status> {
-        Ok(self
-            .prompt(pb::AcpPayload::from(request))
+        submission: &crate::model::PromptSubmission,
+    ) -> Result<crate::model::PromptSubmissionOutcome, tonic::Status> {
+        let outcome: crate::model::PromptSubmissionOutcome = self
+            .prompt(pb::PromptSubmission::from(submission))
             .await?
-            .into_inner())
+            .into_inner()
+            .try_into()
+            .map_err(|error: super::Error| tonic::Status::data_loss(error.to_string()))?;
+        if let crate::model::PromptSubmissionOutcome::Accepted(receipt) = &outcome
+            && receipt.turn != submission.turn
+        {
+            return Err(tonic::Status::data_loss(
+                "acceptance belongs to another submission",
+            ));
+        }
+        Ok(outcome)
+    }
+
+    /// Look up acceptance without dispatching or restoring an agent.
+    ///
+    /// # Errors
+    /// Returns transport, missing-session or malformed-response errors.
+    /// `None` means no record was observed, not a definitive rejection.
+    pub async fn prompt_acceptance(
+        &mut self,
+        session: crate::model::SessionId,
+        turn: crate::model::TurnId,
+    ) -> Result<Option<crate::model::TurnReceipt>, tonic::Status> {
+        let receipt: Option<crate::model::TurnReceipt> = self
+            .get_prompt_acceptance(pb::PromptAcceptanceRequest {
+                session: session.to_string(),
+                turn: turn.to_string(),
+            })
+            .await?
+            .into_inner()
+            .accepted
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(|error: super::Error| tonic::Status::data_loss(error.to_string()))?;
+        if receipt.is_some_and(|receipt| receipt.turn != turn) {
+            return Err(tonic::Status::data_loss(
+                "acceptance belongs to another submission",
+            ));
+        }
+        Ok(receipt)
     }
 
     /// Cancels the active ACP turn.
