@@ -1,6 +1,6 @@
 //! Process tests for configuration selection and graceful shutdown with live RPCs.
 
-use basr::service::{Client, pb};
+use bas::service::{Client, pb};
 use std::{process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines},
@@ -26,20 +26,20 @@ mod management;
 mod storage;
 
 fn command() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_basrd"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bas"));
     for key in [
-        "BASRD_LISTEN",
-        "BASRD_AGENTS",
-        "BASRD_AGENTS_FILE",
-        "BASR_SETTINGS_FILE",
-        "BASRD_NOTIFY",
-        "BASRD_HISTORY",
-        "BASRD_STORAGE",
-        "BASRD_LOCALDB_PATH",
-        "BASRD_BUFFER",
-        "BASRD_STARTUP_TIMEOUT",
-        "BASRD_PERMISSIONS",
-        "BASRD_LOG_BACKEND",
+        "BAS_LISTEN",
+        "BAS_AGENTS",
+        "BAS_AGENTS_FILE",
+        "BAS_SETTINGS_FILE",
+        "BAS_NOTIFY",
+        "BAS_HISTORY",
+        "BAS_STORAGE",
+        "BAS_LOCALDB_PATH",
+        "BAS_BUFFER",
+        "BAS_STARTUP_TIMEOUT",
+        "BAS_PERMISSIONS",
+        "BAS_LOG_BACKEND",
         "RUST_LOG",
         "JOURNAL_STREAM",
         "NOTIFY_SOCKET",
@@ -48,8 +48,8 @@ fn command() -> Command {
         command.env_remove(key);
     }
     command
-        .env("BASRD_AGENTS", "embedded")
-        .env("BASRD_STORAGE", "memory")
+        .env("BAS_AGENTS", "embedded")
+        .env("BAS_STORAGE", "memory")
         .kill_on_drop(true)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -84,7 +84,7 @@ impl Daemon {
                     panic!("daemon exited before readiness: {error}");
                 };
                 startup_logs.push(line.clone());
-                if line.contains("serving the basr.v1.Basr service") {
+                if line.contains("serving the bas.v1.Bas service") {
                     return line
                         .split("address=")
                         .nth(1)
@@ -168,7 +168,7 @@ async fn auto_logging_rejects_inherited_nonmatching_journal_streams() {
 #[tokio::test]
 async fn daemon_discovers_the_user_agent_catalog() {
     let directory = tempfile::tempdir().expect("config directory");
-    let config = directory.path().join("basr");
+    let config = directory.path().join("bas");
     std::fs::create_dir(&config).expect("create config directory");
     std::fs::write(
         config.join("agents.json"),
@@ -177,7 +177,7 @@ async fn daemon_discovers_the_user_agent_catalog() {
     .expect("write catalog");
     let mut command = command();
     command
-        .env_remove("BASRD_AGENTS")
+        .env_remove("BAS_AGENTS")
         .env("XDG_CONFIG_HOME", directory.path())
         .args([
             "--listen",
@@ -205,15 +205,15 @@ async fn daemon_discovers_the_user_agent_catalog() {
 async fn cli_overrides_invalid_environment_and_shutdown_closes_live_streams() {
     let mut command = command();
     for key in [
-        "BASRD_LISTEN",
-        "BASRD_AGENTS",
-        "BASRD_NOTIFY",
-        "BASRD_HISTORY",
-        "BASRD_STORAGE",
-        "BASRD_BUFFER",
-        "BASRD_STARTUP_TIMEOUT",
-        "BASRD_PERMISSIONS",
-        "BASRD_LOG_BACKEND",
+        "BAS_LISTEN",
+        "BAS_AGENTS",
+        "BAS_NOTIFY",
+        "BAS_HISTORY",
+        "BAS_STORAGE",
+        "BAS_BUFFER",
+        "BAS_STARTUP_TIMEOUT",
+        "BAS_PERMISSIONS",
+        "BAS_LOG_BACKEND",
         "RUST_LOG",
     ] {
         command.env(key, "invalid");
@@ -262,9 +262,9 @@ async fn cli_overrides_invalid_environment_and_shutdown_closes_live_streams() {
     daemon
         .client
         .prompt(pb::PromptSubmission::from(
-            &basr::model::PromptSubmission::new(basr::acp::PromptRequest::new(
+            &bas::model::PromptSubmission::new(bas::acp::PromptRequest::new(
                 session.id,
-                vec![basr::acp::ContentBlock::from("long turn".repeat(100))],
+                vec![bas::acp::ContentBlock::from("long turn".repeat(100))],
             )),
         ))
         .await
@@ -302,7 +302,7 @@ async fn required_notifications_fail_startup_while_auto_allows_headless_use() {
     required
         .env(
             "DBUS_SESSION_BUS_ADDRESS",
-            "unix:path=/nonexistent/basr-test-bus",
+            "unix:path=/nonexistent/bas-test-bus",
         )
         .args(["--notify", "always", "--listen", "127.0.0.1:0"]);
     let output = tokio::time::timeout(TIMEOUT, required.output())
@@ -315,7 +315,7 @@ async fn required_notifications_fail_startup_while_auto_allows_headless_use() {
     automatic
         .env(
             "DBUS_SESSION_BUS_ADDRESS",
-            "unix:path=/nonexistent/basr-test-bus",
+            "unix:path=/nonexistent/bas-test-bus",
         )
         .args([
             "--notify",

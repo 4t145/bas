@@ -86,7 +86,7 @@ fn broken_legacy_is_not_silently_discarded() {
         ("agents.json", "[]"),
         (
             "agents.json",
-            r#"[{"id":"managed","installation":{"path":"/basr-installation.json","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}]"#,
+            r#"[{"id":"managed","installation":{"path":"/bas-installation.json","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}]"#,
         ),
     ] {
         let path = dir.path().join(filename);
@@ -182,7 +182,7 @@ fn managed_links_are_readable_but_never_overwritten_or_treated_as_missing() {
 #[test]
 fn settings_paths_use_shared_user_directories_and_preserve_explicit_paths() {
     let root = super::super::paths::config_root().expect("user config directory");
-    assert_eq!(Store::new(None).path(), root.join("basr/settings.json"));
+    assert_eq!(Store::new(None).path(), root.join("bas/settings.json"));
     assert_eq!(
         Store::new(Some("chosen.json".into())).path(),
         Path::new("chosen.json")

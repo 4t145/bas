@@ -2,7 +2,7 @@ use crate::acp;
 
 use super::{TurnId, TurnReceipt};
 
-/// Client-owned identity and immutable ACP payload for one BASR submission.
+/// Client-owned identity and immutable ACP payload for one Bas submission.
 /// Retries reuse this value; a new user action gets a new identity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PromptSubmission {
@@ -36,7 +36,7 @@ pub struct PromptRejection {
     pub message: String,
 }
 
-/// A completed BASR submission RPC. Transport failure is deliberately outside
+/// A completed Bas submission RPC. Transport failure is deliberately outside
 /// this enum: it leaves acceptance unknown rather than implying rejection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PromptSubmissionOutcome {

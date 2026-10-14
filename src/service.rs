@@ -1,7 +1,7 @@
 //! The gRPC surface exposed to clients.
 //!
-//! `basrd` serves [`pb::basr_server`]; `basrctl`, the TUI, and the GUI consume
-//! [`pb::basr_client`]. ACP requests and updates use SDK JSON inside
+//! `bas` serves [`pb::bas_server`]; `bast`, the TUI, and the GUI consume
+//! [`pb::bas_client`]. ACP requests and updates use SDK JSON inside
 //! [`pb::AcpPayload`]; protobuf defines daemon management and replay envelopes.
 
 mod client;
@@ -11,10 +11,10 @@ mod defaults;
 pub mod pb {
     //! Generated protobuf messages and service stubs.
 
-    tonic::include_proto!("basr.v1");
+    tonic::include_proto!("bas.v1");
 
     /// Encoded `FileDescriptorSet`, for gRPC reflection servers.
-    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("basr_descriptor");
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("bas_descriptor");
 }
 
 pub use client::*;

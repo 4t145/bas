@@ -45,8 +45,8 @@ async fn settings_file_environment_reloads_catalog_and_preserves_sessions() {
     write_settings(&path, "before");
     let mut command = command();
     command
-        .env_remove("BASRD_AGENTS")
-        .env("BASR_SETTINGS_FILE", &path)
+        .env_remove("BAS_AGENTS")
+        .env("BAS_SETTINGS_FILE", &path)
         .args([
             "--listen",
             "127.0.0.1:0",
@@ -88,7 +88,7 @@ async fn settings_file_environment_reloads_catalog_and_preserves_sessions() {
     daemon
         .client
         .prompt(pb::PromptSubmission::from(
-            &basr::model::PromptSubmission::new(basr::acp::PromptRequest::new(
+            &bas::model::PromptSubmission::new(bas::acp::PromptRequest::new(
                 old.id,
                 vec!["still alive".into()],
             )),
@@ -135,9 +135,9 @@ async fn explicit_legacy_file_precedes_settings_and_reloads() {
     std::fs::write(&legacy, r#"[{"id":"legacy","kind":"embedded"}]"#).unwrap();
     let mut command = command();
     command
-        .env_remove("BASRD_AGENTS")
+        .env_remove("BAS_AGENTS")
         .env(
-            "BASR_SETTINGS_FILE",
+            "BAS_SETTINGS_FILE",
             directory.path().join("missing-settings.json"),
         )
         .arg("--agents-file")
@@ -161,7 +161,7 @@ async fn explicit_legacy_file_precedes_settings_and_reloads() {
 async fn missing_explicit_settings_fail_instead_of_starting_embedded() {
     let directory = tempfile::tempdir().unwrap();
     let output = command()
-        .env_remove("BASRD_AGENTS")
+        .env_remove("BAS_AGENTS")
         .arg("--settings-file")
         .arg(directory.path().join("missing.json"))
         .output()
@@ -173,14 +173,14 @@ async fn missing_explicit_settings_fail_instead_of_starting_embedded() {
 #[tokio::test]
 async fn default_catalog_migrates_once_without_falling_back_on_deletion() {
     let directory = tempfile::tempdir().unwrap();
-    let config = directory.path().join("basr");
+    let config = directory.path().join("bas");
     std::fs::create_dir(&config).unwrap();
     let legacy = config.join("agents.json");
     let settings = config.join("settings.json");
     std::fs::write(&legacy, r#"[{"id":"legacy","kind":"embedded"}]"#).unwrap();
     let mut command = command();
     command
-        .env_remove("BASRD_AGENTS")
+        .env_remove("BAS_AGENTS")
         .env("XDG_CONFIG_HOME", directory.path())
         .args([
             "--listen",
@@ -212,7 +212,7 @@ async fn reload_errors_are_deduplicated_without_logging_configuration_values() {
     write_settings(&path, "valid");
     let mut command = command();
     command
-        .env_remove("BASRD_AGENTS")
+        .env_remove("BAS_AGENTS")
         .arg("--settings-file")
         .arg(&path)
         .args([

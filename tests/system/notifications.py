@@ -13,11 +13,11 @@ class Notifications(ServiceInterface):
     def __init__(self):
         super().__init__("org.freedesktop.Notifications")
         self.next_id = 1
-        self.log = Path(os.environ["XDG_RUNTIME_DIR"]) / "basr-notifications.jsonl"
+        self.log = Path(os.environ["XDG_RUNTIME_DIR"]) / "bas-notifications.jsonl"
 
     @method()
     def GetServerInformation(self) -> "ssss":
-        return ["basr-system-test", "basr", "1.0", "1.2"]
+        return ["bas-system-test", "bas", "1.0", "1.2"]
 
     @method()
     def GetCapabilities(self) -> "as":

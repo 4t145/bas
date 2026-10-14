@@ -1,0 +1,18 @@
+[Unit]
+Description=Bas agent service
+Documentation=https://github.com/4t145/bas
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=@bas@
+Restart=on-failure
+RestartSec=2s
+WatchdogSec=30s
+Environment=BAS_LOG_BACKEND=journald
+Environment=BAS_NOTIFY=auto
+Environment="PATH=%h/.local/bin:%h/.nix-profile/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=-%E/bas/bas.env
+
+[Install]
+WantedBy=default.target

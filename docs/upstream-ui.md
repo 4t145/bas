@@ -1,5 +1,79 @@
 # 原版 UI 依赖基线
 
+## 声明式渲染宏 gds-uim
+
+按作者要求，尚未发布的 `4t145/gds-uim` 以 `vendor/gds-uim` Git submodule
+接入，初始固定提交为 `0c01f64a6e1657dd4dc825ca16a5833b312f3753`。宏是 GUI
+可选依赖，没有运行时依赖；不启用其示例使用的另一版 GPUI。保留上游原文和归属，
+当前提交尚未声明许可证，详见 `vendor/README.md`。
+
+组件渲染统一采用这套写法，保留原有控件、ID、子节点顺序和交互状态。覆盖共享
+按钮、图标、提示和应用窗口；设置与 Agent 目录；工作区侧栏、线程行和配置控件；
+输入、附件、队列、消息、工具与 Markdown 操作；计划、通知、压缩、审批、
+认证、回复预览与使用量弹层。
+`el!` 表达元素树，`m!` 和 `@condition` 表达构建器变换。Rust 子元素中的
+匹配、条件、索引使用 `$(...)` 明确边界，设置页使用 `$(match ...)`。
+较大的树仍按语义组织，保持 Rust 默认宏递归限制；宏的修复归还上游并更新
+submodule 指针，不维护 Bas 专用补丁或修改 GPUI 依赖。
+
+事件处理优先用 `cx.listener(Self::on_event)` 和具名订阅方法；确需捕获分类、
+章节等动态值时，仅保留向业务方法转发参数的闭包。样式和构建器闭包不属于
+事件业务逻辑，不为消除它们另造事件封装。
+
+菜单条目描述、状态与服务初始化保持普通 Rust；`canvas`、虚拟列表、
+prepaint 等框架渲染回调保留必要捕获。需要父窗口路由、弱实体更新、输入实体
+身份或 session/epoch 检查的事件，不能为了使用方法指针而丢掉这些约束。
+大块数据计算与状态匹配放在渲染子树之外，避免把整个处理流程藏进宏参数。
+
+验证：488 项 `gui-tests`、168 项 `gui` 测试、全目标构建和严格 Clippy 通过；
+格式与 diff 检查通过。Git flake 和安装脚本的源码快照都包含 submodule 的宏源码；
+Nix 沙箱中的 GUI 发布包构建及 168 项检查通过。
+组件迁移合并后重新执行上述检查，并在独立 Sway / Wayland 会话检查主窗口、
+设置页和附件预览的实际渲染；临时进程已清理，未连接真实 Agent。
+
+上游修复已提交为 `e955e9bdd828fcb4931dc9dade60f8470f21db8f`：属性与子树
+分别展开，完整节点和列表末尾跳过多余解析，默认递归上限下的 32 层带属性
+元素树回归通过，原版在同一测试上编译失败。保持构造、子元素和展开列表的
+临时借用作用域；宏仓库 50 项测试（含 GPUI、示例和文档）、严格 Clippy 和格式检查通过。
+
+### Nix source 类型边界
+
+可复现故障：首次 `make install-bas` 成功，再次安装或执行 `nix profile list` 时，
+报 path URL 中 `submodules=1` unsupported。首次构建成功不能证明锁定 URL 可再次读取。
+根因是全局 `inputs.self.submodules = true` 把 Git fetching 属性带入 path 快照的
+锁定 URL，Nix 的 path fetcher 不支持该参数；参见
+[Nix issue #13571](https://github.com/NixOS/nix/issues/13571)。
+
+修复按 source 类型分界：移除全局 self 属性，只在 Git URL 显式请求
+`submodules=1`；安装脚本的 path 快照已包含 `vendor/gds-uim` 源码，无需 Git fetching。
+本地直接打包使用 `"git+file://$PWD?submodules=1#basg"`，远端输入使用
+`git+https://github.com/4t145/bas?submodules=1`，不使用不支持子模块的 `github:` fetcher。
+`nix develop .#gui` 加 Cargo 的工作流仍读取物理 checkout，需先初始化子模块。
+真实 Nix metadata round-trip 与源码过滤回归见 [测试环境](testing.md#日常测试)。
+更正源码不会自动修复已写入 profile 的坏记录；恢复步骤需单独验证，不应删除用户
+profile 或数据来绕过此问题。
+
+## 鼠标悬停光标的交互语义
+
+复现入口：主窗口的发送、附件、复制按钮，以及设置页的操作按钮。发布版
+`gpui-component 0.6.1` 仅为 Link / Text 变体的按钮设置手型，普通和 Ghost
+按钮默认为箭头；BasG 自绘的可点击行已有部分手型，因而同类操作反馈不一致。
+直接给按钮构造器加 `cursor_pointer` 也会覆盖禁用／加载态，不能作为统一修法。
+
+BasG 的策略是可用按钮显示手型，禁用、加载中的按钮和纯状态展示保留箭头；
+可编辑／可选择正文显示 I-beam，正文中的链接优先显示手型。文本和链接继续使用
+发布依赖的逐区域命中测试，不在正文外层设置手型，不把不可选择的说明文字伪装成编辑器。
+按钮策略放在应用的共用 UI 层，继续委托原组件的视觉、焦点、键盘和点击处理；
+不修改依赖源码，也不引入窗口管理器专用的光标控制。
+可用开关、复选框和下拉选择器补上手型；紧凑窗口已有的拖动区域使用抓取光标。
+
+验证：488 项 `gui-tests`、168 项 `gui` 测试、GUI 构建、全目标严格 Clippy、
+格式与 diff 检查通过。按钮专项覆盖禁用／加载组合、调用顺序、恢复可用、纯状态覆盖，
+以及真实组件的鼠标和 Enter / Space 激活。独立 headless Sway 中移动虚拟指针，
+核对实际 `wp_cursor_shape_device_v1.set_shape` 请求：操作按钮、可选择行和 Markdown
+链接为 PointingHand；正文、链接旁文字、输入框与搜索框为 IBeam；禁用发送、
+连接状态和空白区域为 Arrow。未验证其他桌面平台的系统光标呈现。
+
 ## 侧边快捷跳转的排布语义（2026-10-12）
 
 用户截图复现：侧边对话标记使用 `justify_between` 均匀铺满高度，位置与正文实际
@@ -20,7 +94,7 @@
 ## 缺省代码高亮与主题模式（2026-10-12）
 
 原生 `markdown-actions` 深色预览复现：代码中的蓝色命令、绿色字符串过暗。
-BASR 内置与 DMS 调色板没有设置高亮配置，而发布版 `Theme::apply_config`
+BasG 内置与 DMS 调色板没有设置高亮配置，而发布版 `Theme::apply_config`
 仅在配置包含高亮字段时更新它，导致上一次的浅色高亮留在深色界面。
 应用主题时为缺省高亮采用组件对应明暗模式的默认配置；导入主题没有语法颜色时
 仅补全语法配色，保留其编辑器配色；已有语法颜色保持原样。
@@ -83,12 +157,12 @@ Markdown 与辅助按钮回归、全目标严格 Clippy 及构建通过。
 Default 与中文说明。发送与用量提示包含其他操作或详情，辅助文字字号缺少共用尺度。
 完整窗口菜单与紧凑窗口菜单的宽度约束不同。
 
-BASR 自有文案迁入 Fluent 中英文资源，默认简体中文，语言偏好沿用外观设置热更新。
+BasG 自有文案迁入 Fluent 中英文资源，默认简体中文，语言偏好沿用外观设置热更新。
 第一方依赖使用 crates.io 发布的 `fluent-bundle 0.16.0` 和 `unic-langid 0.9.6`，
 两者均为 MIT OR Apache-2.0；来源分别为
 [projectfluent/fluent-rs](https://github.com/projectfluent/fluent-rs) 和
 [zbraniecki/unic-locale](https://github.com/zbraniecki/unic-locale)。
-保留 Fluent 的插值与双向文字隔离；BASR 控制有限的字号和控件尺寸，
+保留 Fluent 的插值与双向文字隔离；BasG 控制有限的字号和控件尺寸，
 菜单、按钮和提示通过 GPUI Kit 0.6.1 的公开 API 按职责应用样式。
 内置组件通过 `set_locale` 同步语言，未修改依赖源码。
 
@@ -104,10 +178,10 @@ BASR 自有文案迁入 Fluent 中英文资源，默认简体中文，语言偏�
 对照 Zed `main` 的 `f16f9652ec57bf806e65b2a0d51bb92a63644914`：
 [ACP 连接](https://github.com/zed-industries/zed/blob/f16f9652ec57bf806e65b2a0d51bb92a63644914/crates/agent_servers/src/acp.rs)
 仍握手 v1，内部展示使用 v2 类型；[依赖配置](https://github.com/zed-industries/zed/blob/f16f9652ec57bf806e65b2a0d51bb92a63644914/Cargo.toml)
-启用 `unstable` 和 `unstable_protocol_v2`。BASR 原先锁定 SDK 2.1.0，
+启用 `unstable` 和 `unstable_protocol_v2`。Bas 原先锁定 SDK 2.1.0，
 未启用对应实验 schema，前端未处理标准通知与压缩；计划和使用量虽然接收却未展示；工具 diff 仅显示修改后全文，
 终端扩展未保留工作目录。复现方式为回放对应 ACP 更新并检查会话界面。
-本次通过发布版 SDK 和 BASR 自有实现对齐，不复制或链接 Zed 的 GPL Agent UI。
+本次通过发布版 SDK 和 Bas 自有实现对齐，不复制或链接 Zed 的 GPL Agent UI。
 
 处理结果：SDK、derive 升为 crates.io 3.3.0，schema 为 1.11.0，
 三个包均为 Apache-2.0；额外的 GUI diff 依赖 `similar 2.7.0` 也为 Apache-2.0。
@@ -127,10 +201,10 @@ SessionInfo 的 Agent 时间通过可选 protobuf 字段与旧快照兼容。
 
 ### 使用量环形入口与详情（2026-10-10）
 
-复现：Agent 发送 `usage_update` 后，basrw 在时间线上方显示一行用量和费用，
+复现：Agent 发送 `usage_update` 后，BasG 在时间线上方显示一行用量和费用，
 缺少用户截图中的工具栏环形指示器与点击详情。
 对照 Zed 的 [render_token_usage](https://github.com/zed-industries/zed/blob/f16f9652ec57bf806e65b2a0d51bb92a63644914/crates/agent_ui/src/conversation_view/thread_view.rs) 行为，用量百分比驱动小环，悬停显示 Context、
-百分比和简写 token 数；basrw 同时提供用户要求的点击详情。
+百分比和简写 token 数；BasG 同时提供用户要求的点击详情。
 使用发布版 GPUI Kit 的 ProgressCircle 和公共菜单 API，自有实现布局与格式。
 交互验证还复现了以下问题：紧凑窗口打开详情时同步绘制导致父视图重入；
 点击只读详情内容会丢失菜单焦点；指针留在入口时，悬浮预览覆盖已打开的详情；
@@ -166,7 +240,7 @@ Escape 或点击外部关闭，切换 thread 清理旧详情。容量为 0 时�
 移除覆盖时，根锁文件为三个原本使用 path 覆盖的包补充 registry source 和 checksum。
 窗口适配随后新增 `wl-clipboard-rs 0.9.4`、macOS 的 `arboard 3.6.1` 与 PNG 编码依赖，
 共享用户目录使用 `dirs 6`；这些依赖均为 MIT / Apache-2.0 发布包，不改 GPUI 版本。
-BASR 第一方代码仍是 MIT，不复制或链接 Zed 的 GPL 上层组件；第三方依赖保留原许可证。
+Bas 第一方代码仍是 MIT，不复制或链接 Zed 的 GPL 上层组件；第三方依赖保留原许可证。
 此前的会话、队列、RPC、路径校验、日志和外观配置修复不因这次切换撤销。
 
 仅移除了两处已不存在的私有扩展接入：
@@ -470,7 +544,7 @@ RPC 边界，不调用真实账户的模型请求。
 ### UI-018：检测提示描述内部细节和未执行的操作
 
 用户在 Agent 设置页点击“检测”，页面显示“正在执行一次 ACP 检测；不发送聊天消息，
-也不创建 BASR thread。”用户无法从中理解当前动作。检测提示应直接说明正在检查
+也不创建 Bas thread。”用户无法从中理解当前动作。检测提示应直接说明正在检查
 程序能否正常启动、是否需要登录；完成后显示上次检测结果与下一步操作。程序路径、
 协议调用和请求边界保留在配置与诊断说明中，正常状态提示采用面向用户的表述。
 
@@ -563,7 +637,7 @@ Nix GUI 发布构建及其 85 项测试通过，已更新系统中的 GUI 安装
 [返回用户消息](https://github.com/zed-industries/zed/blob/7fb155e9a26d1abeced06916e64714127235db4d/crates/agent_ui/src/conversation_view/thread_view.rs#L7628)
 只调整滚动位置；编辑后重新发送和恢复检查点是另外两种、依赖后端截断能力的操作。
 
-BASR 通过自身消息模型与 GPUI 公开 API 独立实现回复操作栏，右对齐、悬停前淡化。
+BasG 通过自身消息模型与 GPUI 公开 API 独立实现回复操作栏，右对齐、悬停前淡化。
 最后条目是工具、思考或提示时，操作栏放在末尾时间线行，折叠活动组也可以直接操作。
 跳转先将消息位置转换成分组后的时间线行；没有对应用户消息时跳至最近用户消息，
 没有任何用户消息时回到最新输出。新 thread 的初始化信息只显示复制，输入区收起
@@ -605,7 +679,7 @@ Registry 全部配色使用当前主题；两侧顶栏共用固定高度，新�
 又使大输入框退出新 thread 布局，消息缺少来源标识，首条用户消息到来时需验证排版边界。
 
 对照[官方 Zed main 的编辑器布局](https://github.com/zed-industries/zed/blob/5f08939a5d8e8d108bf96d169af75be0a2ff0d07/crates/agent_ui/src/conversation_view/thread_view.rs#L4929)：编辑器展开按钮
-位于输入区右上角，与发送按钮共用右边缘，不占单独一行。BASR 独立实现这一布局，
+位于输入区右上角，与发送按钮共用右边缘，不占单独一行。BasG 独立实现这一布局，
 缩减外侧留白；以首条用户请求被接受或回合开始作为后端锁定边界。初始化消息使用
 正常 Markdown 渲染并标明来源，在首次发送前单独展示，保留大输入区。
 
@@ -622,7 +696,7 @@ Registry 全部配色使用当前主题；两侧顶栏共用固定高度，新�
 执行经过 daemon 验证的流程，终端也直接打开。RPC 错误保留可识别的原因和恢复操作。
 回归验证真实按钮点击、旧 daemon 的空 Unimplemented 错误及取消与迟到回执。
 
-现场核对：新版 GUI 连接旧 basrd 时，认证 RPC 返回 `grpc-status: 12` 且没有错误
+现场核对：新版 GUI 连接旧 bas 时，认证 RPC 返回 `grpc-status: 12` 且没有错误
 message。另一个独立缺口是认证流程手写 `session/new` 遗漏必需的 `mcpServers`；
 Gemini 0.63.0 严格 schema 会拒绝它。现改用 SDK 构造完整请求，严格 mock 验证认证
 前后都带空数组；隔离环境的真实 Gemini 握手确认完整请求能进入认证需求阶段。
@@ -635,7 +709,7 @@ checkPhase 的默认目标 260 项与 GUI 发布配置 85 项全通过；未执�
 
 ### UI-021：浏览器授权成功后，ACP 认证失败只显示阶段名称
 
-复现：Gemini CLI 0.63.0 打开 Google 授权页，网页显示身份验证成功，BASR 仍显示
+复现：Gemini CLI 0.63.0 打开 Google 授权页，网页显示身份验证成功，BasG 仍显示
 “认证失败：Agent authentication failed”。认证 RPC 将带有 context 的错误用
 `to_string()` 转为客户端提示，丢失内层 Agent 错误，无法判断 OAuth 回调后的失败阶段。
 应保留阶段、ACP 错误码与明确的文字原因，避免将完整错误数据当作提示直接展开。
@@ -648,7 +722,7 @@ checkPhase 的默认目标 260 项与 GUI 发布配置 85 项全通过；未执�
 真实 ACP 子进程与 tonic 回归覆盖认证前后各阶段，以及 SDK 字符串、`message`、
 `details` 诊断格式和凭据过滤。默认全目标 267 项测试、严格 Clippy、格式与 diff
 检查通过；Nix 后台发布包的 267 项测试同样通过。安装并切换后台后，真实
-`basrctl agent check gemini` 返回 `ACP initialize and newSession succeeded`。
+`bast agent check gemini` 返回 `ACP initialize and newSession succeeded`。
 
 ### 设置侧栏文字对齐
 
@@ -671,7 +745,7 @@ checkPhase 的默认目标 260 项与 GUI 发布配置 85 项全通过；未执�
 ```sh
 cargo test --all-targets --locked
 nix develop .#gui -c cargo build --all-targets --features gui-tests --locked
-nix develop .#gui -c cargo test --features gui-tests --bin basrw --locked
+nix develop .#gui -c cargo test --features gui-tests --bin basg --locked
 nix develop .#gui -c cargo clippy --all-targets --features gui-tests --locked -- -D warnings
 ```
 

@@ -3,7 +3,7 @@ use super::*;
 async fn cli_output(daemon: &Daemon, args: &[&str]) -> std::process::Output {
     tokio::time::timeout(
         TIMEOUT,
-        Command::new(env!("CARGO_BIN_EXE_basrctl"))
+        Command::new(env!("CARGO_BIN_EXE_bast"))
             .kill_on_drop(true)
             .arg("--server")
             .arg(daemon.address.to_string())
@@ -34,11 +34,11 @@ async fn localdb_survives_daemon_restart_with_history_and_the_same_session_id() 
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
             .expect("private storage directory");
     }
-    let database = directory.path().join("basr/sessions.sqlite3");
+    let database = directory.path().join("bas/sessions.sqlite3");
     let start = || {
         let mut command = command();
         command
-            .env_remove("BASRD_STORAGE")
+            .env_remove("BAS_STORAGE")
             .env("XDG_STATE_HOME", directory.path())
             .arg("--listen")
             .arg("127.0.0.1:0")
@@ -161,7 +161,7 @@ async fn acknowledged_prompt_remains_replayable_after_daemon_is_killed() {
         .find_map(|line| line.strip_prefix("id        "))
         .expect("create prints the session ID")
         .to_owned();
-    let turn = basr::model::TurnId::new().to_string();
+    let turn = bas::model::TurnId::new().to_string();
     let before = cli(&daemon, &["history", &id]).await;
     let unknown = cli(&daemon, &["prompt-status", &id, &turn]).await;
     assert!(unknown.contains("acceptance unknown"));

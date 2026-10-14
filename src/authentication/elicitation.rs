@@ -444,7 +444,7 @@ fn reject_sensitive(schema: &Map<String, Value>) -> Result<(), Error> {
         || schema.get("x-sensitive").and_then(Value::as_bool) == Some(true)
         || schema.get("format").and_then(Value::as_str) == Some("password")
         || schema.get("_meta").is_some_and(|meta| {
-            ["sensitive", "secret", "basr/sensitive"]
+            ["sensitive", "secret", "bas/sensitive"]
                 .iter()
                 .any(|key| meta.get(*key).and_then(Value::as_bool) == Some(true))
         });

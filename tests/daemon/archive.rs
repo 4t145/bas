@@ -2,7 +2,7 @@ use super::*;
 
 impl Daemon {
     async fn cli(&self, args: &[&str]) -> std::process::Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_basrctl"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bast"));
         command
             .kill_on_drop(true)
             .arg("--server")

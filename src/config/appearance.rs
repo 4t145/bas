@@ -119,7 +119,7 @@ impl Appearance {
     /// Reports invalid JSON or preference values.
     pub fn from_json(text: &str) -> Result<Self> {
         let preferences: Self =
-            serde_json::from_str(text).context("invalid BASR appearance JSON")?;
+            serde_json::from_str(text).context("invalid Bas appearance JSON")?;
         preferences.validate()?;
         Ok(preferences)
     }

@@ -1,0 +1,465 @@
+// The wire protocol between bas and its clients (bast, TUI, GUI).
+//
+// ACP payloads are canonical JSON serialized by agent-client-protocol.
+// Protobuf only defines daemon management, routing and replay envelopes.
+
+syntax = "proto3";
+
+package bas.v1;
+
+// Daemon administration and session I/O.
+service Bas {
+  // Lists the agent backends this daemon can launch.
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  // Checks a saved configuration, optionally performing an isolated ACP handshake.
+  rpc CheckAgent(CheckAgentRequest) returns (CheckAgentResponse);
+  // Includes installable registry entries and configured agents, even when missing.
+  rpc ListAgentCatalog(ListAgentCatalogRequest) returns (ListAgentCatalogResponse);
+  // Installs a pinned distribution on the daemon host; dropping the stream cancels work.
+  rpc InstallAgent(InstallAgentRequest) returns (stream AgentOperation);
+  // Removes managed registration, preserving credentials and version directories.
+  rpc RemoveAgent(RemoveAgentRequest) returns (RemoveAgentResponse);
+  // Standard agent-driven ACP authentication on a daemon-owned connection.
+  rpc AuthenticateAgent(AuthenticateAgentRequest) returns (AuthenticateAgentResponse);
+  // Interactive ACP authentication; dropping the stream cancels the owned flow.
+  rpc AuthenticateAgentInteractive(stream AuthenticationInput) returns (stream AuthenticationEvent);
+  // Starts a session on a backend.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  // Lists non-archived sessions by default.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  // Reads one session's metadata.
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  // Hides/restores a session without stopping its backend or deleting history.
+  rpc SetArchived(SetArchivedRequest) returns (SetArchivedResponse);
+  // Stops a session's backend and forgets it.
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+  // Attaches to a session: replays history, then streams live events until the
+  // client disconnects. Detaching never stops the agent.
+  rpc Attach(AttachRequest) returns (stream Event);
+  // Tracks the session currently viewed in an active client window. Closing
+  // this stream releases its foreground state without affecting agent work.
+  rpc SetForeground(stream ForegroundRequest) returns (stream ForegroundResponse);
+  // Registers a client-identified submission. Retries with the same identity
+  // and payload return the original acceptance without dispatching again.
+  rpc Prompt(PromptSubmission) returns (PromptSubmissionResponse);
+  // Read-only acceptance lookup. Absence is not proof that an in-flight request
+  // cannot still be accepted; it must never trigger an implicit new submission.
+  rpc GetPromptAcceptance(PromptAcceptanceRequest) returns (PromptAcceptanceResponse);
+  // Cancels the running turn.
+  rpc Cancel(AcpPayload) returns (CancelResponse);
+  // ACP session/set_config_option request and response.
+  rpc SetConfigOption(AcpPayload) returns (AcpPayload);
+  // ACP session/set_mode request and response.
+  rpc SetMode(AcpPayload) returns (AcpPayload);
+  // Subscribes an interactive approver; each update replaces the pending set.
+  // Unsubscribing the last approver cancels outstanding approval requests.
+  rpc WatchPermissions(WatchPermissionsRequest) returns (stream PermissionSnapshot);
+  // Answers exactly one live ACP request using an agent-provided option id.
+  rpc RespondPermission(RespondPermissionRequest) returns (RespondPermissionResponse);
+  // Pending agent-driven forms and external authorization for one session.
+  rpc WatchElicitations(WatchElicitationsRequest) returns (stream ElicitationSnapshot);
+  rpc RespondElicitation(RespondElicitationRequest) returns (RespondElicitationResponse);
+  // Renames a session.
+  rpc SetTitle(SetTitleRequest) returns (SetTitleResponse);
+  // Loads a page of history by cursor.
+  rpc LoadHistory(LoadHistoryRequest) returns (LoadHistoryResponse);
+}
+
+// One configured agent backend.
+message Agent {
+  string id = 1;
+  // "embedded" or "acp".
+  string kind = 2;
+  // Command line for external backends, empty for the embedded one.
+  string command = 3;
+}
+
+message ListAgentsRequest {}
+
+message ListAgentCatalogRequest { bool refresh = 1; }
+message ListAgentCatalogResponse {
+  // Serialized bas::management::Catalog.
+  bytes catalog_json = 1;
+}
+message InstallAgentRequest { string id = 1; }
+message AgentOperation {
+  string phase = 1;
+  string message = 2;
+  // Saved AgentSpec, present only after registration succeeds.
+  bytes spec_json = 3;
+  bool complete = 4;
+}
+message RemoveAgentRequest { string id = 1; }
+message RemoveAgentResponse {}
+message AuthenticateAgentRequest {
+  string agent = 1;
+  bytes expected_spec_json = 2;
+  string method_id = 3;
+  // Serialized normalized method, or a raw descriptor from older clients.
+  // Empty is accepted for clients predating descriptor freshness checking.
+  bytes expected_method_json = 4;
+}
+message AuthenticateAgentResponse { CheckAgentResponse check = 1; }
+
+message ElicitationAnswer {
+  string request_id = 1;
+  AcpPayload response = 2;
+}
+message PendingElicitation {
+  string request_id = 1;
+  // Complete original elicitation/create parameters.
+  AcpPayload request = 2;
+  // Accepted URL requests remain visible until elicitation/complete.
+  bool answered = 3;
+}
+message WatchElicitationsRequest { string session = 1; }
+message ElicitationSnapshot {
+  string session = 1;
+  repeated PendingElicitation pending = 2;
+  repeated string completed_ids = 3;
+}
+message RespondElicitationRequest {
+  string session = 1;
+  string request_id = 2;
+  AcpPayload response = 3;
+}
+message RespondElicitationResponse {}
+message TerminalAuthenticationResult { int32 exit_code = 1; }
+message AuthenticationInput {
+  oneof kind {
+    AuthenticateAgentRequest start = 1;
+    ElicitationAnswer elicitation_response = 2;
+    TerminalAuthenticationResult terminal_result = 3;
+  }
+}
+message AuthenticationEvent {
+  oneof kind {
+    CheckAgentResponse check = 1;
+    PendingElicitation elicitation = 2;
+    AcpPayload elicitation_complete = 3;
+    // Serialized bas::authentication::Invocation, prepared by the daemon.
+    AcpPayload terminal = 4;
+    string progress = 5;
+    // Agent cancelled this live elicitation/create request.
+    string elicitation_cancelled = 6;
+  }
+}
+
+message CheckAgentRequest {
+  string agent = 1;
+  // Required serialized AgentSpec; must match the daemon's current configuration.
+  bytes expected_spec_json = 2;
+  bool connect = 3;
+}
+
+enum AgentCheckStatus {
+  AGENT_CHECK_STATUS_UNSPECIFIED = 0;
+  AGENT_CHECK_STATUS_MISSING_EXECUTABLE = 1;
+  AGENT_CHECK_STATUS_INSTALLED = 2;
+  AGENT_CHECK_STATUS_CONNECTED = 3;
+  AGENT_CHECK_STATUS_FAILED = 4;
+  AGENT_CHECK_STATUS_AUTHENTICATION_REQUIRED = 5;
+}
+
+message CheckAgentResponse {
+  AgentCheckStatus status = 1;
+  string message = 2;
+  string resolved_program = 3;
+  // Canonical ACP InitializeResponse, when initialize completed.
+  AcpPayload initialization = 4;
+  // Native AuthRequired error; may contain updated authMethods.
+  AcpPayload authentication_error = 5;
+}
+
+message ListAgentsResponse {
+  repeated Agent agents = 1;
+}
+
+// Who created a session.
+message Owner {
+  string user = 1;
+  string host = 2;
+}
+
+// Lifecycle of a session.
+enum SessionStatus {
+  SESSION_STATUS_UNSPECIFIED = 0;
+  SESSION_STATUS_STARTING = 1;
+  SESSION_STATUS_IDLE = 2;
+  SESSION_STATUS_WORKING = 3;
+  SESSION_STATUS_STOPPED = 4;
+  SESSION_STATUS_FAILED = 5;
+}
+
+message RuntimeFailure {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_PERSISTENCE = 1;
+  }
+  Kind kind = 1;
+  string message = 2;
+}
+
+// Volatile state of one loaded session. A restart creates a new id.
+message SessionRuntime {
+  string id = 1;
+  RuntimeFailure failure = 2;
+}
+
+// Committed metadata plus independent runtime health, without history events.
+message Session {
+  string id = 1;
+  string agent = 2;
+  optional string title = 3;
+  Owner owner = 4;
+  optional string cwd = 5;
+  // Milliseconds since the Unix epoch.
+  uint64 created_at = 6;
+  uint64 updated_at = 7;
+  // Last committed lifecycle status. Runtime failure independently prevents execution.
+  SessionStatus status = 8;
+  // ACP InitializeResponse.
+  AcpPayload initialization = 9;
+  // ACP NewSessionResponse with current modes/configOptions.
+  AcpPayload acp = 10;
+  // Latest ACP AvailableCommandsUpdate, retained beyond the history window.
+  AcpPayload available_commands = 11;
+  // Last event reflected in this snapshot; independent of retained history.
+  uint64 revision = 12;
+  // Active turn at the committed revision, not evidence of current runtime activity.
+  optional string active_turn = 13;
+  // Independent of lifecycle: a running turn may finish while archived.
+  bool archived = 14;
+  // Last agent message chunk; metadata-only changes are not unread replies.
+  uint64 last_reply = 15;
+  // Latest valid Agent-reported RFC3339 updatedAt, converted to epoch milliseconds.
+  optional uint64 agent_updated_at = 16;
+  SessionRuntime runtime = 17;
+}
+
+message CreateSessionRequest {
+  // Backend id, from ListAgents. Defaults to "embedded" when empty.
+  string agent = 1;
+  optional string title = 2;
+  optional string cwd = 3;
+  optional string owner_user = 4;
+  optional string owner_host = 5;
+}
+
+message CreateSessionResponse {
+  Session session = 1;
+}
+
+message ListSessionsRequest {
+  bool include_archived = 1;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+message GetSessionRequest {
+  string session = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message SetArchivedRequest {
+  string session = 1;
+  bool archived = 2;
+}
+
+message SetArchivedResponse {
+  // Snapshot committed under the same lock as the archive transition.
+  Session session = 1;
+}
+
+message DeleteSessionRequest {
+  string session = 1;
+}
+
+message DeleteSessionResponse {}
+
+// Canonical ACP JSON. Use the SDK schema named by each field or RPC.
+// bytes preserves JSON numbers and extension metadata without Struct conversion.
+message AcpPayload {
+  bytes json = 1;
+}
+
+message TurnStarted {
+  string turn = 1;
+}
+
+message TurnFinished {
+  string turn = 1;
+  reserved 2, 4;
+  // Exactly one native ACP outcome, never a Bas runtime/storage failure.
+  oneof outcome {
+    AcpPayload response = 3;
+    AcpPayload error = 5;
+  }
+}
+
+enum InterruptionReason {
+  INTERRUPTION_REASON_UNSPECIFIED = 0;
+  INTERRUPTION_REASON_BACKEND_FAILURE = 1;
+  INTERRUPTION_REASON_DISPATCH_FAILURE = 2;
+  INTERRUPTION_REASON_SESSION_STOPPED = 3;
+  INTERRUPTION_REASON_DAEMON_RESTARTED = 4;
+  INTERRUPTION_REASON_CANCELLED_BEFORE_DISPATCH = 5;
+}
+
+// Bas could not obtain an ACP result for this tracked prompt.
+message TurnInterrupted {
+  string turn = 1;
+  InterruptionReason reason = 2;
+  string message = 3;
+}
+
+message TitleChanged {
+  string title = 1;
+}
+
+message ArchiveChanged {
+  bool archived = 1;
+}
+
+message StatusChanged {
+  SessionStatus status = 1;
+}
+
+message Failed {
+  string message = 1;
+}
+
+// A replayable timeline event or a live-only ACP Notice.
+message Event {
+  string session = 1;
+  // Replayable events have monotonic positions starting at 1. Live-only Notice
+  // events use 0 and must not replace the last cursor used for resumption.
+  uint64 cursor = 2;
+  uint64 at = 3;
+  reserved 10, 11, 12;
+  oneof kind {
+    // ACP SessionUpdate, including content, tools, plans, commands and options.
+    AcpPayload acp_update = 18;
+    TurnStarted turn_started = 13;
+    TurnFinished turn_finished = 14;
+    TitleChanged title_changed = 15;
+    StatusChanged status_changed = 16;
+    Failed failed = 17;
+    ArchiveChanged archive_changed = 19;
+    TurnInterrupted turn_interrupted = 20;
+  }
+}
+
+message AttachRequest {
+  string session = 1;
+  // Resume strictly after this cursor. Absent means "the newest replay events".
+  optional uint64 cursor = 2;
+  // Recent replayable events when cursor is absent. With cursor, all retained
+  // events after it are replayed; an expired cursor returns DATA_LOSS.
+  uint32 replay = 3;
+}
+
+message ForegroundRequest {
+  // Absent when the window is inactive or no session is selected.
+  optional string session = 1;
+}
+
+// Acknowledges that the foreground state has been applied.
+message ForegroundResponse {}
+
+// An ACP result arrives in TurnFinished; Bas interruptions use TurnInterrupted.
+message PromptSubmission {
+  // Client-generated Bas turn id, reused unchanged for retries.
+  string turn = 1;
+  // Native ACP PromptRequest with the public Bas session id.
+  AcpPayload prompt = 2;
+}
+
+enum PromptRejectionKind {
+  PROMPT_REJECTION_KIND_UNSPECIFIED = 0;
+  PROMPT_REJECTION_KIND_INVALID_REQUEST = 1;
+  PROMPT_REJECTION_KIND_BUSY = 2;
+  PROMPT_REJECTION_KIND_ARCHIVED = 3;
+  PROMPT_REJECTION_KIND_UNAVAILABLE = 4;
+  PROMPT_REJECTION_KIND_CONFLICT = 5;
+}
+
+message PromptRejection {
+  PromptRejectionKind kind = 1;
+  string message = 2;
+}
+
+message PromptSubmissionResponse {
+  oneof outcome {
+    TurnAccepted accepted = 1;
+    PromptRejection rejected = 2;
+  }
+}
+
+message PromptAcceptanceRequest {
+  string session = 1;
+  string turn = 2;
+}
+
+message PromptAcceptanceResponse {
+  TurnAccepted accepted = 1;
+}
+
+// Bas has registered this submission, not necessarily dispatched it to ACP.
+message TurnAccepted {
+  string turn = 1;
+  // Cursor of the committed TurnStarted event; always greater than zero.
+  uint64 cursor = 2;
+}
+
+message CancelResponse {}
+
+message WatchPermissionsRequest {
+  string session = 1;
+}
+
+message PendingPermission {
+  string request_id = 1;
+  // Canonical ACP RequestPermissionRequest using the daemon session id.
+  AcpPayload request = 2;
+}
+
+message PermissionSnapshot {
+  string session = 1;
+  repeated PendingPermission pending = 2;
+}
+
+message RespondPermissionRequest {
+  string session = 1;
+  string request_id = 2;
+  // Canonical ACP RequestPermissionResponse.
+  AcpPayload response = 3;
+}
+
+message RespondPermissionResponse {}
+
+message SetTitleRequest {
+  string session = 1;
+  string title = 2;
+}
+
+message SetTitleResponse {}
+
+message LoadHistoryRequest {
+  string session = 1;
+  // Absent starts at the oldest retained event. An explicitly supplied cursor
+  // must still be recoverable, otherwise the server returns DATA_LOSS.
+  optional uint64 after = 2;
+  uint32 limit = 3;
+}
+
+message LoadHistoryResponse {
+  repeated Event events = 1;
+  // Cursor to pass as `after` for the next page; absent at the end of history.
+  optional uint64 next = 2;
+}

@@ -9,7 +9,7 @@ use std::{
     path::{Component, PathBuf},
 };
 
-pub const INSTALLATION_FILE: &str = "basr-installation.json";
+pub const INSTALLATION_FILE: &str = "bas-installation.json";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const SCHEMA_VERSION: u32 = 1;
 

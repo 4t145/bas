@@ -157,7 +157,7 @@ fn make_some_big_news(&self, target_id: &str, by: &str, content: &str, timestamp
 
 ### 第三方 UI 代码与许可证
 
-- BASR 第一方代码保持 MIT。对齐其他应用的交互行为不等于复制其源码；不要直接复制、改写或链接 Zed 的 GPL 上层 Markdown、Editor、Agent UI 组件。
+- Bas 第一方代码保持 MIT。对齐其他应用的交互行为不等于复制其源码；不要直接复制、改写或链接 Zed 的 GPL 上层 Markdown、Editor、Agent UI 组件。
 - 第三方代码保留各自许可证和来源信息，不能因放入本仓库就改标 MIT。新增或升级依赖时核对许可证与具体发布来源。
-- UI 使用原版发布依赖，不新增 vendor、依赖源码覆盖或修改本机 Cargo cache 来绕过问题。应用自己的字号、主题等策略留在 BASR，通过公开 API 实现。
+- UI 使用原版发布依赖，不新增 vendor、依赖源码覆盖或修改本机 Cargo cache 来绕过问题。应用自己的字号、主题等策略留在 Bas，通过公开 API 实现。
 - 先在 `docs/upstream-ui.md` 记录可复现问题，再逐项处理；不通过削弱回归断言掩盖原版依赖的行为差异。

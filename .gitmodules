@@ -1,0 +1,3 @@
+[submodule "vendor/gds-uim"]
+	path = vendor/gds-uim
+	url = https://github.com/4t145/gds-uim.git

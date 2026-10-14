@@ -7,8 +7,8 @@ use super::pb;
 /// How long a client waits for the daemon to accept a connection.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A connected `basr.v1.Basr` client.
-pub type Client = pb::basr_client::BasrClient<Channel>;
+/// A connected `bas.v1.Bas` client.
+pub type Client = pb::bas_client::BasClient<Channel>;
 
 impl Client {
     /// Answers a live tool approval with a canonical ACP outcome.

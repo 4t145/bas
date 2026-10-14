@@ -1,4 +1,4 @@
-# BASR branding resources
+# Bas branding resources
 
 These SVGs are imported byte-for-byte from the user-designated
 **Ferris · 八接头版 v4** resources in the supplied `ferris-logo/v4` directory.
@@ -31,10 +31,10 @@ theme-name lookup for icons newly added to a Nix profile.
 
 ## Provenance and licensing
 
-The user supplied and requested these design resources for BASR. The supplied
+The user supplied and requested these design resources for Bas. The supplied
 resource README does not state a separate artwork license. Importing the files
 does not assert third-party ownership or grant a third-party license, nor does
-it relabel the artwork as MIT. BASR's first-party code remains MIT.
+it relabel the artwork as MIT. Bas's first-party code remains MIT.
 
 ## Original SHA-256 checksums
 

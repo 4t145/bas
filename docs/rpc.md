@@ -1,9 +1,9 @@
 # RPC 与 ACP 类型
 
-BASR 的会话交互复用 `agent-client-protocol` 3.3.0 提供的 schema，
+Bas 的会话交互复用 `agent-client-protocol` 3.3.0 提供的 schema，
 与 2026-10-10 核对的 [Zed 基线](upstream-ui.md#acp-展示协议基线2026-10-10)一致。
-外部 Agent 连接仍协商 ACP v1，RPC 与历史使用 `basr::acp`；
-`basr::acp_v2` 用于新版计划、用量、通知、压缩等展示模型。
+外部 Agent 连接仍协商 ACP v1，RPC 与历史使用 `bas::acp`；
+`bas::acp_v2` 用于新版计划、用量、通知、压缩等展示模型。
 SDK 启用 `process`、`schemars`、`unstable`、`unstable_protocol_v2`；
 编译实验类型不改变握手版本，也不自动声明未实现的客户端能力。
 
@@ -12,10 +12,10 @@ gRPC 保留会话管理与后台运行所需的信封。`AcpPayload.json` 是 UT
 ToolCall、ConfigOption 或 StopReason，也不经过会把 JSON 整数转为 double 的 Struct。
 SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段和无效可选项的处理遵循 SDK。
 
-| gRPC 接口或字段 | ACP 类型 / BASR 职责 |
+| gRPC 接口或字段 | ACP 类型 / Bas 职责 |
 | --- | --- |
 | ListAgents、CreateSession、ListSessions、GetSession、DeleteSession | 后端选择、进程与会话生命周期 |
-| ListAgentCatalog | `basr::management::Catalog` JSON，包含 Registry 和已配置后端 |
+| ListAgentCatalog | `bas::management::Catalog` JSON，包含 Registry 和已配置后端 |
 | InstallAgent | 可取消的安装进度流，最终返回已保存的 `AgentSpec` |
 | RemoveAgent | 移除托管注册，保留原生凭据与版本目录 |
 | AuthenticateAgent | daemon 持有 ACP 连接执行标准 agent 认证，再检查 session/new |
@@ -36,9 +36,9 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | Event.acp_update | v1 `SessionUpdate`，包含内容块、工具局部更新、计划、命令、选项、用量、会话信息、通知和压缩更新 |
 | Attach、LoadHistory | 带游标的有界历史与实时订阅 |
 | SetForeground | 双向流报告前台会话，逐条确认；流断开自动释放状态 |
-| SetTitle | BASR 本地会话标题 |
+| SetTitle | Bas 本地会话标题 |
 
-客户端始终使用 BASR 的公开 session UUID。后端驱动负责在发给 Agent 的请求中
+客户端始终使用 Bas 的公开 session UUID。后端驱动负责在发给 Agent 的请求中
 换成 Agent 的 sessionId，返回的 `Session.acp.sessionId` 也使用公开 UUID。
 权限与文件回调在 daemon 内使用 ACP 请求及权限结果类型；文件操作和固定权限策略
 仍由 daemon 执行。客户端托管的终端执行能力仍未声明；初始化时通过
@@ -54,7 +54,7 @@ GUI 按终端 ID 累积输出并渲染，`rawOutput` 作为没有可展示内容
 Rust 客户端示例：
 
 ```rust,no_run
-use basr::{acp, service::Client};
+use bas::{acp, service::Client};
 
 # async fn example(mut client: Client, session: String) -> Result<(), tonic::Status> {
 let request = acp::PromptRequest::new(session.clone(), vec![
@@ -74,7 +74,7 @@ let options = client.set_config_option_acp(
 图片、音频和嵌入上下文。配置修改返回完整选项列表，daemon 同时发布
 `ConfigOptionUpdate` 并更新会话快照，所有订阅者都能看到变化。
 配置和模式请求的 ACP 错误保留在 gRPC status details 中，Rust 客户端可用
-`basr::service::acp_error` 解码原始 code、message、data。
+`bas::service::acp_error` 解码原始 code、message、data。
 设置响应和通知由后端有序提交；调用者取消等待不会撤销已经执行的设置或丢失其状态更新。
 
 ### 连接检测与待认证状态
@@ -97,7 +97,7 @@ GUI 遇到认证需求时重新执行 `CheckAgent`，取得完整初始化响应
 ### 后端目录、安装与认证
 
 `ListAgentCatalog` 包含未安装、缺失程序和不支持的分发条目，不改变 `ListAgents`
-只列出可启动配置的含义。`catalog_json` 使用公开 `basr::management::Catalog` 的 Serde 类型。
+只列出可启动配置的含义。`catalog_json` 使用公开 `bas::management::Catalog` 的 Serde 类型。
 `refresh=true` 更新官方目录；失败时保留上次有效缓存并返回 warning。
 远端目录不携带完整启动配置，避免暴露用户配置中的环境变量。
 
@@ -172,10 +172,10 @@ daemon 生成的唯一 `request_id` 和完整 `RequestPermissionRequest`；新�
 ### 会话内 Elicitation
 
 `WatchElicitations { session }` 与 `RespondElicitation { session, request_id, response }`
-为已有会话提供同一套 Form / URL 交互。外层 session 使用 BASR UUID；请求中的 ACP
+为已有会话提供同一套 Form / URL 交互。外层 session 使用 Bas UUID；请求中的 ACP
 `sessionId` / `requestId` 保留原始值，由 daemon 对照当前连接校验，不由客户端改写。
 待处理快照包含原始请求、唯一回答 ID 和 `answered`；URL 已接受时保持等待状态，匹配
-完成通知后进入 `completed_ids`，其中记录的是 BASR 回答 ID。
+完成通知后进入 `completed_ids`，其中记录的是 Bas 回答 ID。
 
 响应只消费一次，校验失败保留请求供修正。回调取消、回合取消、会话关闭、连接替换
 或最后一个查看者断开会清理交互；无查看者时返回取消。旧连接的完成或取消不会影响
@@ -194,7 +194,7 @@ daemon 生成的唯一 `request_id` 和完整 `RequestPermissionRequest`；新�
 Stopped / Failed 会话也可以归档和恢复，但恢复不会启动新 Agent 或使失效会话复活。
 
 GUI 在归档时保留草稿和未发队列并暂停派发，恢复本身不自动解除队列暂停。
-`DeleteSession` / `basrctl session remove` 仍是停止 Agent 并遗忘会话的永久删除操作，
+`DeleteSession` / `bast session remove` 仍是停止 Agent 并遗忘会话的永久删除操作，
 不作为旧服务器不支持归档时的兼容替代。
 
 归档元数据与会话快照一起提交。默认 `localdb` 保留会话与历史事件，daemon 重启后可读取；

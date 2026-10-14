@@ -12,9 +12,9 @@ import time
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", type=Path, default=Path("target/debug/basrw"))
+    parser.add_argument("--binary", type=Path, default=Path("target/debug/basg"))
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="basrw-wayland-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="basg-wayland-") as temporary:
         root = Path(temporary)
         config = root / "sway.conf"
         config.write_text("xwayland disable\nseat seat0 fallback true\n", encoding="utf-8")
@@ -26,7 +26,7 @@ def main():
             WLR_BACKENDS="headless",
             WLR_RENDERER="pixman",
             WLR_LIBINPUT_NO_DEVICES="1",
-            BASRW_TEST_ISOLATED_CLIPBOARD="1",
+            BASG_TEST_ISOLATED_CLIPBOARD="1",
         )
         with (root / "sway.log").open("w+") as log:
             compositor = subprocess.Popen(

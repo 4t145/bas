@@ -83,7 +83,7 @@ impl Store {
             None => Self {
                 path: super::paths::config_root()
                     .unwrap_or_else(|| PathBuf::from(".config"))
-                    .join("basr/settings.json"),
+                    .join("bas/settings.json"),
                 import_legacy: true,
             },
         }

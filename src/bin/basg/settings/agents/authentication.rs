@@ -1,0 +1,82 @@
+//! The settings page hosts the same Agent-owned authentication panel as threads.
+use super::Agents;
+use crate::agents::Status;
+use bas::config::AgentSpec;
+use gpui_kit::{Context, IntoElement, ParentElement, TestSupportExt, Window, div, prelude::*};
+
+impl Agents {
+    pub(super) fn ensure_authentication_panels(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pending: Vec<_> = self
+            .checks
+            .values()
+            .filter(|check| matches!(check.status, Status::AuthenticationRequired { .. }))
+            .map(|check| (check.spec.clone(), check.status.clone()))
+            .collect();
+        for (spec, status) in pending {
+            if self.authentications.contains_key(&spec.id) {
+                continue;
+            }
+            let panel = cx.new(|_| {
+                crate::authentication::Authentication::new(
+                    spec.clone(),
+                    status,
+                    self.store.path().to_owned(),
+                    window.window_handle(),
+                )
+            });
+            let expected = spec.clone();
+            self._subscriptions.push(cx.subscribe(
+                &panel,
+                move |page, _, event: &crate::authentication::Completed, cx| {
+                    page.on_authentication_completed(&expected, event, cx);
+                },
+            ));
+            self._subscriptions
+                .push(cx.observe(&panel, |_, _, cx| cx.notify()));
+            self.authentications.insert(spec.id.clone(), panel);
+        }
+        self.authentications
+            .retain(|id, _| self.checks.contains_key(id));
+    }
+
+    fn on_authentication_completed(
+        &mut self,
+        expected: &AgentSpec,
+        event: &crate::authentication::Completed,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_check(expected, event.0.clone());
+        if event.0.connected() && self.status(expected).is_some_and(Status::connected) {
+            self.authentications.remove(&expected.id);
+            self.message = crate::i18n::tr!("auth-complete").into();
+            self.notify_agent_change(Some(expected.id.to_string()), cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn authentication_content(
+        &self,
+        spec: &AgentSpec,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let Some(panel) = self.authentications.get(&spec.id) else {
+            return gds_uim::el! { #div {} }.into_any_element();
+        };
+        let editable = !self.dirty(cx) && self.registry.editable();
+        gds_uim::el! {
+            #div {
+                id: $format!("agents-authentication-{index}");
+                test_support; flex; flex_col; gap_2;
+            } [
+                ..$bool::then(!editable, || crate::i18n::tr!("auth-finish-edit")),
+                ..$editable.then(|| panel.clone()),
+            ]
+        }
+        .into_any_element()
+    }
+}

@@ -1,15 +1,40 @@
-# BASR 图形客户端
+# BasG 图形客户端
 
-`basrw` 使用 GPUI Kit，代码位于 `src/bin/basrw/`，通过 gRPC 连接 basrd。
+`basg` 使用 GPUI Kit，代码位于 `src/bin/basg/`，通过 gRPC 连接 bas。
 
-窗口激活时会向 basrd 报告当前会话，该会话完成时不弹桌面通知。
+窗口激活时会向 bas 报告当前会话，该会话完成时不弹桌面通知。
 切换到其他会话、打开设置、窗口失焦或关闭后恢复后台通知；关闭窗口不主动取消回合，
 待审批请求按下文的审批订阅生命周期取消。
-此行为需要同时更新 basrw 和 basrd，旧版守护进程仍会照常通知。
+此行为需要同时更新 basg 和 bas，旧版守护进程仍会照常通知。
 重新打开会自动附加到上次选择的 thread，并恢复它所属的工作目录和 Agent。
-选择记录按 basrd 地址保存在 `$XDG_STATE_HOME/basrw/`（默认 `~/.local/state/basrw/`）。
+选择记录按 bas 地址保存在 `$XDG_STATE_HOME/basg/`（默认 `~/.local/state/basg/`）。
 首次使用或原 thread 已被删除时，优先打开最近使用的可用会话，没有可用会话才创建新的 thread。
-`w` 表示 window。默认构建不启用图形依赖。
+默认构建不启用图形依赖。
+
+## 源码组织
+
+`src/bin/basg/` 按功能归属组织，模块入口使用 `foo.rs`，子模块与自有测试放入 `foo/`。
+
+| 模块 | 职责 |
+| --- | --- |
+| `workspace.rs`、`workspace/updates.rs` | 工作区构造、协调与后端更新的状态归约 |
+| `workspace/state.rs` | 窗口、后端、导航、跨会话数据、选中线程、活动编辑器与重命名状态的所有权 |
+| `workspace/navigation/` | 工作目录选择、线程分组、侧栏与行展示、固定项及导航恢复 |
+| `workspace/composer.rs`、`workspace/composer/view.rs` | 输入模式与快捷键、输入区测量、布局和事件绑定 |
+| `workspace/chat.rs`、`workspace/chat/content.rs` | 对话区域与时间线、消息及工具/终端内容渲染 |
+| `workspace/interaction/` | 当前会话的审批、认证与补充信息交互 |
+| `agents/` | 跨窗口的 Agent 服务、变更通知、元数据与图标 |
+| `settings/` | 设置页面、`agents/registry.rs` 目录浏览器、`window.rs` 独立窗口宿主 |
+| `authentication/`、`elicitation.rs` | 共享认证流程，以及认证和会话共用的表单/URL 面板 |
+| `ui/` | 通用按钮、提示与输入几何辅助 |
+
+工作区的子目录是同一 `Workspace` 的职责分组，不各自创建实体或复制状态。
+跨会话草稿、发送队列与后台操作属于会话存储，不随当前选中线程或输入区切换而清空。
+`connection`、`conversation`、`submission` 与 `configuration` 保持独立于页面；
+设置页面使用共享配置存储，而不拥有它。设置窗口的生命周期也独立于工作区窗口。
+
+模块白盒测试随所属模块存放；`workspace/tests/` 保留跨模块交互和状态生命周期回归。
+模块间仅暴露实际需要的接口，工作区内部接口限制在 `crate::workspace` 范围。
 
 ## 界面语言与设计约定
 
@@ -18,8 +43,8 @@
 `"appearance": { "language": "zh-CN" }` 或 `"en-US"`；旧配置缺省为中文。
 语言偏好沿用外观设置的校验、原子保存和外部热更新。
 
-BASR 自有文案使用 Mozilla [Fluent](https://projectfluent.org/)，资源位于
-`src/bin/basrw/i18n/assets/{zh-CN,en-US}.ftl`，随可执行文件嵌入。
+BasG 自有文案使用 Mozilla [Fluent](https://projectfluent.org/)，资源位于
+`src/bin/basg/i18n/assets/{zh-CN,en-US}.ftl`，随可执行文件嵌入。
 调用使用稳定的语义 ID 和具名参数；数量变化由 Fluent 选择器处理。
 简体中文是资源缺失时的回退。资源测试检查解析、消息覆盖、参数一致性及复数规则。
 GPUI Kit 内置编辑菜单和选择器通过其公开语言 API 同步切换。
@@ -43,7 +68,7 @@ GPUI Kit 内置编辑菜单和选择器通过其公开语言 API 同步切换。
 
 ## 设置窗口
 
-BASR 应用菜单中的“设置”或 `Ctrl+,` 打开设置，完整窗口与最小模式都可使用。
+BasG 应用菜单中的“设置”或 `Ctrl+,` 打开设置，完整窗口与最小模式都可使用。
 这是同一进程中的独立窗口：再次打开只激活已有窗口，不改变聊天窗口尺寸、模式或草稿，
 也不会切换或重建 thread。关闭聊天窗口后设置仍可使用，最后一个窗口关闭才退出应用。
 标题栏关闭按钮或 `Ctrl+W`（macOS 为 `Cmd+W`）只关闭设置窗口。
@@ -66,8 +91,8 @@ Fallback 用逗号分隔，留空继承，`[]` 表示不指定额外 fallback。
 应用级监听持续检查外部配置变化；主题、字体和尺寸同时更新所有窗口，
 不依赖某个聊天窗口仍然打开。
 
-所有设置共用 `$XDG_CONFIG_HOME/basr/settings.json`（未设置 XDG 时为
-`~/.config/basr/settings.json`），`--settings-file` / `BASR_SETTINGS_FILE` 可覆盖路径。
+所有设置共用 `$XDG_CONFIG_HOME/bas/settings.json`（未设置 XDG 时为
+`~/.config/bas/settings.json`），`--settings-file` / `BAS_SETTINGS_FILE` 可覆盖路径。
 外观存入 `appearance`，Agent 目录存入 `daemon.agents`；保存某一 section 不覆盖另一 section。
 默认新文件缺失时只读合并旧 `appearance.json` 和 `agents.json`，首次保存写入新文件，旧文件保留。
 `--theme-file` 优先于表单中的主题文件；内置来源不会读取外部主题。
@@ -105,7 +130,7 @@ ACP 连接调用 authenticate。终端助手反馈登录进程结果，随后重
 设置页和会话页共用认证组件；会话需要认证时直接展示步骤，保留输入与附件。
 Agent 提供 Form 时显示字段、默认值与校验错误；提供 URL 时展示地址，由用户打开，
 随后等待 Agent 的完成通知。已有会话也支持这些交互；切换会话或断开后不重放旧答案。
-凭据继续由 Agent 管理，BASR 不收集或写入共享配置中的 API key。
+凭据继续由 Agent 管理，Bas 不收集或写入共享配置中的 API key。
 历史终端描述符由 daemon 对照托管启动记录验证，保留 Node 入口等启动参数。
 
 目录加载会核对 daemon 的 settings 路径。远端服务、不同配置路径、旧版 daemon
@@ -134,70 +159,65 @@ Wayland 下不显示合成器未提供的最小化、最大化操作，小窗切
 Linux / NixOS 可在仓库根目录安装到当前用户的 Nix profile：
 
 ```sh
-make install-basrw
-basrw --server 127.0.0.1:7337 --cwd /path/to/project
+make install-basg
+basg --server 127.0.0.1:7337 --cwd /path/to/project
 # 完整窗口
-basrw --window
+basg --window
 ```
 
-安装目标构建 release 版本，包含尚未加入 Git 的源码，并排除 `.env`、
-测试目录和构建输出。安装包包含运行时图形库的启动包装与 `BASR` 桌面菜单入口，
-日常启动不需要 `nix develop`。桌面标识仍为 `org.basr.Gui`，现有窗口规则可继续使用。
-安装不启动 basrd；服务可用 `make install-basrd-service` 安装，见 [安装与后端配置](install.md)。
-卸载使用 `nix profile remove basrw`；安装新的本地版本直接重跑 `make install-basrw`，
+优先使用此快照安装目标构建 release 版本，包含尚未加入 Git 的源码和已初始化子模块，
+排除 `.git`、`.delta`、`.env` 等元数据、测试输出和构建输出。
+path 快照已有宏源码，不传 Git 专用的 `submodules=1` 参数。
+安装包包含运行时图形库的启动包装与 `BasG` 桌面菜单入口，
+日常启动不需要 `nix develop`。桌面标识为 `org.bas.Gui`，窗口规则需使用此标识。
+安装不启动 bas；服务可用 `make install-bas-service` 安装，见 [安装与后端配置](install.md)。
+卸载使用 `nix profile remove basg`；安装新的本地版本直接重跑 `make install-basg`，
 脚本会替换同名的旧 profile 条目。
 
-源码均已加入 Git 后，也可以直接使用 flake 输出：
+源码均已加入 Git 后，也可以显式使用包含子模块的 Git flake 输出：
 
 ```sh
-nix profile install .#basrw
+nix profile add "git+file://$PWD?submodules=1#basg"
 # 或只构建 / 临时运行
-nix build .#basrw
-nix run .#basrw -- --window
+nix build "git+file://$PWD?submodules=1#basg"
+nix run "git+file://$PWD?submodules=1#basg" -- --window
 ```
 
-NixOS / Home Manager 的 flake 配置中，将
-`inputs.basr.packages.${pkgs.stdenv.hostPlatform.system}.basrw` 加入
+NixOS / Home Manager 的 flake 配置中，设置
+`inputs.bas.url = "git+https://github.com/4t145/bas?submodules=1";`，再将
+`inputs.bas.packages.${pkgs.stdenv.hostPlatform.system}.basg` 加入
 `environment.systemPackages` / `home.packages`。
 
 ## 本机启动
 
+首次克隆或更新后，在物理 checkout 执行 `git submodule update --init --recursive`。
+以下 Cargo 和 `nix develop .#gui` 工作流直接读取本地子模块源码。
+
 macOS / Windows 可使用仓库固定的 Rust 工具链原生构建：
 
 ```sh
-cargo build --features gui --bin basrw --locked
-cargo run --features gui --bin basrw -- --window
+cargo build --features gui --bin basg --locked
+cargo run --features gui --bin basg -- --window
 ```
 
 macOS 也可使用 `nix develop .#gui`，该 shell 仅在 Linux 引入 Wayland 等图形运行库。
 Nix 安装包和 systemd 用户服务仍面向 Linux；macOS / Windows 的构建与桌面状态测试
 由 CI 的 `native-desktop` job 检查，实机的输入法、缩放与窗口按钮仍需桌面验收。
 
-在仓库的 `.env` 配置 `DEEPSEEK_API_KEY` 后：
+先在另一个终端运行 `nix develop -c cargo run --bin bas`，或连接已安装的 daemon
+用户服务，再启动 GUI。Pi 等外部 Agent 在设置页的 ACP Registry 目录中按需安装，
+认证沿用 Agent 原生流程，不需要仓库级模型配置或 `.env`。
+GUI 与 daemon 独立运行，关闭 GUI 不会停止 daemon 或后台 Agent。
 
 ```sh
-# 最小弹窗：同时启动 basrd、pi / DeepSeek 和 GUI
-./scripts/dev-local
-
-# 直接打开 workspace / thread 窗口
-./scripts/dev-local gui --window
-
-# 使用你的项目目录
-./scripts/dev-local gui --cwd /path/to/project
-```
-
-这个测试入口在 GUI 关闭时一起停止 basrd 和 pi。希望关闭 GUI 后 Agent 继续运行，
-先运行 `./scripts/dev-local daemon`，再单独打开客户端：
-
-```sh
-nix develop .#gui -c cargo run --features gui --bin basrw -- \
+nix develop .#gui -c cargo run --features gui --bin basg -- \
   --server 127.0.0.1:7337 --cwd /path/to/project
 
 # --window 直接进入窗口模式；--compact 是默认最小模式的显式写法
-nix develop .#gui -c cargo run --features gui --bin basrw -- --window
+nix develop .#gui -c cargo run --features gui --bin basg -- --window
 ```
 
-`BASR_SERVER` 也可以指定地址，命令行参数优先。完整本机测试说明见 [local.md](local.md)。
+`BAS_SERVER` 也可以指定地址，命令行参数优先。服务配置及认证见 [安装说明](install.md)。
 非 Nix 环境需要 Rust 和 GPUI 的字体、Wayland / X11、图形系统依赖，参考
 [GPUI Kit 安装说明](https://gpui-kit.com/docs/installation/)。
 
@@ -227,7 +247,7 @@ nix develop .#gui -c cargo run --features gui --bin basrw -- --window
 
 两种模式的 Agent 选择器都在输入框上方的工具栏中，位于连接状态灯之前。
 选择菜单为每个 Agent 显示与 Registry 一致的图标，当前项在右侧显示勾选标记。
-工具栏中的 Agent 图标与相邻按钮使用相同的图标尺寸；设置入口收在 BASR 应用菜单中。
+工具栏中的 Agent 图标与相邻按钮使用相同的图标尺寸；设置入口收在 BasG 应用菜单中。
 输入框下方共用一排工具栏：左侧是附件加号，右侧是选项当前值、
 带名称的滑动开关和发送 / 停止按钮。选项过多时横向滚动，发送按钮始终可见。
 Boolean 选项直接显示当前开关状态，悬浮提示保留后端说明；提交配置期间禁用，后端确认后更新。
@@ -275,7 +295,7 @@ Escape 恢复编辑前的输入草稿。时钟图标仍显示数量并可取回�
 红色停止按钮取消当前任务并暂停后续发送，暂停队列可显式继续。
 “立即发送”先取消当前回合，再等待取消成功及空闲状态后提交选中的消息；取消失败或
 发送失败时保留消息。单独发送暂停队列中的一条消息不恢复其余消息的自动发送。
-待发送队列属于当前 GUI 实例，关闭窗口不会继续发送队列中尚未提交的消息；已经提交给 basrd 的任务继续运行。
+待发送队列属于当前 GUI 实例，关闭窗口不会继续发送队列中尚未提交的消息；已经提交给 bas 的任务继续运行。
 多行工具命令收起时显示单行摘要，悬停及展开后保留原始换行，右侧执行状态始终可见。
 连续的思考与多次工具调用合为一个默认折叠的活动块，显示思考、工具调用和执行中／失败
 数量；用户输入和 Agent 输出仍独立显示。展开活动块可查看各条思考和工具详情。
@@ -291,7 +311,7 @@ Markdown 复用原版 GPUI 渲染，支持多级列表、列表内代码与表�
 操作平时弱化显示，悬停后增强；最新回复生成中或等待确认时暂不显示。
 有序列表非 1 起始编号的上游限制记录在 [UI 依赖问题](upstream-ui.md)。
 
-窗口模式以工作目录分组：一个 **workspace 对应 basrd 上的一个 cwd**，组下的
+窗口模式以工作目录分组：一个 **workspace 对应 bas 上的一个 cwd**，组下的
 **thread 对应一条 session**。同名但路径不同的目录不会合并。组始终显示展开／折叠箭头，
 鼠标移入后显示相邻的新建 thread 和更多操作按钮；整行右键打开同一菜单，支持新建、
 展开／折叠、复制目录路径和添加工作目录。文件夹加号也可添加目录。
@@ -299,7 +319,7 @@ Markdown 复用原版 GPUI 渲染，支持多级列表、列表内代码与表�
 选择后打开该目录的草稿；取消保留当前线程和草稿。远程入口暂时禁用，后续实现。
 当前版本不提供多根目录 workspace。
 
-左侧顶部为 BASR 应用菜单，不显示 Threads 标题或主题名称；主题只在设置页查看和修改。
+左侧顶部为 BasG 应用菜单，不显示 Threads 标题或主题名称；主题只在设置页查看和修改。
 左侧与右侧顶栏共用高度和按钮尺寸，控件垂直居中；搜索框与顶栏之间保留间距。
 顶栏项目名与线程标题使用相同字号，重命名输入框保持同行高度。
 完整窗口右上角只显示窗口模式、最小化、最大化和关闭等窗口操作；thread 归档使用侧栏操作。
@@ -320,7 +340,7 @@ thread 标题下显示最近互动时间（刚刚、分钟、小时或天），�
 减少动态效果时遵循组件的 reduced-motion 策略，不持续请求动画帧。
 右键菜单可重命名、废弃草稿或归档／恢复、置顶／取消置顶，以及永久删除。
 未读会话还可“标为已读”，用于主动确认回复或清除已被历史容量淘汰的未读提示。
-置顶按当前 basrd 地址保存在本机窗口状态文件中，在 workspace 内优先显示，
+置顶按当前 bas 地址保存在本机窗口状态文件中，在 workspace 内优先显示，
 重开 GUI 后保留，`Ctrl+Tab` 与显示顺序一致。
 归档从普通列表隐藏会话，可以在归档列表查看历史并恢复；
 普通搜索和启动时自动恢复不包含归档会话。
@@ -328,10 +348,10 @@ thread 标题下显示最近互动时间（刚刚、分钟、小时或天），�
 归档会话不能发送新消息，未发送草稿、附件和队列保留，队列暂停。
 恢复不会自动重发队列，需手动继续发送、单条发送，或修改后提交。操作失败保留原状态，不会退化成删除。
 永久删除需单独确认，会停止对应 Agent 并清除会话和本地草稿/队列；
-也可使用 `basrctl session remove <id>`。归档失败会显示独立错误窗口，
+也可使用 `bast session remove <id>`。归档失败会显示独立错误窗口，
 旧服务不支持时明确提示升级及重启的内存数据丢失风险，不会以删除替代。
 归档元数据随会话保存；默认 `localdb` 将会话与事件写入本机数据库，关闭 GUI 或重启
-daemon 后可以重新读取。`BASRD_STORAGE=memory` 仅保留本次 daemon 进程的数据，
+daemon 后可以重新读取。`BAS_STORAGE=memory` 仅保留本次 daemon 进程的数据，
 已淘汰的内存历史不会恢复。继续原 Agent 对话还取决于该 Agent 的会话恢复能力。
 显式新建 thread 先显示未创建的草稿，输入框上方可选择 Agent 并保留草稿；选择后立即初始化。
 首条用户请求被接受或用户回合开始后固定 Agent；初始化完成但尚未发送用户请求时仍可切换。
@@ -353,7 +373,7 @@ daemon 后可以重新读取。`BASRD_STORAGE=memory` 仅保留本次 daemon 进
 同一活动组中的工具分别定位到自己的标题。工具标题按内容字号预留完整行高，保留英文下伸字形。
 Markdown 样式参考 Zed Agent Panel 的紧凑标题比例、段落间距与代码块边框。
 Markdown 中的 HTTP(S) 图片通过应用注册的 HTTP client 加载，使用系统证书验证并遵循代理环境变量，
-默认请求总期限为 30 秒。加载会向图片 URL 所在服务器发起网络请求，不会自动附加 BASR
+默认请求总期限为 30 秒。加载会向图片 URL 所在服务器发起网络请求，不会自动附加 Bas
 会话内容。Mermaid 目前仍按代码块显示，图形渲染为远期待办。
 活动摘要分别使用思考、工具、运行和失败图标，只有失败项使用错误色，窄窗口自动换行。
 思考块使用统一的展开按钮、灯泡和淡色标签，展开后的正文沿左侧细线缩进，复制按钮在悬停时出现。
@@ -394,8 +414,8 @@ prompt 原样发送。实现遵循 [ACP slash commands](https://agentclientproto
 | Esc | 关闭编辑区；否则缩回最小模式、折叠输出、关闭弹窗 |
 | F5 | 刷新列表并重新加载当前 thread |
 
-在 Niri 下，客户端通过 IPC **仅调整自身窗口**：最小模式使用浮动窗口，展开后回到平铺。
-不修改 Niri 配置。其他桌面使用 GPUI 的窗口缩放，最终大小和浮动策略由窗口管理器决定。
+客户端通过 GPUI 请求窗口类型和尺寸：主窗口使用 `Normal`，设置窗口使用 `Floating`。
+最小／窗口模式切换只调整界面布局和尺寸，不调用窗口管理器专用 IPC；最终摆放、平铺与浮动策略由 compositor／窗口管理器决定。
 尚未注册全局快捷键或实现单实例唤起；可以把启动命令绑定到桌面快捷键。
 
 ## 跟随 DMS / Zed 主题
@@ -417,25 +437,25 @@ DMS 更换壁纸或配色后，生成文件的更新会自动生效。文件重�
 避免 Linux 字体后端把可变 CJK 字体呈现为过细的默认字重；正文、输入框与行内代码沿用相同回退链。
 
 也可通过 `--theme-file /path/to/zed-theme.json` 指定另一份 Zed 主题文件，支持实时重载。
-BASR 只读取桌面主题，不修改 Zed 或 DMS 配置。实现参考
+BasG 只读取桌面主题，不修改 Zed 或 DMS 配置。实现参考
 [DMS 应用主题](https://danklinux.com/docs/dankmaterialshell/application-themes)、
 [Zed workspace / thread 侧栏](https://github.com/zed-industries/zed/blob/main/crates/sidebar/src/sidebar.rs)
 及 [Agent thread 视图](https://github.com/zed-industries/zed/blob/main/crates/agent_ui/src/conversation_view/thread_view.rs)。
 
 ### 统一设置中的外观偏好
 
-BASR 偏好和 Agent 配置保存在系统用户配置目录下的 `basr/settings.json`；
+Bas 偏好和 Agent 配置保存在系统用户配置目录下的 `bas/settings.json`；
 也可用 `--settings-file /path/to/settings.json` 指定位置。
 
 | 平台 | 默认配置文件 | 默认状态根目录 |
 | --- | --- | --- |
-| Linux | `~/.config/basr/settings.json` | `~/.local/state` |
-| macOS | `~/Library/Application Support/basr/settings.json` | `~/Library/Application Support` |
-| Windows | `%APPDATA%\basr\settings.json` | `%LOCALAPPDATA%` |
+| Linux | `~/.config/bas/settings.json` | `~/.local/state` |
+| macOS | `~/Library/Application Support/bas/settings.json` | `~/Library/Application Support` |
+| Windows | `%APPDATA%\bas\settings.json` | `%LOCALAPPDATA%` |
 
 绝对的 `XDG_CONFIG_HOME` / `XDG_STATE_HOME` / `XDG_CACHE_HOME` 可覆盖对应目录；
 空值和相对路径忽略，不将默认存储重定位到启动目录。daemon 数据库位于状态根目录的
-`basr/sessions.sqlite3`，窗口恢复与置顶状态位于 `basrw/`。已有 macOS 用户若使用原 Linux
+`bas/sessions.sqlite3`，窗口恢复与置顶状态位于 `basg/`。已有 macOS 用户若使用原 Linux
 式目录，可以继续通过 XDG 覆盖或显式文件路径使用原数据；不会自动迁移或删除旧文件。
 文件不存在时读取旧格式作为迁移来源；没有旧文件则沿用默认，不创建空文件。可在独立设置窗口修改，也可直接编辑 JSON；
 两种入口共用校验、合并及热更新规则。
@@ -478,7 +498,7 @@ BASR 偏好和 Agent 配置保存在系统用户配置目录下的 `basr/setting
 | `theme_mode` | 默认 `desktop` 尊重 Zed 选择；`system` 跟随窗口系统模式，`light` / `dark` 固定模式 |
 | `theme_file` | 外部 Zed 主题文件路径；相对路径以偏好文件所在目录为基准 |
 
-合并顺序为 **内置默认 → 外部 Zed/DMS 适配 → BASR 显式偏好**。
+合并顺序为 **内置默认 → 外部 Zed/DMS 适配 → Bas 显式偏好**。
 `--theme-file` 优先于 JSON 的 `theme_file`，仅覆盖外部主题路径，不覆盖其它偏好；
 `theme_source: "builtin"` 时外部路径均不使用。CLI 相对路径以启动工作目录为基准。
 固定模式覆盖 Zed 的固定主题名/模式，但继续采用对应模式的命名变体和主题颜色覆盖。
@@ -489,7 +509,7 @@ resolve，全部成功才应用。热更新的 IO、JSON 或校验失败会记�
 **整份上次有效配置**；相同连续错误不重复刷日志。文件删除按缺省/导入重新计算；
 权限错误等其它 IO 错误不当作文件缺失。首次启动没有有效配置时使用内置默认。
 仍选择 `desktop` 就表示依赖该组导入，坏的桌面配置会拒绝整次更新；
-选择 `builtin` 后，坏的桌面文件不会阻止完全显式的 BASR 偏好生效。
+选择 `builtin` 后，坏的桌面文件不会阻止完全显式的 Bas 偏好生效。
 建议通过临时文件加原子替换更新配置，避免写入期间的中间状态。
 
 字体存在性检测、去除未安装字体、平台 UI 字体替代，以及末尾追加一个已安装的 CJK
@@ -503,18 +523,18 @@ resolve，全部成功才应用。热更新的 IO、JSON 或校验失败会记�
 2026-10-10 对照 Zed `main` 的固定提交
 [`f16f9652`](https://github.com/zed-industries/zed/tree/f16f9652ec57bf806e65b2a0d51bb92a63644914)。
 SDK 升为 3.3.0，启用 `schemars`、`unstable` 和 `unstable_protocol_v2`，
-并保留 BASR 子进程传输所需的 `process`。外部 Agent 仍协商 v1；
+并保留 Bas 子进程传输所需的 `process`。外部 Agent 仍协商 v1；
 计划、用量、通知与压缩使用 v2 展示类型，工具和普通消息继续兼容 v1 历史。
 这里的“已支持”指当前 Agent→daemon→RPC→GUI 路径可展示；
 “部分支持”指已有对应 UI，但 v2 草案新增的事件或结构尚未通过该路径接入。
 
-| 元素 | 当前接入 | basrw 展示与边界 |
+| 元素 | 当前接入 | BasG 展示与边界 |
 | --- | --- | --- |
 | 工具调用 | 部分支持：v1 `tool_call` / `tool_call_update` | 名称、标题、状态、输入输出、富内容、文件位置及局部更新；原生 v2 `tool_call_content_chunk` 尚未接入 |
 | 文件变更 | 部分支持：v1 `type: "diff"` | 文件路径；提供 old/new 时生成真实 unified patch，无 oldText 时展示修改后全文；尚无 v2 新增／删除／重命名等多文件操作清单，也无 diff 审批 |
 | 终端 | 部分支持：Zed 的 `_meta.terminal_info` / `terminal_output` / `terminal_exit` 扩展 | 工具标题或扩展提供的命令、工作目录、ANSI 输出、退出码和信号，空输出退出可见，rawOutput 保留兜底；v2 终端展示 reducer 已实现，原生事件尚未接入，也未声明客户端托管终端执行能力 |
 | 计划 | 已支持：v1 `plan`、实验 `plan_update` / `plan_removed` | 条目进度、状态、优先级；按 ID 更新／移除多个计划；Markdown 计划预览；文件计划展示并打开 URI，不读取文件内容 |
-| 前台状态 | 部分支持：BASR 回合／生命周期事件、审批和交互订阅 | 执行中、空闲、等待工具审批、等待用户交互；请求在回合外出现时也显示等待状态；v2 `state_update` reducer 已实现，原生事件尚未接入 |
+| 前台状态 | 部分支持：Bas 回合／生命周期事件、审批和交互订阅 | 执行中、空闲、等待工具审批、等待用户交互；请求在回合外出现时也显示等待状态；v2 `state_update` reducer 已实现，原生事件尚未接入 |
 | 工具审批 | 已支持：v1 `session/request_permission` | 独立卡片展示 Agent 提供的允许／拒绝选项，返回原生 option ID；支持用户取消及 Agent 取消请求；不主动拦截 Agent 自行执行的工具 |
 | 用户选择／输入 | 已支持：v1 `elicitation/create` / `elicitation/complete` | 表单中的单选、多选、文本、数字和布尔值，提交前校验；URL 交互需用户点击，接受后等待完成通知；紧凑模式自动展开交互区域；需要适配器发出请求 |
 | 可用命令 | 已支持：`available_commands_update` | Slash commands 列表、描述、过滤和键盘补全；目录保存在会话快照，不受历史裁剪影响 |
@@ -536,10 +556,8 @@ SDK 升为 3.3.0，启用 `schemars`、`unstable` 和 `unstable_protocol_v2`，
 [Elicitation](https://agentclientprotocol.com/protocol/v1/elicitation) 返回结构化表单答案，
 不会将普通选择转换成工具授权。两者都依赖 Agent 或适配器主动发起请求；
 只在 Markdown 中列出选项，客户端不会自动生成选择控件。
-仓库固定的 `pi-acp 0.0.32` 自行执行文件和 shell 工具，不调用 BASR 权限回调；
-因此使用该适配器测试普通工具执行时，不出现审批卡片。
 已核对的 `pi-acp 0.0.34` 会在 Pi 扩展调用 `ctx.ui.select()` 或 `ctx.ui.confirm()` 时
-发出 ACP `session/request_permission`，由 BASR 显示审批卡片并返回所选选项；
+发出 ACP `session/request_permission`，由 BasG 显示审批卡片并返回所选选项；
 这种选择不是标准 `elicitation/create` 表单。
 Pi 内置工具不会自动调用这两个方法；助手只在正文里列出 1／2／3，也不会生成请求。
 该版本未将扩展的 `input`／`editor` 转为 ACP `elicitation/create`。
@@ -549,14 +567,14 @@ Pi 内置工具不会自动调用这两个方法；助手只在正文里列出 1
 `codex-acp 2.1.1` 能将同步 `item/tool/requestUserInput` 转为表单，
 但会丢弃 Codex 异步 `request_user_input_async` 生成的 AgentMessage `questions`。
 这类问题在 Codex 中已接受，ACP 客户端却收不到 `elicitation/create`；
-仅升级 BASR 或切换 Plan 模式不能补齐这条适配链路。
-这属于适配器侧兼容限制，等待上游修复。BASR 已验证标准表单请求在回合结束后
+仅升级 Bas 或切换 Plan 模式不能补齐这条适配链路。
+这属于适配器侧兼容限制，等待上游修复。Bas 已验证标准表单请求在回合结束后
 仍可保留、提交及接收后续通知的生命周期；需要适配器实际发出该请求。
 
 Codex 的权限 **Mode** 与 **Collaboration mode** 是独立配置。
 `codex-acp 2.1.1` 默认权限预设为 Auto review，会显式传入 `approvals_reviewer=auto_review`；
 Default／Plan 的切换不改变审批人。人工审批应选择 Workspace access 或 Read-only，
-默认值配置见 [Codex 安装说明](install.md#codex)。恢复会话时，BASR 将后端返回的
+默认值配置见 [Codex 安装说明](install.md#codex)。恢复会话时，Bas 将后端返回的
 当前配置保存并通知 GUI，避免保留恢复前的权限显示；适配器仍决定恢复后的实际值。
 
 2026-10-11 对照 Zed `main`
@@ -565,16 +583,16 @@ Default／Plan 的切换不改变审批人。人工审批应选择 Workspace acc
 与 [Elicitation UI](https://github.com/zed-industries/zed/blob/96984225abc235519e66b5c6c9ed23b87621f868/crates/agent_ui/src/conversation_view/elicitation.rs)，
 补齐交互等待状态及 Agent 取消审批请求的生命周期处理。
 
-ACP 能表达后台工作，但 BASR 当前尚未提供独立任务面板或任务管理 RPC：
+ACP 能表达后台工作，但 Bas 当前尚未提供独立任务面板或任务管理 RPC：
 
 - **长终端任务**：v1 [终端接口](https://agentclientprotocol.com/protocol/v1/terminals)
   的 `terminal/create` 立即返回 `terminalId`，后续用 `output`、`wait_for_exit`、`kill`、
-  `release` 查询输出、等待、停止和释放。BASR 当前声明 `terminal: false`，
+  `release` 查询输出、等待、停止和释放。Bas 当前声明 `terminal: false`，
   仅展示 Agent 自行执行后通过工具更新发送的终端内容，尚不托管这些进程。
 - **Subagent**：上游 [Subagents RFD](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/rfds/subagents.mdx)
   定义子会话关联与独立事件；本项目启用的实验 schema 包含相关类型，
   但尚未声明 subagent 能力、路由子会话或展示独立子任务。当前只能展示适配器发送的普通工具进度。
-- **前台空闲时继续工作**：v1 会话通知可在回合外到达，BASR 会作为会话事件接收；
+- **前台空闲时继续工作**：v1 会话通知可在回合外到达，Bas 会作为会话事件接收；
   v2 [前台状态](https://agentclientprotocol.com/protocol/v2/prompt-lifecycle)
   明确区分前台回合与后台工作，`idle` 不表示所有后台任务已结束。
   后续接入应分别保存前台状态和任务状态，并为任务保留 ID、进度、输出及取消操作。
@@ -585,7 +603,7 @@ ACP 能表达后台工作，但 BASR 当前尚未提供独立任务面板或任�
 切换 thread 使用订阅代次隔离迟到消息；较晚完成的初始化请求不会自动发送消息，
 也不会抢走用户正在编辑的 workspace。命令目录保存在原生 ACP 会话快照中，不随历史裁剪丢失。修改请求不会自动重试，避免重复执行。
 
-basrd 默认使用 `localdb` 保存会话快照与有序事件，GUI 通过历史分页恢复内容。
+bas 默认使用 `localdb` 保存会话快照与有序事件，GUI 通过历史分页恢复内容。
 `memory` 模式只保留有界内存历史；GUI 不承诺恢复该模式下已淘汰的消息或服务重启前的数据。
 Agent 提供 `configOptions` 时，输入区展示选择或开关控件，可用于模型、模式、推理级别等设置；选项顺序遵循 Agent 定义。
 对话可展示 ACP 图片、嵌入文本文件、资源链接、工具内容和 diff 文本。
@@ -604,8 +622,8 @@ Agent 取消、回合取消、会话切换或最后一个交互客户端断开�
 RPC 已支持 ACP 的完整内容类型。
 
 ```sh
-nix develop .#gui -c cargo check --features gui --bin basrw
-nix develop .#gui -c cargo test --features gui-tests --bin basrw
+nix develop .#gui -c cargo check --features gui --bin basg
+nix develop .#gui -c cargo test --features gui-tests --bin basg
 nix develop -c cargo test --all-targets
 ```
 
@@ -613,7 +631,7 @@ nix develop -c cargo test --all-targets
 目录，不读写当前桌面的剪贴板：
 
 ```sh
-nix develop .#gui -c cargo build --features gui-tests --bin basrw --locked
+nix develop .#gui -c cargo build --features gui-tests --bin basg --locked
 nix develop .#gui -c nix shell --inputs-from . nixpkgs#sway-unwrapped nixpkgs#python3 -c python3 tests/wayland_clipboard.py
 ```
 
@@ -626,22 +644,22 @@ nix develop .#gui -c nix shell --inputs-from . nixpkgs#sway-unwrapped nixpkgs#py
 以及真实本机 gRPC 的附件传输、历史与断线恢复。
 无界面测试不替代实际桌面上的输入法、缩放、透明合成和焦点验证。
 
-可用独立的固定内容预览核对桌面视觉，不连接 basrd 或发起 Agent 请求：
+可用独立的固定内容预览核对桌面视觉，不连接 bas 或发起 Agent 请求：
 
 ```sh
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel empty
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel sample
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel layout
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel connecting
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel disconnected
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel menus
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel files
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel thoughts
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel tool-details
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel turn-navigation --window
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel turn-navigation-hover --window
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel turn-navigation-many
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel completed
-nix develop .#gui -c cargo run --features gui-tests --bin basrw -- --preview-panel reply-preview
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel empty
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel sample
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel layout
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel connecting
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel disconnected
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel menus
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel files
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel thoughts
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel tool-details
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel turn-navigation --window
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel turn-navigation-hover --window
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel turn-navigation-many
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel completed
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel reply-preview
 # 加 --window 查看完整窗口布局
 ```

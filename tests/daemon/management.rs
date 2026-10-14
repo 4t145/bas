@@ -1,7 +1,7 @@
 //! Exercise discovery, acquisition and lifecycle through the real daemon RPCs.
 
 use super::*;
-use basr::{
+use bas::{
     config::AgentSpec,
     management::{Catalog, Status},
 };
@@ -29,7 +29,7 @@ impl Fixture {
         let script = format!(
             "#!{}\n{}",
             shell.display(),
-            include_str!("../../src/bin/basrd/agent/acp/assets/fixture.sh")
+            include_str!("../../src/bin/bas/agent/acp/assets/fixture.sh")
         )
         .into_bytes();
         let digest = format!("{:x}", Sha256::digest(&script));
@@ -39,7 +39,7 @@ impl Fixture {
                 "id": id, "name": id, "version": "1.0.0", "description": "Local test ACP agent",
                 "distribution": {"binary": {platform.clone(): {
                     "archive": format!("http://{address}/{archive}"), "cmd": "./agent",
-                    "sha256": checksum, "env": {"BASR_FIXTURE_MODE": "normal", "BASR_FIXTURE_PID": directory.join(format!("{id}.pid"))}
+                    "sha256": checksum, "env": {"BAS_FIXTURE_MODE": "normal", "BAS_FIXTURE_PID": directory.join(format!("{id}.pid"))}
                 }}}
             })
         };
@@ -107,11 +107,11 @@ async fn start(directory: &std::path::Path, fixture: &Fixture) -> Daemon {
     .expect("settings fixture");
     let mut command = command();
     command
-        .env_remove("BASRD_AGENTS")
-        .env("BASR_SETTINGS_FILE", path)
-        .env("BASRD_ACP_DATA_DIR", directory.join("acp"))
+        .env_remove("BAS_AGENTS")
+        .env("BAS_SETTINGS_FILE", path)
+        .env("BAS_ACP_DATA_DIR", directory.join("acp"))
         .env(
-            "BASRD_ACP_REGISTRY_URL",
+            "BAS_ACP_REGISTRY_URL",
             format!("http://{}/registry.json", fixture.address),
         )
         .args([
@@ -161,11 +161,11 @@ async fn start_profile(
 ) -> Daemon {
     let mut command = command();
     command
-        .env_remove("BASRD_AGENTS")
-        .env_remove("BASR_SETTINGS_FILE")
-        .env("BASRD_ACP_DATA_DIR", root)
+        .env_remove("BAS_AGENTS")
+        .env_remove("BAS_SETTINGS_FILE")
+        .env("BAS_ACP_DATA_DIR", root)
         .env(
-            "BASRD_ACP_REGISTRY_URL",
+            "BAS_ACP_REGISTRY_URL",
             format!("http://{}/registry.json", fixture.address),
         )
         .arg("--settings-file")
@@ -181,8 +181,8 @@ async fn start_profile(
     Daemon::start(command).await
 }
 
-fn registration(path: &std::path::Path) -> basr::config::AgentRegistration {
-    basr::config::Store::at(path.to_path_buf())
+fn registration(path: &std::path::Path) -> bas::config::AgentRegistration {
+    bas::config::Store::at(path.to_path_buf())
         .load()
         .expect("profile settings")
         .settings
@@ -217,7 +217,7 @@ async fn explicit_profiles_share_install_root_without_sharing_registrations() {
     for path in [&a_path, &b_path] {
         std::fs::write(
             path,
-            serde_json::to_vec(&basr::config::Settings::default()).expect("default settings"),
+            serde_json::to_vec(&bas::config::Settings::default()).expect("default settings"),
         )
         .expect("profile");
     }
@@ -256,7 +256,7 @@ async fn explicit_profiles_share_install_root_without_sharing_registrations() {
     check_installed(&mut b, &second).await;
 
     // An external profile edit is resolved by the running daemon's catalog watcher.
-    let store = basr::config::Store::at(a_path.clone());
+    let store = bas::config::Store::at(a_path.clone());
     let mut document = store.load().expect("A settings");
     let mut agents = document.settings.daemon.agents.clone();
     agents.push(a_registration.clone());
@@ -366,19 +366,19 @@ async fn discovery_install_update_remove_and_offline_cache_preserve_sessions() {
     daemon
         .client
         .prompt(pb::PromptSubmission::from(
-            &basr::model::PromptSubmission::new(basr::acp::PromptRequest::new(
+            &bas::model::PromptSubmission::new(bas::acp::PromptRequest::new(
                 live.id,
                 vec!["still alive".into()],
             )),
         ))
         .await
         .expect("existing process continues after update and removal");
-    let saved = basr::config::Store::at(directory.path().join("settings.json"))
+    let saved = bas::config::Store::at(directory.path().join("settings.json"))
         .load()
         .expect("saved settings");
     assert_eq!(
         saved.settings.appearance.theme_source,
-        basr::config::appearance::ThemeSource::Builtin
+        bas::config::appearance::ThemeSource::Builtin
     );
     assert_eq!(saved.settings.daemon.agents.len(), 2);
     assert!(

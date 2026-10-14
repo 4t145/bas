@@ -10,7 +10,11 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: cachix/install-nix-action@v31
+      - name: Test Nix source snapshots and locked URI round trips
+        run: python3 tests/nix_source.py
       - name: Check formatting
         run: nix develop .#gui -c cargo fmt --all -- --check
       - name: Build all application targets
@@ -20,9 +24,9 @@ jobs:
       - name: Lint default targets
         run: nix develop -c cargo clippy --all-targets --locked -- -D warnings
       - name: Test GUI package feature set
-        run: nix develop .#gui -c cargo test --features gui --bin basrw --locked
+        run: nix develop .#gui -c cargo test --features gui --bin basg --locked
       - name: Test headless desktop
-        run: nix develop .#gui -c cargo test --features gui-tests --bin basrw --locked
+        run: nix develop .#gui -c cargo test --features gui-tests --bin basg --locked
       - name: Test native Wayland clipboard in a private compositor
         run: nix develop .#gui -c nix shell --inputs-from . nixpkgs#sway-unwrapped nixpkgs#python3 -c python3 tests/wayland_clipboard.py
       - name: Lint application targets
@@ -37,6 +41,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Install the pinned Rust toolchain
         shell: bash
         run: rustup show active-toolchain
@@ -48,8 +54,8 @@ jobs:
       - name: Test shared model and configuration
         run: cargo test --lib --locked
       - name: Test native installation process ownership
-        run: cargo test --bin basrd management::runtime::process:: --locked
+        run: cargo test --bin bas management::runtime::process:: --locked
       - name: Test native installation cancellation and shutdown
-        run: cargo test --bin basrd management::tests::lifecycle:: --locked
+        run: cargo test --bin bas management::tests::lifecycle:: --locked
       - name: Test desktop state and protocol
-        run: cargo test --features gui --bin basrw --locked
+        run: cargo test --features gui --bin basg --locked

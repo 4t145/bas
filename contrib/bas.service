@@ -1,0 +1,33 @@
+[Unit]
+Description=Bas agent service
+Documentation=https://github.com/4t145/bas
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/bas
+Restart=on-failure
+RestartSec=2s
+# The daemon pings the service manager at half this interval.
+WatchdogSec=30s
+
+# localdb is the default. For a system service, configure
+# BAS_LOCALDB_PATH=%S/bas/sessions.sqlite3 and StateDirectory=bas;
+# the deployment must provide a writable state directory for the service user.
+Environment=BAS_LISTEN=127.0.0.1:7337
+Environment=BAS_AGENTS=embedded
+Environment=BAS_LOG_BACKEND=journald
+Environment=BAS_NOTIFY=auto
+
+# The service reads and writes files on the user's behalf and can spawn agents,
+# so it must not run as root unless the operator really wants that.
+User=bas
+Group=bas
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h
+
+[Install]
+WantedBy=default.target

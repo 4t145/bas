@@ -54,7 +54,7 @@ pub enum SessionStatus {
     Failed,
 }
 
-/// BASR registered the client-owned submission. This is not proof of ACP dispatch
+/// Bas registered the client-owned submission. This is not proof of ACP dispatch
 /// or successful execution. The cursor identifies its committed start event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TurnReceipt {

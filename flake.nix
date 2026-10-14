@@ -1,5 +1,5 @@
 {
-  description = "BASR — Basic Agent Service in Rust";
+  description = "Bas — Basic Agent Service";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -61,31 +61,32 @@
         (testFor system).extend {
           modules = [ (import ./nix/tests/shell.nix { pkgs = pkgsFor system; }) ];
         };
-      piTestFor = system: (testFor system).extend { modules = [ ./nix/tests/pi.nix ]; };
     in
     {
       packages = eachLinux (system: {
         default = packageFor system;
-        basr = packageFor system;
-        basrd = packageFor system;
-        basrw = windowPackageFor system;
+        bas = packageFor system;
+        basg = windowPackageFor system;
         system-test-driver = (testFor system).driverInteractive;
         system-test-shell = (shellFor system).driver;
-        system-test-pi = (piTestFor system).driver;
       });
       checks = eachLinux (system: {
         package = packageFor system;
-        basrw = windowPackageFor system;
+        basg = windowPackageFor system;
         system = testFor system;
       });
       apps = eachLinux (system: {
-        basrd = {
+        bas = {
           type = "app";
-          program = "${packageFor system}/bin/basrd";
+          program = "${packageFor system}/bin/bas";
         };
-        basrw = {
+        bast = {
           type = "app";
-          program = "${windowPackageFor system}/bin/basrw";
+          program = "${packageFor system}/bin/bast";
+        };
+        basg = {
+          type = "app";
+          program = "${windowPackageFor system}/bin/basg";
         };
         system-test = {
           type = "app";
@@ -112,12 +113,6 @@
         in
         {
           gui = guiShell;
-          local = guiShell.overrideAttrs (old: {
-            nativeBuildInputs = old.nativeBuildInputs ++ [
-              (pkgs.callPackage ./nix/pi-acp { })
-              (pkgs.python3.withPackages (ps: [ ps.python-dotenv ]))
-            ];
-          });
           default = pkgs.mkShell {
             packages = [
               toolchain
@@ -130,7 +125,7 @@
             };
 
             shellHook = ''
-              echo "basr dev shell: $(rustc --version), $(cargo --version)"
+              echo "bas dev shell: $(rustc --version), $(cargo --version)"
             '';
           };
         }

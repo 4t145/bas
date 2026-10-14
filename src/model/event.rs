@@ -8,7 +8,7 @@ mod tests;
 /// The agent's native answer to an ACP prompt, never a daemon or storage failure.
 pub type PromptResult = Result<acp::PromptResponse, acp::Error>;
 
-/// Why BASR stopped tracking a prompt without receiving an ACP result.
+/// Why Bas stopped tracking a prompt without receiving an ACP result.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InterruptionReason {

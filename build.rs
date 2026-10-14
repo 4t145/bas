@@ -1,6 +1,6 @@
-//! Generates the gRPC service and client from `proto/basr/v1/basr.proto`.
+//! Generates the gRPC service and client from `proto/bas/v1/bas.proto`.
 //!
-//! `protoc-bin-vendored` supplies the protobuf compiler so building BASR needs
+//! `protoc-bin-vendored` supplies the protobuf compiler so building Bas needs
 //! no system `protoc`, matching the project's goal of minimal external
 //! dependencies.
 
@@ -16,14 +16,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Supplies the well-known .proto files bundled with the vendored compiler.
     config.protoc_arg(format!("-I{}", protoc_include.display()));
 
-    println!("cargo:rerun-if-changed=proto/basr/v1/basr.proto");
+    println!("cargo:rerun-if-changed=proto/bas/v1/bas.proto");
     println!("cargo:rerun-if-changed=build.rs");
 
     tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
-        .file_descriptor_set_path(out_dir.join("basr_descriptor.bin"))
-        .compile_with_config(config, &["proto/basr/v1/basr.proto"], &["proto"])?;
+        .file_descriptor_set_path(out_dir.join("bas_descriptor.bin"))
+        .compile_with_config(config, &["proto/bas/v1/bas.proto"], &["proto"])?;
 
     Ok(())
 }

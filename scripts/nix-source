@@ -2,15 +2,15 @@
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-export BASR_PACKAGE_SOURCE="$root"
+export BAS_PACKAGE_SOURCE="$root"
 # Include untracked source without copying environment files or build outputs.
 exec nix eval --impure --raw --expr '
   builtins.path {
-    path = builtins.getEnv "BASR_PACKAGE_SOURCE";
-    name = "basr-source";
+    path = builtins.getEnv "BAS_PACKAGE_SOURCE";
+    name = "bas-source";
     filter = path: type:
       let name = builtins.baseNameOf path; in
-      !(builtins.elem name [ ".git" ".direnv" "target" ".test-results" "result" "node_modules" "__pycache__" ])
-      && (name == ".env.example" || builtins.match "[.]env([.].*)?" name == null);
+      !(builtins.elem name [ ".git" ".delta" ".direnv" "target" ".test-results" "result" "node_modules" "__pycache__" ])
+      && builtins.match "[.]env([.].*)?" name == null;
   }
 '
