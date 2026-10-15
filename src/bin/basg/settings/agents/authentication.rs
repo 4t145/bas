@@ -1,8 +1,14 @@
 //! The settings page hosts the same Agent-owned authentication panel as threads.
 use super::Agents;
 use crate::agents::Status;
+use crate::ui::Button;
 use bas::config::AgentSpec;
 use gpui_kit::{Context, IntoElement, ParentElement, TestSupportExt, Window, div, prelude::*};
+
+pub(super) struct Owner {
+    window: gpui_kit::AnyWindowHandle,
+    initial: Status,
+}
 
 impl Agents {
     pub(super) fn ensure_authentication_panels(
@@ -10,6 +16,21 @@ impl Agents {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Interactive GPUI inputs belong to one native window. If that window
+        // closes, cancel its flow and offer the original methods in this one.
+        self.authentication_owners.retain(|id, owner| {
+            if !self.authentications.contains_key(id) {
+                return false;
+            }
+            if cx.windows().contains(&owner.window) {
+                return true;
+            }
+            self.authentications.remove(id);
+            if let Some(check) = self.checks.get_mut(id) {
+                check.status = owner.initial.clone();
+            }
+            false
+        });
         let pending: Vec<_> = self
             .checks
             .values()
@@ -23,7 +44,7 @@ impl Agents {
             let panel = cx.new(|_| {
                 crate::authentication::Authentication::new(
                     spec.clone(),
-                    status,
+                    status.clone(),
                     self.store.path().to_owned(),
                     window.window_handle(),
                 )
@@ -37,6 +58,13 @@ impl Agents {
             ));
             self._subscriptions
                 .push(cx.observe(&panel, |_, _, cx| cx.notify()));
+            self.authentication_owners.insert(
+                spec.id.clone(),
+                Owner {
+                    window: window.window_handle(),
+                    initial: status,
+                },
+            );
             self.authentications.insert(spec.id.clone(), panel);
         }
         self.authentications
@@ -67,6 +95,20 @@ impl Agents {
         let Some(panel) = self.authentications.get(&spec.id) else {
             return gds_uim::el! { #div {} }.into_any_element();
         };
+        if let Some(owner) = self.authentication_owners.get(&spec.id)
+            && self.rendering_window != Some(owner.window)
+        {
+            let target = owner.window;
+            return gds_uim::el! {
+                Button($format!("agents-authentication-open-{index}")) {
+                    label: $crate::i18n::tr!("agent-auth-other-window");
+                    on_click: $cx.listener(move |_, _, _, cx| {
+                        let _ = target.update(cx, |_, window, _| window.activate_window());
+                    });
+                }
+            }
+            .into_any_element();
+        }
         let editable = !self.dirty(cx) && self.registry.editable();
         gds_uim::el! {
             #div {

@@ -1,12 +1,11 @@
 //! Daemon-owned ACP discovery and installation. The GUI never executes registry commands.
 
-use super::Agents;
+use super::{Agents, item};
 use crate::agents::catalog::{Service, Updates, settings_match};
 use crate::ui::Button;
 use bas::management::{Catalog, Entry, Source, Status};
 use gpui_kit::{
-    App, Context, FontWeight, Hsla, IntoElement, ParentElement, Styled, Task, TestSupportExt, div,
-    prelude::*, px,
+    App, Context, Hsla, IntoElement, ParentElement, Styled, Task, TestSupportExt, div, prelude::*,
 };
 use gpui_kit::{
     assets::IconName,
@@ -14,7 +13,6 @@ use gpui_kit::{
 };
 
 const REGISTRY_URL: &str = "https://github.com/agentclientprotocol/registry";
-const ICON_SIZE: f32 = 22.;
 
 /// Refreshes retain the last catalog; only a verified local profile grants daemon-backed edits.
 pub(super) struct Registry {
@@ -38,6 +36,10 @@ enum Load {
 }
 
 impl Registry {
+    pub(super) fn awaiting_profile(&self) -> bool {
+        matches!(self.access, Access::AwaitingProfile)
+    }
+
     pub(super) fn new(has_service: bool) -> Self {
         Self {
             catalog: None,
@@ -52,6 +54,10 @@ impl Registry {
 
     pub(super) fn editable(&self) -> bool {
         matches!(self.access, Access::Standalone | Access::LocalProfile)
+    }
+
+    pub(super) fn verified_local(&self) -> bool {
+        matches!(self.access, Access::LocalProfile)
     }
 
     fn loading(&self) -> bool {
@@ -87,7 +93,6 @@ pub(super) struct Palette {
     accent: Hsla,
     action_fill: Hsla,
     action_foreground: Hsla,
-    muted: Hsla,
 }
 
 impl Palette {
@@ -99,7 +104,6 @@ impl Palette {
             accent: cx.theme().primary,
             action_fill: cx.theme().primary,
             action_foreground: cx.theme().primary_foreground,
-            muted: cx.theme().muted_foreground,
         }
     }
 }
@@ -190,20 +194,38 @@ impl Agents {
         cx.notify();
     }
 
-    fn apply_catalog(&mut self, catalog: Catalog, local: bool, cx: &mut Context<Self>) {
+    pub(super) fn apply_catalog(&mut self, catalog: Catalog, local: bool, cx: &mut Context<Self>) {
         if let Some(service) = cx.try_global::<Service>().cloned() {
             crate::agents::metadata::publish(service.address(), &catalog, cx);
         }
+        // The daemon's verified local profile owns agent configuration; the
+        // frontend's appearance store is not an agent configuration authority.
+        // Never reinterpret a relative path in the GUI's working directory.
+        let backend_path = catalog.settings_path.as_deref().filter(|path| {
+            catalog.can_install
+                && path.is_absolute()
+                && (path.is_file() || settings_match(&catalog, self.store.path()))
+        });
+        let dirty = self.dirty(cx);
+        let can_bind = backend_path.is_some_and(|path| path == self.store.path() || !dirty);
         self.registry.access = if !local {
             Access::Remote
-        } else if settings_match(&catalog, self.store.path()) {
+        } else if can_bind {
+            let path = backend_path.expect("verified backend path");
+            if path != self.store.path() {
+                self.store = bas::config::Store::at(path.to_owned());
+                self.document = None;
+                self.editor = super::Editor::Idle;
+                self.checks.clear();
+                self.authentications.clear();
+            }
             Access::LocalProfile
         } else {
             Access::OtherProfile
         };
         self.registry.catalog = Some(catalog);
         if self.registry.editable() {
-            if !self.dirty(cx) {
+            if !dirty {
                 match self.store.load() {
                     Ok(document) => self.accept_document(document),
                     Err(error) => {
@@ -275,9 +297,7 @@ impl Agents {
                 };
                 let _ = page.update(cx, |page, cx| {
                     let message = match &update {
-                        Ok(operation) if operation.complete => {
-                            crate::i18n::tr!("agent-install-done").into()
-                        }
+                        Ok(operation) if operation.complete => String::new(),
                         Ok(operation) => operation.message.clone(),
                         Err(error) => {
                             crate::i18n::tr!("agent-install-error", error = (error).to_string())
@@ -362,7 +382,7 @@ impl Agents {
                 if let Some(operation) = page.operations.get_mut(&key) {
                     operation.busy = false;
                     operation.message = match result {
-                        Ok(()) => crate::i18n::tr!("agent-removed").into(),
+                        Ok(()) => String::new(),
                         Err(error) => {
                             crate::i18n::tr!("agent-remove-error", error = (error).to_string())
                         }
@@ -384,52 +404,6 @@ impl Agents {
         cx.notify();
     }
 
-    fn registry_icon(entry: &Entry, palette: &Palette) -> gpui_kit::AnyElement {
-        gds_uim::el! {
-            #div {
-                size: $px(32.); flex_shrink_0; flex; items_center; justify_center;
-                rounded_md; text_color: $palette.accent;
-            } [
-                crate::agents::icon::AgentIcon($format!("agents-icon-{}", entry.id), $entry.icon.clone()) {
-                    size: $px(ICON_SIZE); text_color: $palette.accent;
-                },
-            ]
-        }.into_any_element()
-    }
-
-    fn registry_links(&self, entry: &Entry, palette: &Palette) -> gpui_kit::AnyElement {
-        let repository = entry.repository.clone();
-        let license = entry.license_url.clone();
-        gds_uim::el! {
-            #div {
-                flex; items_center; flex_shrink_0; gap_2;
-                text_size: $crate::ui::SMALL; text_color: $palette.muted;
-            } [
-                #div [ $format!("ID: {}", entry.id) ],
-                ..$bool::then(!repository.is_empty(), || gds_uim::el! {
-                    Button($format!("agents-repository-{}", entry.id)) {
-                        ghost; xsmall; icon: $IconName::Github;
-                        tooltip: $crate::i18n::tr!("agent-repository");
-                        text_color: $palette.muted;
-                        on_click: $move |_, _, cx| cx.open_url(&repository);
-                    }
-                }),
-                ..$bool::then(!entry.license.is_empty(), || gds_uim::el! {
-                    Button($format!("agents-license-{}", entry.id)) {
-                        ghost; xsmall; icon: $IconName::Scale;
-                        tooltip: $crate::i18n::tr!(
-                            "agent-license",
-                            license = (entry.license).to_string()
-                        );
-                        text_color: $palette.muted; disabled: $license.is_empty();
-                        on_click: $move |_, _, cx| cx.open_url(&license);
-                    }
-                }),
-            ]
-        }
-        .into_any_element()
-    }
-
     fn registry_actions(&self, entry: &Entry, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let status = entry.spec.as_ref().and_then(|spec| self.status(spec));
         let busy = self
@@ -441,12 +415,10 @@ impl Agents {
             .installed_version
             .as_ref()
             .is_some_and(|version| !entry.version.is_empty() && version != &entry.version);
-        let palette = Palette::current(cx);
         let action = if busy {
             let id = entry.id.clone();
             gds_uim::el! {
-                $super::button(format!("agents-install-cancel-{}", entry.id)) {
-                    label: $crate::i18n::tr!("action-cancel");
+                #item::action($format!("agents-install-cancel-{}", entry.id), $IconName::X, $crate::i18n::tr!("agent-cancel-action")) {
                     on_click: $cx.listener(move |this, _, _, cx| this.cancel_install(&id, cx));
                 }
             }
@@ -457,17 +429,11 @@ impl Agents {
             let disabled =
                 !self.managed_allowed(cx) || any_busy || entry.status == Status::Unsupported;
             gds_uim::el! {
-                $super::button(format!("agents-install-{}", entry.id)) {
-                    primary;
-                    label: $(if update {
-                        crate::i18n::tr!("action-update")
+                #item::action($format!("agents-install-{}", entry.id), $(if update { IconName::RefreshCw } else { IconName::Download }), $(if update {
+                        crate::i18n::tr!("agent-update-action")
                     } else {
-                        crate::i18n::tr!("action-install")
-                    });
-                    icon: $IconName::Download;
-                    @$(!disabled) => {
-                        bg: $palette.action_fill; text_color: $palette.action_foreground;
-                    };
+                        crate::i18n::tr!("agent-install-action")
+                    })) {
                     disabled: $disabled;
                     on_click: $cx.listener(move |this, _, _, cx| this.install(id.clone(), cx));
                 }
@@ -476,18 +442,12 @@ impl Agents {
             let id = entry.id.clone();
             let embedded = spec.kind == bas::config::agent::Kind::Embedded;
             gds_uim::el! {
-                $super::button(format!("agents-registry-check-{}", entry.id)) {
-                    label: $(if embedded {
+                #item::action($format!("agents-registry-check-{}", entry.id), $(if embedded { IconName::MessageCircle } else { IconName::RefreshCw }), $(if embedded {
                         crate::i18n::tr!("agent-start-chat")
                     } else {
                         status.map_or(crate::i18n::tr!("agent-check"), super::status::check_label)
-                    });
-                    tooltip: $(if embedded {
-                        crate::i18n::tr!("agent-start-chat")
-                    } else {
-                        crate::i18n::tr!("agent-check-help")
-                    });
-                    text_color: $palette.accent;
+                    })) {
+                    loading: $status.is_some_and(crate::agents::Status::busy);
                     disabled: $(!self.registry.editable() || self.dirty(cx)
                         || status.is_some_and(crate::agents::Status::busy));
                     on_click: $cx.listener(move |this, _, _, cx| this.check_registry_agent(&id, &spec, cx));
@@ -495,8 +455,8 @@ impl Agents {
             }
         } else {
             gds_uim::el! {
-                $super::button(format!("agents-registry-unavailable-{}", entry.id)) {
-                    label: $status_label(entry); disabled: true;
+                #item::action($format!("agents-registry-unavailable-{}", entry.id), $IconName::CircleAlert, $status_label(entry)) {
+                    disabled: true;
                 }
             }
         };
@@ -508,22 +468,19 @@ impl Agents {
             && status.is_some_and(crate::agents::Status::connected)
             && !busy;
         gds_uim::el! {
-            #div { flex; items_center; gap_2; flex_shrink_0; } [
+            #div { flex; items_center; gap_1; flex_shrink_0; } [
                 $action,
                 ..$can_chat.then(|| {
                     let id = entry.id.clone();
                     gds_uim::el! {
-                        Button($format!("agents-registry-start-chat-{}", entry.id)) {
-                            ghost; xsmall; label: $crate::i18n::tr!("agent-start-chat");
-                            text_color: $palette.accent;
+                        #item::action($format!("agents-registry-start-chat-{}", entry.id), $IconName::MessageCircle, $crate::i18n::tr!("agent-start-chat")) {
                             disabled: $(!self.registry.editable() || self.dirty(cx));
                             on_click: $cx.listener(move |this, _, _, cx| this.begin_chat(id.clone(), cx));
                         }
                     }
                 }),
                 ..$bool::then(entry.installed_version.is_some() && !busy, || gds_uim::el! {
-                    Button($format!("agents-remove-{}", entry.id)) {
-                        ghost; xsmall; label: $crate::i18n::tr!("action-remove");
+                    #item::action($format!("agents-remove-{}", entry.id), $IconName::Trash, $crate::i18n::tr!("agent-mark-remove")) {
                         disabled: $(!self.managed_allowed(cx) || any_busy);
                         on_click: $cx.listener(move |this, _, _, cx| this.remove_managed(remove.clone(), cx));
                     }
@@ -545,24 +502,14 @@ impl Agents {
         }
     }
 
-    fn registry_card(&self, entry: &Entry, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        let palette = Palette::current(cx);
+    pub(super) fn item_feedback(&self, entry: &Entry) -> Option<String> {
         let status = entry.spec.as_ref().and_then(|spec| self.status(spec));
         let has_authentication = entry
             .spec
             .as_ref()
             .is_some_and(|spec| self.authentications.contains_key(&spec.id));
-        let status_label = if entry.source == Source::Embedded {
-            crate::i18n::tr!("agent-builtin-ready")
-        } else {
-            status.map_or(
-                crate::i18n::tr!("agent-installed-unchecked"),
-                super::status::label,
-            )
-        };
-        let check_detail = entry.spec.as_ref().map(|spec| self.check_detail(spec));
         let operation = self.operations.get(&entry.id);
-        let detail = operation
+        operation
             .filter(|operation| operation.busy)
             .map(|operation| operation.message.clone())
             .or_else(|| match status.filter(|_| !has_authentication) {
@@ -572,93 +519,47 @@ impl Agents {
                 ) => Some(message.clone()),
                 _ => None,
             })
-            .or_else(|| operation.map(|operation| operation.message.clone()))
             .or_else(|| {
-                (!entry.message.is_empty()).then(|| {
-                    if entry.status == Status::Installed && entry.source == Source::Registry {
-                        crate::i18n::tr!("agent-install-done").into()
-                    } else {
-                        entry.message.clone()
-                    }
-                })
+                operation
+                    .filter(|operation| !operation.message.is_empty())
+                    .map(|operation| operation.message.clone())
+            })
+            .or_else(|| {
+                (!entry.message.is_empty()
+                    && !(entry.status == Status::Installed && entry.source == Source::Registry))
+                    .then(|| entry.message.clone())
+            })
+    }
+
+    fn registry_card(&self, entry: &Entry, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let content = entry
+            .spec
+            .as_ref()
+            .filter(|spec| self.authentications.contains_key(&spec.id))
+            .map(|spec| {
+                let index = self
+                    .display_catalog()
+                    .iter()
+                    .position(|configured| configured == spec)
+                    .unwrap_or(0);
+                self.authentication_content(spec, index, cx)
             });
-        let status_hint = (!has_authentication
-            && (status.is_some() || entry.status == Status::Installed))
-            .then(|| {
-                crate::ui::tooltip::bounded(
-                    format!("agents-registry-status-hint-{}", entry.id),
-                    gds_uim::el! {
-                        #div {
-                            id: $format!("agents-registry-status-{}", entry.id); test_support;
-                            text_size: $crate::ui::SMALL; text_color: $palette.accent;
-                        } [ $status_label ]
-                    },
-                    check_detail
-                        .clone()
-                        .unwrap_or_else(|| crate::i18n::tr!("agent-check-help").into()),
-                )
-            });
-        let heading = gds_uim::el! {
-            #div {
-                id: $format!("agents-registry-heading-{}", entry.id); test_support;
-                flex; items_center; gap_2; min_w_0;
-            } [
-                $Self::registry_icon(entry, &palette),
-                #div { min_w_0; flex_1; flex; items_center; gap_2; } [
-                    #div {
-                        min_w_0; truncate; text_size: $crate::ui::SMALL;
-                        font_weight: $FontWeight::SEMIBOLD;
-                    } [ $entry.name.clone() ],
-                    ..$bool::then(!entry.version.is_empty(), || gds_uim::el! {
-                        #div { text_size: $crate::ui::SMALL; text_color: $palette.muted; } [
-                            $entry.version.clone()
-                        ]
-                    }),
-                    ..status_hint,
-                ],
-                $self.registry_actions(entry, cx),
-            ]
+        let card = item::Item {
+            entry: entry.clone(),
+            status: self.item_status(entry),
+            status_hint: entry.spec.as_ref().map_or_else(
+                || status_label(entry).into(),
+                |spec| self.check_detail(spec),
+            ),
+            feedback: self.item_feedback(entry),
+            actions: self.registry_actions(entry, cx),
+            content,
         };
         gds_uim::el! {
             #div {
                 id: $format!("agents-registry-{}", entry.id); test_support;
-                w_full; min_w_0; flex; flex_col; gap_1; px_3; py_2;
-                bg: $palette.card; border_1; border_color: $palette.border; rounded_md;
-            } [
-                $heading,
-                #div {
-                    id: $format!("agents-registry-details-{}", entry.id); test_support;
-                    flex; items_center; gap_2; min_w_0; text_size: $crate::ui::SMALL;
-                } [
-                    #div { min_w_0; flex_1; truncate; text_color: $palette.muted; } [
-                        $entry.description.clone()
-                    ],
-                    $self.registry_links(entry, &palette),
-                ],
-                ..$detail.map(|detail| gds_uim::el! {
-                    #div {
-                        id: $format!("agents-operation-{}", entry.id); test_support;
-                        text_size: $crate::ui::SMALL; text_color: $palette.accent; min_w_0;
-                    } [ $detail ]
-                }),
-                ..$entry.spec.as_ref().filter(|spec| {
-                    matches!(
-                        status,
-                        Some(crate::agents::Status::AuthenticationRequired { .. })
-                    ) || self.authentications.contains_key(&spec.id)
-                }).map(|spec| {
-                    let index = self
-                        .catalog()
-                        .iter()
-                        .position(|configured| configured == spec)
-                        .unwrap_or(0);
-                    gds_uim::el! {
-                        #div { pt_2; border_t_1; border_color: $palette.border; } [
-                            $self.authentication_content(spec, index, cx)
-                        ]
-                    }
-                }),
-            ]
+                w_full; min_w_0;
+            } [$card]
         }
         .into_any_element()
     }
@@ -675,10 +576,6 @@ impl Agents {
                         on_click: $cx.listener(Self::on_registry_learn_more);
                     },
                 ],
-                Button("agents-configure") {
-                    ghost; xsmall; label: $crate::i18n::tr!("agent-advanced");
-                    on_click: $cx.listener(Self::on_configure_agents);
-                },
             ]
         };
         let filters = [
@@ -722,6 +619,7 @@ impl Agents {
                     border_1; border_color: $palette.border; rounded_md;
                 } [
                     Input($&self.registry_search) {
+                        small;
                         appearance: false; cleanable: true; prefix: $search_icon;
                         aria_label: $crate::i18n::tr!("agent-search");
                     },
@@ -739,17 +637,6 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         cx.open_url(REGISTRY_URL);
-    }
-
-    fn on_configure_agents(
-        &mut self,
-        _: &gpui_kit::ClickEvent,
-        _: &mut gpui_kit::Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.show_installation = false;
-        self.scroll_to = Some(0);
-        cx.notify();
     }
 
     fn set_registry_filter(&mut self, filter: Filter, cx: &mut Context<Self>) {
@@ -812,6 +699,9 @@ impl Agents {
         }.into_any_element()
     }
 }
+
+#[cfg(all(test, feature = "gui-tests"))]
+use gpui_kit::px;
 
 #[cfg(test)]
 mod tests;

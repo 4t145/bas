@@ -34,6 +34,7 @@ fn navigation_button(
     el! {
         Button($id.clone()) {
             ghost;
+            small;
             accessibility_label: $title.clone();
         } [
             #div {
@@ -119,7 +120,7 @@ impl Settings {
         let search = cx
             .new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr!("settings-search")));
         let editor = crate::theme::Editor::current(cx);
-        let agents = cx.new(|cx| agents::Agents::new(crate::configuration::store(cx), window, cx));
+        let agents = agents::shared(window, cx);
         let appearance = cx.new(|cx| appearance::AppearancePage::new(editor, window, cx));
         let subscriptions = vec![
             cx.subscribe_in(&search, window, Self::on_search),
@@ -207,10 +208,100 @@ impl Settings {
         cx.notify();
     }
 
-    pub(crate) fn show_catalog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.select_agents(None, window, cx);
-        self.agents
-            .update(cx, |page, cx| page.open_installation(cx));
+    fn settings_path(&self, cx: &App) -> Option<std::path::PathBuf> {
+        match self.category {
+            Category::Appearance => Some(
+                crate::theme::Editor::current(cx)
+                    .appearance_path()
+                    .to_owned(),
+            ),
+            Category::Agents => self.agents.read(cx).settings_path().map(ToOwned::to_owned),
+        }
+    }
+
+    fn can_edit_file(&self, cx: &App) -> bool {
+        self.settings_path(cx).is_some_and(|path| path.is_file())
+    }
+
+    fn on_edit_file(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.category == Category::Appearance {
+            self.flush_pending(window, cx);
+        }
+        if let Some(path) = self.settings_path(cx) {
+            cx.open_with_system(&path);
+        }
+    }
+
+    fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let path = self.settings_path(cx);
+        let file_hint = path.as_ref().map_or_else(
+            || crate::i18n::tr!("settings-backend-file-unavailable").to_owned(),
+            |path| {
+                if path.is_file() {
+                    path.display().to_string()
+                } else {
+                    crate::i18n::tr!("settings-file-not-created").to_owned()
+                }
+            },
+        );
+        let context_id = match self.category {
+            Category::Appearance => "settings-frontend-context",
+            Category::Agents => "settings-backend-context",
+        };
+        let context = match self.category {
+            Category::Appearance => crate::i18n::tr!("settings-frontend-context").to_owned(),
+            Category::Agents => {
+                let backend = cx
+                    .try_global::<crate::agents::catalog::Service>()
+                    .map_or_else(
+                        || crate::i18n::tr!("settings-backend-disconnected").to_owned(),
+                        |service| service.address().to_string(),
+                    );
+                crate::i18n::tr!("settings-backend-context", address = backend)
+            }
+        };
+        el! {
+            #div {
+                id: "settings-header"; test_support;
+                px_5; py_3; flex_shrink_0; flex; flex_col; gap_2;
+                border_b_1; border_color: $cx.theme().border;
+            } [
+                #div { flex; items_center; justify_between; gap_3; } [
+                    #div {
+                        id: $context_id; test_support;
+                        role: gpui_kit::Role::Label;
+                        aria_label: $context.clone();
+                        flex_1; min_w_0; truncate;
+                        @$(self.category == Category::Agents) => {
+                            hoverable_tooltip: $|window, cx| crate::ui::tooltip::view(
+                                crate::i18n::tr!("settings-backend-fixed"), window, cx
+                            );
+                        };
+                    } [$context],
+                    #div {
+                        id: "settings-actions"; test_support;
+                        flex; items_center; gap_2; flex_shrink_0;
+                    } [
+                        Button("settings-edit-file") {
+                            ghost; small; flex_shrink_0;
+                            label: $crate::i18n::tr!("settings-edit-file");
+                            disabled: $!self.can_edit_file(cx);
+                            tooltip: $file_hint;
+                            on_click: $cx.listener(Self::on_edit_file);
+                        },
+                    ],
+                ],
+                #div {
+                    id: "settings-scope-description"; test_support;
+                    text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                } [
+                    $(match self.category {
+                        Category::Appearance => crate::i18n::tr!("settings-frontend-description").to_owned(),
+                        Category::Agents => crate::i18n::tr!("settings-backend-description").to_owned(),
+                    }),
+                ],
+            ]
+        }
     }
 
     /// Point the appearance page at one of its sections without hiding the others.
@@ -398,9 +489,10 @@ impl Render for Settings {
                     #div {
                         id: "settings-search";
                         test_support;
-                    } [Input($&self.search)],
+                    } [Input($&self.search) { small; }],
                     #div {
                         id: "settings-navigation";
+                        test_support;
                         flex_1;
                         min_h_0;
                         overflow_y_scroll;
@@ -410,7 +502,20 @@ impl Render for Settings {
                     } [
                         ..$Category::ALL
                             .into_iter()
-                            .map(|category| self.category_navigation(category, cx)),
+                            .map(|category| el! {
+                                #div { flex; flex_col; gap_1; } [
+                                    #div {
+                                        mt_2; text_size: $crate::ui::SMALL;
+                                        text_color: $cx.theme().muted_foreground;
+                                    } [
+                                        $(match category {
+                                            Category::Appearance => crate::i18n::tr!("settings-scope-frontend"),
+                                            Category::Agents => crate::i18n::tr!("settings-scope-backend"),
+                                        }),
+                                    ],
+                                    $self.category_navigation(category, cx),
+                                ]
+                            }),
                     ],
                     #div {
                         text_size: $crate::ui::SMALL;
@@ -430,11 +535,15 @@ impl Render for Settings {
                     flex_1;
                     min_w_0;
                     h_full;
+                    flex; flex_col;
                 } [
-                    $(match self.category {
-                        Category::Appearance => self.appearance.clone().into_any_element(),
-                        Category::Agents => self.agents.clone().into_any_element(),
-                    }),
+                    $self.header(cx),
+                    #div { flex_1; min_h_0; } [
+                        $(match self.category {
+                            Category::Appearance => self.appearance.clone().into_any_element(),
+                            Category::Agents => self.agents.clone().into_any_element(),
+                        }),
+                    ],
                 ],
             ]
         }

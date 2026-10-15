@@ -457,6 +457,42 @@ fn inline_result(cache: &Cache, uri: &SharedUri) -> Arc<RenderImage> {
 }
 
 #[gpui_kit::test]
+fn embedded_assets_are_kept_until_the_last_document_releases_them(cx: &mut TestAppContext) {
+    init(cx);
+    let first = inline_uri("first-document");
+    let second = inline_uri("second-document");
+    let source = gpui_kit::ImageSource::Image(Arc::new(decode_data_uri(&first).expect("PNG")));
+    let blocks = cx.update(|cx| {
+        vec![
+            markdown_block("first", format!("![image]({first})"), None, cx),
+            markdown_block("second", format!("<img src=\"{second}\">"), None, cx),
+        ]
+    });
+    let (window, fixture) = fixture_window(cx, blocks);
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(source.is_asset_cached(cx));
+    })
+    .expect("native embedded image");
+    for remaining in [1, 0] {
+        cx.update(|cx| {
+            fixture.update(cx, |fixture, cx| {
+                fixture.blocks.truncate(remaining);
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+        })
+        .expect("release document");
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(source.is_asset_cached(cx), remaining != 0));
+    }
+}
+
+#[gpui_kit::test]
 fn replacing_streamed_markdown_and_html_images_releases_old_pixels_but_keeps_shared_images(
     cx: &mut TestAppContext,
 ) {

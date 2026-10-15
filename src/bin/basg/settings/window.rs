@@ -5,12 +5,13 @@ use gpui_kit::{
     App, AppContext, Bounds, ClickEvent, Context, Entity, Focusable, Global, Render, Subscription,
     TestSupportExt, WeakEntity, Window, WindowBounds, WindowDecorations, WindowHandle, WindowKind,
     WindowOptions, actions,
-    component::{ActiveTheme, Root, StyledExt, TitleBar},
+    component::{ActiveTheme, Root},
     div,
     prelude::*,
     px, size,
 };
 
+use crate::ui::window_controls::TitleBar;
 use crate::{
     settings::{Close, Settings},
     theme,
@@ -59,7 +60,7 @@ pub(crate) fn open(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
         window.set_window_title(crate::i18n::tr!("settings-window-title"));
         let host = cx.new(|cx| Host::new(window, cx));
         settings = Some(host.read(cx).settings.downgrade());
-        cx.new(|cx| Root::new(host, window, cx))
+        cx.new(|cx| theme::window_root(host, window, cx))
     })?;
     cx.set_global(OpenWindow {
         handle,
@@ -102,14 +103,9 @@ pub(crate) fn open_agent(agent: &str, cx: &mut App) -> anyhow::Result<WindowHand
 }
 
 /// # Errors
-/// Returns an error if the catalogue settings window cannot be opened or updated.
+/// Returns an error if the independent agent onboarding window cannot be opened.
 pub(crate) fn open_catalog(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
-    let handle = open(cx)?;
-    let settings = cx.global::<OpenWindow>().settings.clone();
-    handle.update(cx, |_, window, cx| {
-        settings.update(cx, |settings, cx| settings.show_catalog(window, cx))
-    })??;
-    Ok(handle)
+    super::agents::window::open_catalog(cx)
 }
 
 /// Persist valid edits even when the workspace which opened settings is gone.
@@ -180,7 +176,6 @@ impl Render for Host {
                 test_support;
                 key_context: "BasSettings";
                 size_full; flex; flex_col;
-                refine_style: $&theme::font_style(cx);
                 bg: $cx.theme().background;
                 text_color: $cx.theme().foreground;
                 on_action: $cx.listener(Self::on_close_action);

@@ -7,7 +7,6 @@ use gpui_kit::{
     App, Context, Entity, EventEmitter, Render, Subscription, TestSupportExt, Window,
     component::{
         button::*,
-        checkbox::Checkbox,
         input::{Input, InputEvent, InputState},
         switch::Switch,
     },
@@ -273,7 +272,7 @@ impl Panel {
         match &field.kind {
             Kind::String | Kind::Number | Kind::Integer => {
                 row = gds_uim::el! { $row [ Input($(&self.inputs[&name])) {
-                    id: $id; disabled: $self.submitting;
+                    id: $id; small; disabled: $self.submitting;
                 } ] };
             }
             Kind::Boolean => {
@@ -339,7 +338,7 @@ impl Panel {
                                     .iter()
                                     .any(|item| item.as_str() == Some(value.as_str()))
                             });
-                        gds_uim::el! { Checkbox($format!("{id}-{index}")) {
+                        gds_uim::el! { $crate::ui::checkbox(format!("{id}-{index}")) {
                             label: $option.title.clone(); checked: $checked;
                             disabled: $self.submitting;
                             @$(!self.submitting) => { cursor_pointer; };

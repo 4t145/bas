@@ -3,6 +3,50 @@ use super::*;
 #[cfg(feature = "gui-tests")]
 mod stream;
 
+#[cfg(feature = "gui-tests")]
+#[gpui_kit::test]
+fn a_pending_backend_profile_does_not_report_an_agent_missing(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::{AppContext, component::Root, size};
+    let directory = tempfile::tempdir().expect("backend profile");
+    let path = directory.path().join("settings.json");
+    let store = bas::config::Store::at(path.clone());
+    let mut document = store.load().expect("profile");
+    store
+        .save_agents(
+            &mut document,
+            vec![bas::config::AgentSpec::embedded().into()],
+        )
+        .expect("embedded registration");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::theme::init_default(cx);
+    });
+    let mut view = None;
+    let _window = cx.open_window(size(px(900.), px(720.)), |window, cx| {
+        let agents = cx.new(|cx| Agents::new(store, window, cx));
+        view = Some(agents.clone());
+        Root::new(agents, window, cx)
+    });
+    cx.update(|cx| {
+        view.expect("agent state").update(cx, |agents, cx| {
+            agents.registry.access = Access::AwaitingProfile;
+            assert_eq!(agents.reveal("embedded", cx), None);
+            assert!(agents.message.is_empty());
+            assert_eq!(agents.pending_reveal.as_deref(), Some("embedded"));
+            let mut catalog = catalog(path);
+            catalog.entries.truncate(1);
+            catalog.entries[0].id = "embedded".into();
+            catalog.entries[0].source = Source::Embedded;
+            catalog.entries[0].status = Status::Installed;
+            catalog.entries[0].spec = Some(bas::config::AgentSpec::embedded());
+            agents.apply_catalog(catalog, true, cx);
+            assert!(agents.pending_reveal.is_none());
+            assert!(agents.message.is_empty());
+            assert_eq!(agents.scroll_to, Some(0));
+        });
+    });
+}
+
 fn catalog(path: std::path::PathBuf) -> Catalog {
     Catalog {
         entries: vec![
@@ -79,12 +123,15 @@ fn managed_registration_keeps_registry_actions_without_an_advanced_editor(
         crate::theme::init_default(cx);
     });
     let mut view = None;
-    let window = cx.open_window(size(px(960.), px(900.)), |window, cx| {
+    let _configuration = cx.open_window(size(px(960.), px(900.)), |window, cx| {
         let page = cx.new(|cx| Agents::new(store.clone(), window, cx));
         view = Some(page.clone());
         Root::new(page, window, cx)
     });
     let view = view.expect("page");
+    let window = cx.update(|cx| {
+        super::super::window::open(view.clone(), cx).expect("native installation window")
+    });
     cx.update_window(window.into(), |_, window, cx| {
         let mut registry = catalog(path.clone());
         registry.entries.truncate(1);
@@ -103,7 +150,6 @@ fn managed_registration_keeps_registry_actions_without_an_advanced_editor(
                 page.checks.is_empty(),
                 "do not probe before verifying the profile"
             );
-            assert!(page.show_installation);
             let mut other_profile = registry.clone();
             other_profile.settings_path = Some(directory.path().join("other-settings.json"));
             page.apply_catalog(other_profile, true, cx);
@@ -113,8 +159,8 @@ fn managed_registration_keeps_registry_actions_without_an_advanced_editor(
                 "another profile must not execute the pending probe"
             );
             assert!(
-                page.display_catalog().is_empty(),
-                "managed is never an advanced entry"
+                page.catalog().is_empty(),
+                "managed is never a custom editable entry"
             );
             page.registry.catalog = None;
             assert_eq!(page.reveal("codex", cx), Some(0));
@@ -122,7 +168,6 @@ fn managed_registration_keeps_registry_actions_without_an_advanced_editor(
             page.apply_catalog(registry.clone(), true, cx);
             assert!(page.pending_reveal.is_none());
             assert!(page.checks.contains_key(&spec.id));
-            assert!(page.show_installation);
             cx.notify();
         });
         window.render_frame(cx);
@@ -172,13 +217,12 @@ fn managed_registration_keeps_registry_actions_without_an_advanced_editor(
             "unknown latest version is not an update"
         );
         assert!(window.find("agents-registry-check-codex").visible());
-        window.click("agents-configure", cx);
         window.render_frame(cx);
         assert!(window.try_find("agents-edit-0").is_none());
         assert!(window.try_find("agents-delete").is_none());
         view.update(cx, |page, _| {
             page.registry.access = Access::Remote;
-            assert!(page.display_catalog().is_empty());
+            assert_eq!(page.display_catalog(), vec![spec.clone()]);
         });
         assert_eq!(
             store
@@ -264,6 +308,7 @@ fn registry_cards_are_searchable_and_leave_custom_configuration_intact(
     let requests = image_requests.clone();
     cx.update(|cx| {
         gpui_kit::init(cx);
+        crate::theme::init_default(cx);
         Theme::change(ThemeMode::Dark, None, cx);
         cx.set_http_client(FakeHttpClient::create(move |request| {
             requests
@@ -289,19 +334,24 @@ fn registry_cards_are_searchable_and_leave_custom_configuration_intact(
         gpui_kit::component::Root::new(page, window, cx)
     });
     let view = view.expect("page");
-    cx.update_window(window.into(), |_, window, cx| {
-        view.update(cx, |page, cx| {
-            page.apply_catalog(catalog(path.clone()), true, cx);
-            page.open_installation(cx);
-        });
-        window.render_frame(cx);
-        window.click("agents-configure", cx);
+    let configuration = window;
+    cx.update_window(configuration.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(
             window.try_find("agents-card-0").is_some(),
             "missing configured backend stays visible"
         );
-        view.update(cx, |page, cx| page.open_installation(cx));
+        assert!(window.try_find("agents-registry-codex").is_none());
+    })
+    .expect("configuration does not embed marketplace");
+    let window = cx.update(|cx| {
+        super::super::window::open(view.clone(), cx).expect("native installation window")
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        view.update(cx, |page, cx| {
+            page.apply_catalog(catalog(path.clone()), true, cx);
+            page.open_installation(cx);
+        });
         window.render_frame(cx);
         assert!(window.try_find("agents-registry-codex").is_some());
         assert!(
@@ -315,8 +365,8 @@ fn registry_cards_are_searchable_and_leave_custom_configuration_intact(
             "unsupported backend cannot be installed"
         );
         let card = window.find("agents-registry-codex").bounds();
-        let heading = window.find("agents-registry-heading-codex").bounds();
-        let details = window.find("agents-registry-details-codex").bounds();
+        let heading = window.find("agents-item-heading-codex").bounds();
+        let details = window.find("agents-item-details-codex").bounds();
         assert!(
             heading.bottom() <= details.top(),
             "name/actions and description/links occupy separate rows"
@@ -470,6 +520,10 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
         Root::new(page, window, cx)
     });
     let view = view.expect("settings page");
+    let configuration = window;
+    let window = cx.update(|cx| {
+        super::super::window::open(view.clone(), cx).expect("native installation window")
+    });
     cx.update_window(window.into(), |_, window, cx| {
         view.update(cx, |page, cx| {
             let mut registry = catalog(path.clone());
@@ -502,7 +556,7 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("authentication-error").visible());
-        assert!(window.try_find("agents-registry-status-codex").is_none());
+        assert!(window.try_find("agents-item-status-codex").is_none());
         assert!(window.try_find("agents-operation-codex").is_none());
         assert!(matches!(
             view.read(cx).status(&spec),
@@ -517,7 +571,7 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
             page.operations.insert(
                 "codex".into(),
                 Operation {
-                    message: "安装完成".into(),
+                    message: "下载失败，请重试".into(),
                     busy: false,
                     _task: None,
                 },
@@ -527,12 +581,39 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
         window.render_frame(cx);
         assert!(
             window.find("agents-operation-codex").visible(),
-            "independent installation feedback remains visible alongside authentication"
+            "independent installation errors remain visible alongside authentication"
         );
-        window.click("agents-configure", cx);
-        window.render_frame(cx);
-        assert!(window.find("authentication-error").visible());
-        assert!(window.try_find("agents-status-0").is_none());
     })
     .expect("single authentication error in both settings views");
+    cx.update_window(configuration.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("agents-authentication-open-0").visible());
+        assert!(window.try_find("authentication-error").is_none());
+        assert!(window.try_find("agents-item-status-codex").is_none());
+    })
+    .expect("configuration owns its authentication feedback");
+    cx.update_window(window.into(), |_, window, cx| {
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-w"
+            } else {
+                "ctrl-w"
+            },
+            cx,
+        );
+    })
+    .expect("close authentication presentation window");
+    cx.update_window(configuration.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("authentication-method-0").visible());
+        assert!(window.try_find("agents-authentication-open-0").is_none());
+        assert_eq!(
+            view.read(cx).authentications.len(),
+            1,
+            "closed window ownership is reclaimed"
+        );
+    })
+    .expect("configuration reclaims authentication after native window closes");
 }
+#[cfg(feature = "gui-tests")]
+mod backend;

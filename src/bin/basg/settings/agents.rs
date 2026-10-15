@@ -1,10 +1,25 @@
-//! Local catalog onboarding; only an explicit detection action starts an ACP probe.
+//! Agent configuration and shared operations for the independent installation window.
 
 use super::action_button as button;
 use crate::ui::Button;
 mod authentication;
+mod item;
 mod registry;
 mod status;
+pub(super) mod window;
+
+struct SharedAgents(Entity<Agents>);
+impl gpui_kit::Global for SharedAgents {}
+
+pub(super) fn shared(window: &mut Window, cx: &mut App) -> Entity<Agents> {
+    use gpui_kit::AppContext;
+    if let Some(shared) = cx.try_global::<SharedAgents>() {
+        return shared.0.clone();
+    }
+    let agents = cx.new(|cx| Agents::new(crate::configuration::store(cx), window, cx));
+    cx.set_global(SharedAgents(agents.clone()));
+    agents
+}
 use crate::agents::{Status, catalog, check};
 use bas::config::{
     AgentRegistration, Document, Store,
@@ -13,7 +28,7 @@ use bas::config::{
 };
 use gpui_kit::{
     App, Context, Entity, Render, ScrollHandle, Subscription, Task, TestSupportExt, Window,
-    component::{button::*, group_box::*, input::*, *},
+    component::{button::*, input::*, *},
     div,
     prelude::*,
 };
@@ -144,9 +159,11 @@ pub(super) struct Agents {
     /// Section the sidebar asked to reveal; consumed by the next render.
     pub(super) scroll_to: Option<usize>,
     scroll: ScrollHandle,
+    installation_scroll: ScrollHandle,
     checks: HashMap<bas::model::AgentId, Check>,
     authentications: HashMap<bas::model::AgentId, Entity<crate::authentication::Authentication>>,
-    show_installation: bool,
+    authentication_owners: HashMap<bas::model::AgentId, authentication::Owner>,
+    rendering_window: Option<gpui_kit::AnyWindowHandle>,
     registry: registry::Registry,
     pending_reveal: Option<String>,
     operations: HashMap<String, registry::Operation>,
@@ -211,6 +228,10 @@ pub(super) struct Section {
 }
 
 impl Agents {
+    pub(super) fn settings_path(&self) -> Option<&std::path::Path> {
+        self.registry.verified_local().then(|| self.store.path())
+    }
+
     pub(super) fn localize(&self, window: &mut Window, cx: &mut Context<Self>) {
         for (input, placeholder) in [
             (&self.registry_search, crate::i18n::tr!("agent-search")),
@@ -245,9 +266,11 @@ impl Agents {
             registration_errors: String::new(),
             scroll_to: None,
             scroll: ScrollHandle::new(),
+            installation_scroll: ScrollHandle::new(),
             checks: HashMap::new(),
             authentications: HashMap::new(),
-            show_installation: true,
+            authentication_owners: HashMap::new(),
+            rendering_window: None,
             registry: registry::Registry::new(cx.try_global::<catalog::Service>().is_some()),
             pending_reveal: None,
             operations: HashMap::new(),
@@ -294,37 +317,52 @@ impl Agents {
     }
 
     fn display_catalog(&self) -> Vec<AgentSpec> {
-        if !self.registry.editable()
-            && let Some(catalog) = &self.registry.catalog
-        {
-            return catalog
-                .entries
-                .iter()
-                .filter(|entry| entry.source != bas::management::Source::Registry)
-                .filter_map(|entry| entry.spec.clone())
-                .collect();
+        if !self.registry.editable() {
+            return self
+                .registry
+                .catalog
+                .as_ref()
+                .map(|catalog| {
+                    catalog
+                        .entries
+                        .iter()
+                        .filter_map(|entry| entry.spec.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
         }
-        self.catalog()
+        self.document
+            .as_ref()
+            .map(|document| {
+                document
+                    .settings
+                    .daemon
+                    .agents
+                    .iter()
+                    .filter_map(|registration| registration.resolve().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(super) fn open_installation(&mut self, cx: &mut Context<Self>) {
         self.pending_reveal = None;
-        self.show_installation = true;
-        self.scroll_to = Some(0);
         self.refresh_registry(false, cx);
+        let agents = cx.entity();
+        cx.defer(move |cx| {
+            if let Err(error) = window::open(agents.clone(), cx) {
+                agents.update(cx, |agents, cx| {
+                    agents.message = error.to_string();
+                    cx.notify();
+                });
+            }
+        });
         cx.notify();
     }
 
     pub(super) fn show_section(&mut self, section: Option<usize>, cx: &mut Context<Self>) {
         self.pending_reveal = None;
-        self.show_installation = section.is_none_or(|index| {
-            index >= self.display_catalog().len() && self.editor.spec().is_none()
-        });
-        self.scroll_to = Some(if self.show_installation {
-            0
-        } else {
-            section.unwrap_or(0)
-        });
+        self.scroll_to = Some(section.unwrap_or(0));
         self.query.clear();
         cx.notify();
     }
@@ -342,8 +380,12 @@ impl Agents {
                 .cloned()
         });
         if let Some(managed) = managed {
-            self.show_installation = true;
-            self.scroll_to = Some(0);
+            let index = self
+                .display_catalog()
+                .iter()
+                .position(|spec| spec.id.as_str() == id)
+                .unwrap_or(0);
+            self.scroll_to = Some(index);
             if self.registry.catalog.is_none() && !self.registry.editable() {
                 // Recognize ownership immediately, but wait for the daemon's profile check
                 // before launching a connection/authentication probe.
@@ -356,7 +398,7 @@ impl Agents {
                 }
             }
             cx.notify();
-            return Some(0);
+            return Some(index);
         }
         if let Some(entry) = self.registry.catalog.as_ref().and_then(|catalog| {
             catalog
@@ -365,24 +407,32 @@ impl Agents {
                 .find(|entry| entry.id == id && entry.source == bas::management::Source::Registry)
         }) {
             let spec = entry.spec.clone();
-            self.show_installation = true;
-            self.scroll_to = Some(0);
+            let index = self
+                .display_catalog()
+                .iter()
+                .position(|spec| spec.id.as_str() == id)
+                .unwrap_or(0);
+            self.scroll_to = Some(index);
             if let Some(spec) = spec {
                 self.start_check(spec, true, cx);
             }
             cx.notify();
-            return Some(0);
+            return Some(index);
         }
         let entry = self
-            .catalog()
+            .display_catalog()
             .into_iter()
             .enumerate()
             .find(|(_, spec)| spec.id.as_str() == id);
         if let Some((index, spec)) = entry {
-            self.show_installation = false;
             self.scroll_to = Some(index);
             self.start_check(spec, true, cx);
             Some(index)
+        } else if self.registry.awaiting_profile() {
+            self.pending_reveal = Some(id.to_owned());
+            self.refresh_registry(false, cx);
+            cx.notify();
+            None
         } else {
             self.message = crate::i18n::tr!("agent-config-absent").into();
             cx.notify();
@@ -432,8 +482,7 @@ impl Agents {
                 } else if matches!(
                     page.status(&expected),
                     Some(Status::AuthenticationRequired { .. })
-                ) && !page.show_installation
-                {
+                ) {
                     page.scroll_to = page
                         .display_catalog()
                         .iter()
@@ -537,22 +586,16 @@ impl Agents {
         })
     }
 
-    /// Sidebar entries: every configured agent, then the new ACP form.
+    /// Sidebar entries contain configuration only.
     pub(super) fn sections(&self) -> Vec<Section> {
-        let mut sections: Vec<_> = self
-            .display_catalog()
+        self.display_catalog()
             .iter()
             .enumerate()
             .map(|(index, spec)| Section {
                 id: format!("settings-agent-{index}"),
                 title: spec.id.to_string(),
             })
-            .collect();
-        sections.push(Section {
-            id: "settings-agents-add".to_owned(),
-            title: crate::i18n::tr!("agent-add").to_owned(),
-        });
-        sections
+            .collect()
     }
 
     fn dirty(&self, cx: &App) -> bool {
@@ -612,7 +655,6 @@ impl Agents {
         } else if self.dirty(cx) {
             self.message = crate::i18n::tr!("agent-save-before-switch").into();
         } else {
-            self.show_installation = false;
             let form = values(&spec);
             for (input, value) in self.form.fields().into_iter().zip(form.fields()) {
                 input.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
@@ -620,8 +662,12 @@ impl Agents {
             self.scroll_to = Some(
                 selected
                     .as_ref()
-                    .and_then(|id| self.catalog().iter().position(|spec| &spec.id == id))
-                    .unwrap_or_else(|| self.catalog().len()),
+                    .and_then(|id| {
+                        self.display_catalog()
+                            .iter()
+                            .position(|spec| &spec.id == id)
+                    })
+                    .unwrap_or_else(|| self.display_catalog().len()),
             );
             self.editor = if selected.is_some() {
                 Editor::Edit {
@@ -755,94 +801,96 @@ fn summary(spec: &AgentSpec) -> String {
 }
 
 impl Agents {
-    /// A section card: title, one-line description, then the section body.
-    fn card(
-        &self,
-        id: String,
-        title: String,
-        description: String,
-        content: gpui_kit::AnyElement,
-        cx: &App,
-    ) -> gpui_kit::AnyElement {
-        let heading = gds_uim::el! {
-            #div { flex; flex_col; gap_1; } [
-                #div {
-                    text_size: $crate::ui::HEADING; text_color: $cx.theme().foreground;
-                } [ $title ],
-                #div {
-                    text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                } [ $description ],
-            ]
-        };
-        gds_uim::el! {
-            #div { id: $id; test_support; } [
-                GroupBox { outline; title: $heading; } [ $content ],
-            ]
+    fn configured_entry(&self, spec: &AgentSpec) -> bas::management::Entry {
+        if let Some(entry) = self.registry.catalog.as_ref().and_then(|catalog| {
+            catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == spec.id.as_str())
+        }) {
+            let mut entry = entry.clone();
+            entry.spec = Some(spec.clone());
+            return entry;
         }
-        .into_any_element()
+        bas::management::Entry {
+            id: spec.id.to_string(),
+            name: spec.id.to_string(),
+            description: summary(spec),
+            version: String::new(),
+            repository: String::new(),
+            license: String::new(),
+            license_url: String::new(),
+            icon: String::new(),
+            installed_version: None,
+            source: if spec.kind == Kind::Embedded {
+                bas::management::Source::Embedded
+            } else {
+                bas::management::Source::Custom
+            },
+            status: bas::management::Status::Installed,
+            message: String::new(),
+            spec: Some(spec.clone()),
+        }
     }
 
-    fn summary_content(
+    fn configuration_actions(
         &self,
         index: usize,
         spec: &AgentSpec,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let edit = spec.clone();
+        let custom = self.catalog().iter().any(|saved| saved.id == spec.id);
         let probe = spec.clone();
-        let chat = spec.id.to_string();
         let status = self.status(spec);
-        let connected = status.is_some_and(Status::connected);
         let busy = status.is_some_and(Status::busy);
-        let has_authentication = self.authentications.contains_key(&spec.id);
-        let detail = self.check_detail(spec);
-        let status_content = gds_uim::el! {
-            #div { flex_1; min_w_0; flex; flex_col; gap_1; text_size: $crate::ui::SMALL; } [
-                ..$bool::then(!has_authentication, || gds_uim::el! {
-                    #div { id: $format!("agents-status-{index}"); test_support; } [
-                        $(if spec.kind == Kind::Embedded {
-                            crate::i18n::tr!("agent-builtin-ready")
-                        } else {
-                            status.map_or(crate::i18n::tr!("agent-unchecked"), status::label)
-                        })
-                    ]
-                }),
-                ..$bool::then(!has_authentication, || gds_uim::el! {
-                    #div { text_color: $cx.theme().muted_foreground; } [ $detail ]
-                }),
-            ]
-        };
-        let summary = gds_uim::el! {
-            #div { flex; items_center; justify_between; gap_3; } [
-                $status_content,
+        gds_uim::el! {
+            #div { flex; items_center; gap_1; } [
                 ..$bool::then(spec.kind == Kind::Acp, || gds_uim::el! {
-                    $button(format!("agents-check-{index}")) {
-                        label: $status.map_or(crate::i18n::tr!("agent-check"), status::check_label);
+                    #item::action($format!("agents-check-{index}"), $gpui_kit::assets::IconName::RefreshCw, $status.map_or(crate::i18n::tr!("agent-check"), status::check_label)) {
+                        loading: $busy;
                         disabled: $(busy || self.dirty(cx) || !self.registry.editable());
                         on_click: $cx.listener(move |this, _, _, cx| this.start_check(probe.clone(), true, cx));
                     }
                 }),
-                ..$connected.then(|| gds_uim::el! {
-                    $button(format!("agents-start-chat-{index}")) {
-                        label: $crate::i18n::tr!("agent-start-chat");
-                        disabled: $(!self.registry.editable());
-                        on_click: $cx.listener(move |this, _, _, cx| this.begin_chat(chat.clone(), cx));
-                    }
-                }),
-                $button(gpui_kit::SharedString::from(format!("agents-edit-{index}"))) {
-                    label: $crate::i18n::tr!("agent-advanced");
-                    disabled: $(!self.registry.editable());
+                ..$custom.then(|| gds_uim::el! { #item::action($format!("agents-edit-{index}"), $gpui_kit::assets::IconName::Settings, $crate::i18n::tr!("agent-edit-config")) {
+                    disabled: $(!self.registry.editable() || !custom);
                     on_click: $cx.listener(move |this, _, window, cx| {
                         this.edit(edit.clone(), Some(edit.id.clone()), window, cx)
                     });
-                },
+                } }),
             ]
+        }.into_any_element()
+    }
+
+    fn configuration_card(
+        &self,
+        index: usize,
+        spec: &AgentSpec,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let entry = self.configured_entry(spec);
+        let editing = self.registry.editable() && self.editor.selected() == Some(&spec.id);
+        let content = if editing {
+            Some(self.form_content(cx))
+        } else if self.authentications.contains_key(&spec.id) {
+            Some(self.authentication_content(spec, index, cx))
+        } else {
+            None
+        };
+        let card = item::Item {
+            status: self.item_status(&entry),
+            status_hint: self.check_detail(spec),
+            feedback: self.item_feedback(&entry),
+            actions: self.configuration_actions(index, spec, cx),
+            entry,
+            content,
         };
         gds_uim::el! {
-            #div { flex; flex_col; gap_3; } [
-                $summary,
-                $self.authentication_content(spec, index, cx),
-            ]
+            #div {
+                id: $format!("agents-card-{index}"); test_support;
+                w_full; min_w_0;
+            } [$card]
         }
         .into_any_element()
     }
@@ -856,6 +904,7 @@ impl Agents {
         let actions = gds_uim::el! {
             #div { flex; flex_wrap; gap_2; } [
                 $button("agents-save") {
+                    disabled: $(!self.registry.editable() || self.document.is_none());
                     label: $(if self.editor.deleting() {
                         crate::i18n::tr!("agent-remove-confirm")
                     } else if connected {
@@ -888,7 +937,7 @@ impl Agents {
                     #div { flex; flex_col; gap_1; } [
                         #div { text_size: $crate::ui::SMALL; } [ $label ],
                         #div { id: $id; test_support; } [
-                            Input($input) { disabled: $self.editor.deleting(); }
+                            Input($input) { small; disabled: $(self.editor.deleting() || !self.registry.editable()); }
                         ],
                     ]
                 }),
@@ -902,46 +951,17 @@ impl Agents {
         }.into_any_element()
     }
 
-    fn add_content(&self, drafting: bool, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        gds_uim::el! {
-            #div { flex; flex_col; gap_4; } [
-                ..$self.show_installation.then(|| self.registry_content(cx)),
-                #div { flex; } [
-                    $button("agents-add-custom") {
-                        label: $crate::i18n::tr!("agent-add-custom");
-                        disabled: $(self.document.is_none() || !self.registry.editable());
-                        on_click: $cx.listener(Self::on_add_custom);
-                    },
-                ],
-                #div {
-                    flex; flex_col; gap_1; text_size: $crate::ui::SMALL;
-                    text_color: $cx.theme().muted_foreground;
-                } [
-                    $crate::i18n::tr!("agent-custom-description"),
-                    $crate::i18n::tr!("agent-auth-description"),
-                ],
-                ..$drafting.then(|| self.form_content(cx)),
-                #div { flex; } [
-                    $button("agents-installation-toggle") {
-                        label: $(if self.show_installation {
-                            crate::i18n::tr!("catalog-collapse")
-                        } else {
-                            crate::i18n::tr!("agent-install-action")
-                        });
-                        on_click: $cx.listener(Self::on_toggle_installation);
-                    },
-                ],
-            ]
-        }
-        .into_any_element()
-    }
-
     fn on_save(&mut self, _: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.save(cx);
     }
 
     fn on_cancel_edit(&mut self, _: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.editor = Editor::Idle;
+        if let Some(catalog) = self.registry.catalog.clone()
+            && let Some(service) = cx.try_global::<catalog::Service>()
+        {
+            self.apply_catalog(catalog, service.local(), cx);
+        }
         self.message = crate::i18n::tr!("agent-edit-cancelled").into();
         cx.notify();
     }
@@ -960,22 +980,7 @@ impl Agents {
         self.edit(AgentSpec::acp("", Command::new("", [])), None, window, cx);
     }
 
-    fn on_toggle_installation(
-        &mut self,
-        _: &gpui_kit::ClickEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.show_installation = !self.show_installation;
-        cx.notify();
-    }
-
-    fn on_open_installation(
-        &mut self,
-        _: &gpui_kit::ClickEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_add_agent(&mut self, _: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.open_installation(cx);
     }
 
@@ -991,106 +996,101 @@ impl Agents {
 
 impl Render for Agents {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.ensure_authentication_panels(window, cx);
+        self.render_page(Page::Configuration, window, cx)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Configuration,
+    Onboarding,
+}
+
+impl Agents {
+    fn render_page(
+        &mut self,
+        page: Page,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        self.rendering_window = Some(window.window_handle());
+        let installation_open =
+            window::current(cx).is_some_and(|handle| cx.windows().contains(&handle.into()));
+        if page == Page::Onboarding || !installation_open {
+            self.ensure_authentication_panels(window, cx);
+        }
         let dirty = self.dirty(cx);
         let catalog = self.display_catalog();
         let drafting = matches!(self.editor, Editor::Add(_));
-        let section_count = if self.show_installation {
+        let section_count = if page == Page::Onboarding {
             2
         } else {
             catalog.len() + 1
         };
-        if let Some(index) = self.scroll_to.take() {
+        if page == Page::Configuration
+            && let Some(index) = self.scroll_to.take()
+        {
             self.scroll
                 .scroll_to_top_of_item(index.min(section_count.saturating_sub(1)));
         }
-        let header = if self.show_installation {
+        let header = if page == Page::Onboarding && drafting {
+            gds_uim::el! {
+                #div { text_size: $crate::ui::HEADING; } [
+                    $crate::i18n::tr!("agent-add-custom")
+                ]
+            }
+            .into_any_element()
+        } else if page == Page::Onboarding {
             self.registry_header(cx)
         } else {
             gds_uim::el! {
-                #div { flex; flex_col; gap_2; } [
-                    #div { flex; items_center; justify_between; gap_3; } [
-                        #div { text_size: $crate::ui::TITLE; } [
-                            $crate::i18n::tr!("agent-advanced-title")
-                        ],
-                        $button("agents-installation-help") {
-                            label: $crate::i18n::tr!("agent-install-action");
-                            on_click: $cx.listener(Self::on_open_installation);
-                        },
-                        $button("agents-reload") {
-                            label: $crate::i18n::tr!("settings-reload");
-                            on_click: $cx.listener(Self::on_reload_agents);
-                        },
+                #div {
+                    id: "agents-configuration-header"; test_support;
+                    flex; items_center; justify_between; gap_3;
+                } [
+                    #div { text_size: $crate::ui::HEADING; } [
+                        $crate::i18n::tr!("settings-agents")
                     ],
                     #div {
-                        text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                        id: "agents-configuration-actions"; test_support;
+                        flex; items_center; gap_2;
                     } [
-                        $crate::i18n::tr!(
-                            "settings-file",
-                            path = (self.store.path().display()).to_string()
-                        )
+                        Button("agents-add") {
+                            ghost; small; icon: $gpui_kit::assets::IconName::Plus;
+                            label: $crate::i18n::tr!("agent-add");
+                            on_click: $cx.listener(Self::on_add_agent);
+                        },
+                        #item::action("agents-reload", $gpui_kit::assets::IconName::RefreshCw, $crate::i18n::tr!("settings-refresh-agents")) {
+                            on_click: $cx.listener(Self::on_reload_agents);
+                        },
                     ],
                 ]
             }
             .into_any_element()
         };
         let mut content = Vec::new();
-        if self.show_installation {
-            content.push(self.registry_content(cx));
-            content.push(
-                gds_uim::el! {
-                    #div { flex; justify_end; } [
-                        Button("agents-add-custom") {
-                            ghost; small; label: $crate::i18n::tr!("agent-add-custom");
-                            disabled: $(self.document.is_none() || !self.registry.editable());
-                            on_click: $cx.listener(Self::on_add_custom);
-                        },
-                    ]
-                }
-                .into_any_element(),
-            );
+        if page == Page::Onboarding {
+            if drafting {
+                content.push(self.form_content(cx));
+            } else {
+                content.push(self.registry_content(cx));
+                content.push(
+                    gds_uim::el! {
+                        #div { flex; justify_end; } [
+                            Button("agents-add-custom") {
+                                ghost; small; label: $crate::i18n::tr!("agent-add-custom");
+                                disabled: $(self.document.is_none() || !self.registry.editable());
+                                on_click: $cx.listener(Self::on_add_custom);
+                            },
+                        ]
+                    }
+                    .into_any_element(),
+                );
+            }
         } else {
             for (index, spec) in catalog.iter().enumerate() {
-                let body = if self.editor.selected() == Some(&spec.id) {
-                    self.form_content(cx)
-                } else {
-                    self.summary_content(index, spec, cx)
-                };
-                let entry = self.registry.catalog.as_ref().and_then(|catalog| {
-                    catalog
-                        .entries
-                        .iter()
-                        .find(|entry| entry.spec.as_ref() == Some(spec))
-                });
-                let title = entry.map_or_else(|| spec.id.to_string(), |entry| entry.name.clone());
-                let description = entry
-                    .filter(|entry| entry.source == bas::management::Source::Registry)
-                    .map_or_else(
-                        || summary(spec),
-                        |entry| {
-                            format!(
-                                "{} · ACP Registry · {}",
-                                entry.description,
-                                entry.installed_version.as_deref().unwrap_or(&entry.version)
-                            )
-                        },
-                    );
-                content.push(self.card(
-                    format!("agents-card-{index}"),
-                    title,
-                    description,
-                    body,
-                    cx,
-                ));
+                content.push(self.configuration_card(index, spec, cx));
             }
-            let add = self.add_content(drafting, cx);
-            content.push(self.card(
-                "agents-card-add".to_owned(),
-                crate::i18n::tr!("agent-add-custom").to_owned(),
-                crate::i18n::tr!("agent-custom-description").to_owned(),
-                add,
-                cx,
-            ));
         }
         let heading = gds_uim::el! {
             #div { p_5; flex_shrink_0; flex; flex_col; gap_2; } [
@@ -1121,9 +1121,9 @@ impl Render for Agents {
                 $heading,
                 #div {
                     id: "agents-sections"; test_support; flex_1; min_h_0; overflow_y_scroll;
-                    track_scroll: $&self.scroll; px_5; pb_5; flex; flex_col; gap_4;
+                    track_scroll: $(if page == Page::Configuration { &self.scroll } else { &self.installation_scroll }); px_5; pb_5; flex; flex_col; gap_2;
                 } [ ..content ],
             ]
-        }
+        }.into_any_element()
     }
 }

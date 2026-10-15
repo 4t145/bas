@@ -4,6 +4,82 @@ use std::sync::{Arc, Mutex};
 
 type CodeRegions = Arc<Mutex<HashMap<&'static str, Bounds<Pixels>>>>;
 
+const GLYPH_BACKGROUND: u32 = 0x20f0b0;
+const CODE_BACKGROUND: u32 = 0xf020b0;
+
+struct InlineMarkdown {
+    state: Entity<TextViewState>,
+}
+
+impl Render for InlineMarkdown {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w_full()
+            .text_bg(gpui_kit::rgb(GLYPH_BACKGROUND))
+            .child(
+                text_view(&self.state, cx).style(markdown_style(cx).with_inline_code(
+                    gpui_kit::HighlightStyle {
+                        background_color: Some(gpui_kit::rgb(CODE_BACKGROUND).into()),
+                        ..Default::default()
+                    },
+                )),
+            )
+    }
+}
+
+#[gpui_kit::test]
+fn inline_code_paint_matches_reserved_width_and_does_not_wrap_twice(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        theme::init_default(cx);
+    });
+    let source = include_str!("assets/inline-wrap.md");
+    let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown(source, cx)));
+    let window = cx.open_window(size(px(840.), px(900.)), |_, _| InlineMarkdown {
+        state: state.clone(),
+    });
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        for font_size in [14., 17.9, 22.] {
+            cx.global_mut::<theme::Appearance>().content_font_size = font_size;
+            for width in [420., 640., 840.] {
+                window.resize(size(px(width), px(900.)));
+                window.bounds_changed(cx);
+                window.render_frame(cx);
+                let scale = window.scale_factor();
+                let bounds = state.read(cx).bounds().scale(scale);
+                let quads = window.painted_quads();
+                let code: Vec<_> = quads.iter().filter(|quad| {
+                    quad.background == gpui_kit::Background::from(gpui_kit::rgb(CODE_BACKGROUND))
+                }).collect();
+                let glyphs: Vec<_> = quads.iter().filter(|quad| {
+                    quad.background == gpui_kit::Background::from(gpui_kit::rgb(GLYPH_BACKGROUND))
+                }).collect();
+                assert_eq!(code.len(), 8, "short code spans remain whole");
+                assert!(!glyphs.is_empty(), "observe actual text paint");
+                for quad in &glyphs {
+                    assert!(quad.bounds.bottom() <= bounds.bottom(), "text paints past its reserved row");
+                }
+                for code in code {
+                    let expected_left = code.bounds.left() + gpui_kit::ScaledPixels(2. * scale);
+                    let expected_width = code.bounds.size.width - gpui_kit::ScaledPixels(4. * scale);
+                    assert!(glyphs.iter().any(|glyph| {
+                        (glyph.bounds.left() - expected_left).0.abs() < 1.
+                            && (glyph.bounds.size.width - expected_width).0.abs() < 1.
+                            && glyph.bounds.top() <= code.bounds.top()
+                            && glyph.bounds.bottom() >= code.bounds.bottom()
+                    }), "code background and painted glyph width disagree at {font_size}px / {width}px: {:?}", code.bounds);
+                }
+            }
+        }
+        state.update(cx, |state, cx| state.select_all(cx));
+        let selected = state.read(cx).selected_text();
+        assert!(selected.contains("searchTools"));
+        assert!(selected.contains("Use direct exposure"));
+        assert!(!selected.contains('`'));
+    }).expect("inline code geometry");
+}
+
 #[test]
 fn upstream_text_style_preserves_component_theme() {
     let mut app = gpui_kit::TestApp::new();

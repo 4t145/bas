@@ -2,6 +2,88 @@ use super::*;
 use gpui_kit::{TestAppContext, size, test::TestWindowExt};
 
 #[gpui_kit::test]
+fn shared_header_tracks_configuration_ownership(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("isolated frontend settings");
+    let path = directory.path().join("frontend.json");
+    std::fs::write(&path, r#"{"appearance":{"theme_source":"builtin"}}"#)
+        .expect("frontend configuration");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::configuration::init(Some(path.clone()), cx);
+        crate::theme::init(None, cx);
+    });
+    let mut settings = None;
+    let window = cx.open_window(size(px(680.), px(720.)), |window, cx| {
+        let view = cx.new(|cx| Settings::new(window, cx));
+        settings = Some(view.clone());
+        crate::theme::window_root(view, window, cx)
+    });
+    let settings = settings.expect("settings view");
+    let mut file_bounds = None;
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(settings.read(cx).settings_path(cx), Some(path.clone()));
+        let file = window.find("settings-edit-file");
+        assert!(file.visible());
+        assert!(settings.read(cx).can_edit_file(cx));
+        file_bounds = Some(file.bounds());
+        assert!(window.try_find("settings-backend-context").is_none());
+        assert_eq!(
+            window.find("settings-frontend-context").label(),
+            Some("本机设置")
+        );
+        assert!(window.try_find("settings-scope-frontend").is_none());
+        assert!(window.try_find("settings-scope-backend").is_none());
+        assert!(window.try_find("settings-add-agent").is_none());
+        window.click("settings-agents", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("settings-frontend-context").is_none());
+        let backend_context = crate::i18n::tr!(
+            "settings-backend-context",
+            address = crate::i18n::tr!("settings-backend-disconnected")
+        );
+        assert_eq!(
+            window.find("settings-backend-context").label(),
+            Some(backend_context.as_str())
+        );
+        assert!(settings.read(cx).settings_path(cx).is_none());
+        let file = window.find("settings-edit-file");
+        assert!(!settings.read(cx).can_edit_file(cx));
+        assert_eq!(Some(file.bounds()), file_bounds);
+        assert!(window.try_find("agents-card-add").is_none());
+        assert!(window.try_find("agents-installation-help").is_none());
+        assert!(window.try_find("settings-agents-add").is_none());
+        assert!(window.try_find("settings-add-agent").is_none());
+        let navigation = window.find("settings-navigation").bounds();
+        let add = window.find("agents-add").bounds();
+        let actions = window.find("agents-configuration-actions").bounds();
+        let chapter = window.find("agents-configuration-header").bounds();
+        let global = window.find("settings-header").bounds();
+        assert!(add.left() >= navigation.right());
+        assert!(add.left() >= actions.left() && add.right() <= actions.right());
+        assert!(add.top() >= chapter.top() && add.bottom() <= chapter.bottom());
+        assert!(chapter.top() >= global.bottom());
+        window.click("settings-appearance", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("settings-backend-context").is_none());
+        assert_eq!(
+            window.find("settings-frontend-context").label(),
+            Some("本机设置")
+        );
+        assert_eq!(settings.read(cx).settings_path(cx), Some(path.clone()));
+        assert!(settings.read(cx).can_edit_file(cx));
+        assert_eq!(
+            Some(window.find("settings-edit-file").bounds()),
+            file_bounds
+        );
+        std::fs::remove_file(&path).expect("remove the test-only settings file");
+        window.render_frame(cx);
+        assert!(!settings.read(cx).can_edit_file(cx));
+    })
+    .expect("one header and file entry across configuration scopes");
+}
+
+#[gpui_kit::test]
 fn navigation_labels_fill_the_left_edge_for_categories_and_sections(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("settings fixture");
     cx.update(|cx| {
@@ -21,7 +103,6 @@ fn navigation_labels_fill_the_left_edge_for_categories_and_sections(cx: &mut Tes
             "settings-layout",
             "settings-agents",
             "settings-agent-0",
-            "settings-agents-add",
         ] {
             let button = window.find(id);
             let text = window.find(format!("{id}-text")).bounds();
@@ -91,17 +172,25 @@ fn categories_are_nested_and_agent_drafts_survive_navigation(cx: &mut TestAppCon
             window.find("settings-agent-0").visible(),
             "configured agents are listed as sections"
         );
-        window.click("settings-agents-add", cx);
+        assert!(window.try_find("agents-card-add").is_none());
+        assert!(window.try_find("agents-registry").is_none());
+        window.click("agents-add", cx);
+    })
+    .expect("agent configuration is separate from onboarding");
+    let onboarding = cx.update(|cx| agents::window::open_catalog(cx).expect("agent onboarding"));
+    assert_ne!(window.window_id(), onboarding.window_id());
+    cx.update_window(onboarding.into(), |_, window, cx| {
         window.render_frame(cx);
         window.click("agents-add-custom", cx);
-        window.render_frame(cx);
-        window.click("settings-agents-add", cx);
         window.render_frame(cx);
         window.click("agents-id", cx);
         window.input("codex", cx);
         window.click("agents-program", cx);
         window.press("ctrl-a", cx);
         window.input("/test/codex-acp", cx);
+    })
+    .expect("edit a draft in the separate onboarding window");
+    cx.update_window(window.into(), |_, window, cx| {
         window.click("settings-layout", cx);
         window.render_frame(cx);
         assert!(window.find("appearance-opacity-row").visible());
@@ -115,6 +204,11 @@ fn categories_are_nested_and_agent_drafts_survive_navigation(cx: &mut TestAppCon
             window.find("agents-page").visible(),
             "search finds the agent category"
         );
+        assert!(window.try_find("agents-save").is_none());
+    })
+    .expect("configuration does not host the add-agent form");
+    cx.update_window(onboarding.into(), |_, window, cx| {
+        window.render_frame(cx);
         window.click("agents-save", cx);
     })
     .expect("save the retained agent draft");

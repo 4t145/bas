@@ -8,6 +8,7 @@ use std::path::PathBuf;
 pub struct Catalog {
     pub entries: Vec<Entry>,
     pub warning: Option<String>,
+    /// Resolved in the daemon's working directory, never in the frontend's.
     pub settings_path: Option<PathBuf>,
     pub can_install: bool,
 }

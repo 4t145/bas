@@ -3,6 +3,122 @@ use gpui_kit::TestAppContext;
 use super::*;
 
 #[gpui_kit::test]
+fn native_windows_share_root_typography_and_live_updates(cx: &mut TestAppContext) {
+    use gpui_kit::{AppContext, Render, div, prelude::*, size, test::TestWindowExt};
+
+    struct Probe(Rc<std::cell::RefCell<Option<gpui_kit::TextStyle>>>);
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let metrics = self.0.clone();
+            div().child(
+                gpui_kit::canvas(
+                    move |_, window, _| {
+                        *metrics.borrow_mut() = Some(window.text_style());
+                    },
+                    |_, _, _, _| {},
+                )
+                .size_full(),
+            )
+        }
+    }
+
+    let directory = tempfile::tempdir().expect("isolated settings");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::configuration::init(Some(directory.path().join("settings.json")), cx);
+        init(None, cx);
+    });
+    let metrics = Rc::new(std::cell::RefCell::new(None));
+    let main = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        let view = cx.new(|_| Probe(metrics.clone()));
+        window_root(view, window, cx)
+    });
+    let windows = cx.update(|cx| {
+        vec![
+            main,
+            crate::settings::window::open(cx).expect("settings"),
+            crate::application::open_about(cx).expect("about"),
+            crate::application::open_quit(cx).expect("quit"),
+            crate::application::open_message("Title", "Message", cx).expect("message"),
+            crate::application::open_confirmation(
+                crate::application::Confirmation {
+                    title: "Confirm".into(),
+                    message: "Message".into(),
+                    confirm_label: "OK".into(),
+                },
+                |_| {},
+                cx,
+            )
+            .expect("confirmation"),
+        ]
+    });
+    for ui_size in [15., 22.] {
+        cx.update(|cx| {
+            let effective = preferences::resolve(
+                &Preferences {
+                    ui_font_size: Some(ui_size),
+                    content_font_size: Some(19.),
+                    ..Default::default()
+                },
+                source::fallback(true),
+            )
+            .expect("valid typography");
+            apply(effective, None, cx);
+        });
+        cx.executor().run_until_parked();
+        for handle in &windows {
+            cx.update_window((*handle).into(), |_, window, cx| {
+                window.render_frame(cx);
+                if window.try_find("settings-appearance-text").is_some() {
+                    let metrics = metrics.borrow();
+                    let metrics = metrics.as_ref().expect("workspace typography was painted");
+                    for id in [
+                        "settings-appearance-text",
+                        "settings-theme-text",
+                        "settings-fonts-text",
+                        "settings-layout-text",
+                        "appearance-language-label",
+                        "appearance-source-label",
+                    ] {
+                        // Upstream buttons use one-em line height; body text uses the default.
+                        let expected = if id.starts_with("settings-") {
+                            metrics.font_size.to_pixels(px(ui_size)).round()
+                        } else {
+                            metrics.line_height_in_pixels(px(ui_size))
+                        };
+                        let height = window.find(id).bounds().size.height;
+                        assert!(
+                            (f32::from(height - expected)).abs() <= 1.,
+                            "{id}: rendered height {height:?}, workspace text height {expected:?}"
+                        );
+                    }
+                }
+            })
+            .expect("render open window");
+            cx.update(|cx| {
+                handle.update(cx, |root, window, cx| {
+                    assert_eq!(window.rem_size(), px(ui_size));
+                    let expected = font_style(cx);
+                    assert_eq!(root.style().text.font_size, expected.text.font_size);
+                    assert_eq!(
+                        root.style().text.font_fallbacks,
+                        expected.text.font_fallbacks
+                    );
+                })
+            })
+            .expect("open window follows shared typography");
+        }
+        let actual = metrics.borrow();
+        let actual = actual.as_ref().expect("root typography was painted");
+        assert_eq!(
+            actual.font_size.to_pixels(px(ui_size)),
+            crate::ui::SMALL.to_pixels(px(ui_size))
+        );
+        cx.update(|cx| assert_eq!(content_font_size(cx), px(19.)));
+    }
+}
+
+#[gpui_kit::test]
 fn syntax_defaults_follow_theme_switches_and_preserve_custom_colors(cx: &mut TestAppContext) {
     use gpui_kit::component::highlighter::{HighlightTheme, HighlightThemeStyle};
     cx.update(|cx| {

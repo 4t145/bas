@@ -1,9 +1,10 @@
-//! Shared interface primitives and scale, relative to the configured UI font. Message and code text
+//! Shared interface primitives. UI text uses the workspace's compact scale; message and code text
 //! use the separate content font preferences.
 
 mod button;
 pub(crate) mod input_geometry;
 pub(crate) mod tooltip;
+pub(crate) mod window_controls;
 pub(crate) use button::Button;
 
 use gds_uim::el;
@@ -16,7 +17,6 @@ use gpui_kit::{
 };
 
 pub(crate) const SMALL: Rems = Rems(0.875);
-pub(crate) const BODY: Rems = Rems(1.0);
 pub(crate) const HEADING: Rems = Rems(1.125);
 pub(crate) const TITLE: Rems = Rems(1.25);
 pub(crate) const ICON: f32 = 16.;
@@ -29,6 +29,12 @@ pub(crate) const MENU_ROW_HEIGHT: f32 = 28.;
 const SUBTLE_FOREGROUND_OPACITY: f32 = 0.5;
 const SUBTLE_HOVER_OPACITY: f32 = 0.35;
 const SUBTLE_ACTIVE_OPACITY: f32 = 0.55;
+
+pub(crate) fn checkbox(
+    id: impl Into<gpui_kit::ElementId>,
+) -> gpui_kit::component::checkbox::Checkbox {
+    gpui_kit::component::checkbox::Checkbox::new(id).text_size(SMALL)
+}
 
 pub(crate) fn icon_button(id: impl Into<gpui_kit::ElementId>, icon: IconName) -> Button {
     el! {

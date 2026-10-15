@@ -5,7 +5,7 @@ use crate::theme::{self, preferences::Preferences};
 use form::{DraftError, Form};
 use gpui_kit::{
     App, Context, Render, ScrollHandle, Subscription, Task, TestSupportExt, Window,
-    component::{group_box::*, input::*, select::*, *},
+    component::{input::*, select::*, *},
     div,
     prelude::*,
     px,
@@ -380,30 +380,31 @@ impl AppearancePage {
         match field {
             Field::Language => gds_uim::el! {
                 #div { id: $field.id(); test_support; } [
-                    Select($&self.form.language) { cursor_pointer; }
+                    Select($&self.form.language) { small; cursor_pointer; }
                 ]
             }
             .into_any_element(),
             Field::Source => gds_uim::el! {
-                Select($&self.form.source) { cursor_pointer; }
+                Select($&self.form.source) { small; cursor_pointer; }
             }
             .into_any_element(),
             Field::Mode => gds_uim::el! {
-                Select($&self.form.mode) { cursor_pointer; }
+                Select($&self.form.mode) { small; cursor_pointer; }
             }
             .into_any_element(),
             Field::Background => gds_uim::el! {
-                Select($&self.form.background) { cursor_pointer; }
+                Select($&self.form.background) { small; cursor_pointer; }
             }
             .into_any_element(),
             Field::ComposerEnter => gds_uim::el! {
                 #div { id: $field.id(); test_support; } [
-                    Select($&self.form.composer_enter) { cursor_pointer; }
+                    Select($&self.form.composer_enter) { small; cursor_pointer; }
                 ]
             }
             .into_any_element(),
             Field::UiFont => gds_uim::el! {
                 Select($&self.form.ui_font) {
+                    small;
                     cursor_pointer;
                     search_placeholder: $crate::i18n::tr!("appearance-search-font");
                 }
@@ -411,6 +412,7 @@ impl AppearancePage {
             .into_any_element(),
             Field::MonoFont => gds_uim::el! {
                 Select($&self.form.mono_font) {
+                    small;
                     cursor_pointer;
                     search_placeholder: $crate::i18n::tr!("appearance-search-font");
                 }
@@ -427,7 +429,7 @@ impl AppearancePage {
                     _ => unreachable!("select fields handled above"),
                 }
                 .clone();
-                let control = gds_uim::el! { Input($&input) {} };
+                let control = gds_uim::el! { Input($&input) { small; } };
                 let reset = gds_uim::el! {
                     $super::action_button(format!("{}-default", field.id())) {
                         label: $crate::i18n::tr!("action-reset");
@@ -456,7 +458,9 @@ impl AppearancePage {
                 @$(!last) => { border_b_1; border_color: $cx.theme().border; };
             } [
                 #div { flex_1; min_w_0; flex; flex_col; gap_1; } [
-                    $field.label(),
+                    #div {
+                        id: $format!("{}-label", field.id()); test_support;
+                    } [ $field.label() ],
                     #div {
                         text_size: $crate::ui::SMALL;
                         text_color: $cx.theme().muted_foreground;
@@ -486,8 +490,11 @@ impl AppearancePage {
             ]
         };
         gds_uim::el! {
-            #div { id: $group.card_id(); test_support; } [
-                GroupBox { outline; title: $title; } [
+            #div {
+                id: $group.card_id(); test_support; flex; flex_col; gap_2;
+            } [
+                $title,
+                #div { border_t_1; border_color: $cx.theme().border; flex; flex_col; } [
                     ..$fields.iter().enumerate().map(|(index, field)| self.row(*field, index == last, cx)),
                 ],
             ]
@@ -542,9 +549,16 @@ impl Render for AppearancePage {
                 .scroll_to_top_of_item(index.min(sections.len().saturating_sub(1)));
         }
         let header = gds_uim::el! {
-            #div { p_5; flex_shrink_0; flex; flex_col; gap_2; } [
-                #div { text_size: $crate::ui::TITLE; } [
-                    $crate::i18n::tr!("settings-appearance")
+            #div { px_5; py_3; flex_shrink_0; flex; flex_col; gap_2; } [
+                #div { flex; items_center; justify_between; gap_3; } [
+                    #div { text_size: $crate::ui::HEADING; } [
+                        $crate::i18n::tr!("settings-appearance")
+                    ],
+                    $super::action_button("settings-reset") {
+                        label: $crate::i18n::tr!("appearance-reset-all");
+                        disabled: $self.document.is_none();
+                        on_click: $cx.listener(Self::on_reset_all);
+                    },
                 ],
                 #div {
                     text_size: $crate::ui::SMALL;
@@ -555,10 +569,6 @@ impl Render for AppearancePage {
                         theme = (cx.global::<theme::Appearance>().name).to_string()
                     )
                 ],
-                #div {
-                    text_size: $crate::ui::SMALL;
-                    text_color: $cx.theme().muted_foreground;
-                } [ $crate::i18n::tr!("appearance-autosave") ],
                 ..$self.editor.theme_override().map(|path| gds_uim::el! {
                     #div {
                         text_size: $crate::ui::SMALL;
@@ -566,6 +576,9 @@ impl Render for AppearancePage {
                     } [
                         $crate::i18n::tr!("appearance-theme-override", path = (path.display()).to_string())
                     ]
+                }),
+                ..$bool::then(!self.message.is_empty(), || gds_uim::el! {
+                    #div { text_size: $crate::ui::SMALL; } [ $self.message.clone() ]
                 }),
             ]
         };
@@ -582,25 +595,8 @@ impl Render for AppearancePage {
                 ..$sections.iter().map(|(group, fields)| self.group_card(*group, fields, cx)),
             ]
         };
-        let footer = gds_uim::el! {
-            #div {
-                p_3; flex_shrink_0; border_t_1; border_color: $cx.theme().border;
-            } [
-                #div { text_size: $crate::ui::SMALL; } [ $self.message.clone() ],
-                #div { flex; items_center; justify_between; gap_3; } [
-                    #div { min_w_0; text_size: $crate::ui::SMALL; truncate; } [
-                        $crate::i18n::tr!("settings-file", path = (self.editor.appearance_path().display()).to_string())
-                    ],
-                    $super::action_button("settings-reset") {
-                        label: $crate::i18n::tr!("appearance-reset-all");
-                        disabled: $self.document.is_none();
-                        on_click: $cx.listener(Self::on_reset_all);
-                    },
-                ],
-            ]
-        };
         gds_uim::el! {
-            #div { size_full; flex; flex_col; } [ $header, $body, $footer ]
+            #div { size_full; flex; flex_col; } [ $header, $body ]
         }
     }
 }

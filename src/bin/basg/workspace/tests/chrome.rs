@@ -1,6 +1,45 @@
 use super::*;
 
 #[gpui_kit::test]
+fn native_windows_share_workspace_control_and_icon_bounds(cx: &mut TestAppContext) {
+    if cfg!(target_os = "macos") || cfg!(target_family = "wasm") {
+        return;
+    }
+    let fixture = fixture(cx);
+    let about = cx.update(|cx| crate::application::open_about(cx).expect("about window"));
+    let settings = cx.update(|cx| crate::settings::window::open(cx).expect("settings window"));
+    let mut baseline = None;
+    for handle in [fixture.window, about, settings] {
+        let bounds = cx
+            .update_window(handle.into(), |_, window, cx| {
+                window.render_frame(cx);
+                ["window-minimize", "window-maximize", "window-close"].map(|id| {
+                    let control = window.find(id).bounds().size;
+                    let icon = window.find(format!("{id}-icon")).bounds().size;
+                    assert_eq!(
+                        control,
+                        size(
+                            px(crate::ui::COMPACT_CONTROL),
+                            px(crate::ui::COMPACT_CONTROL)
+                        )
+                    );
+                    assert_eq!(
+                        icon,
+                        size(px(crate::ui::SMALL_ICON), px(crate::ui::SMALL_ICON))
+                    );
+                    (control, icon)
+                })
+            })
+            .expect("render native titlebar");
+        if let Some(baseline) = baseline {
+            assert_eq!(bounds, baseline);
+        } else {
+            baseline = Some(bounds);
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn header_rows_align_and_icon_buttons_have_equal_spacing(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
     attach(&fixture, session(), cx);

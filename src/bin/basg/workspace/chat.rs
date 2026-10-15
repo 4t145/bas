@@ -72,8 +72,10 @@ impl Workspace {
                 ..$self.render_plan(cx),
                 ..$((!self.composer_fills_thread()).then(|| self.render_timeline(cx))),
                 ..$self.composer_fills_thread().then(|| self.render_initialization_messages(cx)).flatten(),
-                #div {
-                    flex_shrink_0;
+                #content_panel() {
+                    id: "thread-composition"; test_support;
+                    flex; flex_col; flex_shrink_0;
+                    @$self.composer_fills_thread() => { flex_1; min_h_0; };
                     @$self.window.compact => { px: $px(COMPOSER_SIDE_PADDING); };
                 } [
                     #div {
@@ -83,7 +85,7 @@ impl Workspace {
                         flex;
                         items_center;
                         gap_2;
-                        pl: $px(COMPOSER_CONTROL_INSET + 1.);
+                        pl: $px(COMPOSER_CONTROL_INSET);
                         py_1;
                     } [
                         $self.agent_button(cx),
@@ -94,9 +96,9 @@ impl Workspace {
                         #div { flex_1; },
                         ..$((self.selected.id.is_some() && !self.composer_fills_thread())
                             .then(|| self.render_conversation_navigation(cx))),
-                    ]
+                    ],
+                    $self.render_composer(cx),
                 ],
-                $self.render_composer(cx),
             ]
         }.into_any_element()
     }
@@ -112,12 +114,12 @@ impl Workspace {
             } [
                 $message_actions::action_button("scroll-to-top", IconName::ArrowUp, cx) {
                     accessibility_label: $crate::i18n::tr!("conversation-top");
-                    tooltip: $crate::i18n::tr!("conversation-top");
+                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("conversation-top"), shortcuts::ScrollConversationToTop);
                     on_click: $cx.listener(Self::on_chat_top);
                 },
                 $message_actions::action_button("scroll-to-bottom", IconName::ArrowDown, cx) {
                     accessibility_label: $crate::i18n::tr!("conversation-latest");
-                    tooltip: $crate::i18n::tr!("conversation-latest");
+                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("conversation-latest"), ScrollConversationToEnd);
                     on_click: $cx.listener(Self::on_chat_bottom);
                 },
             ]
@@ -126,11 +128,7 @@ impl Workspace {
     }
 
     fn on_chat_top(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.selected
-            .timeline
-            .list
-            .scroll_to(gpui_kit::ListOffset::default());
-        cx.notify();
+        self.scroll_conversation_to_top(cx);
     }
 
     fn on_chat_bottom(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {

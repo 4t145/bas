@@ -4,12 +4,13 @@ use gds_uim::el;
 use gpui_kit::{
     App, AppContext, Bounds, ClickEvent, Context, Global, KeyBinding, Render, TestSupportExt,
     Window, WindowBounds, WindowDecorations, WindowHandle, WindowOptions, actions,
-    component::{ActiveTheme, Root, StyledExt, TitleBar},
+    component::{ActiveTheme, Root},
     div,
     prelude::*,
     px, size,
 };
 
+use crate::ui::window_controls::TitleBar;
 use crate::{branding, settings, theme};
 
 #[cfg(all(test, feature = "gui-tests"))]
@@ -200,7 +201,7 @@ fn open_host(host: Host, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
             window.set_window_title(&host.title);
             let host = cx.new(|_| host);
             window.activate_window();
-            cx.new(|cx| Root::new(host, window, cx))
+            cx.new(|cx| theme::window_root(host, window, cx))
         },
     )?;
     *kind.slot(cx.global_mut::<OpenWindows>()) = Some(handle);
@@ -366,7 +367,6 @@ impl Render for Host {
                 id: id;
                 test_support;
                 size_full; flex; flex_col;
-                refine_style: $&theme::font_style(cx);
                 bg: $cx.theme().background;
                 text_color: $cx.theme().foreground;
             } [

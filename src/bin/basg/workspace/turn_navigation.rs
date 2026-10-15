@@ -12,7 +12,70 @@ const MARKER_HEIGHT: f32 = 12.;
 const VISIBLE_PROMPTS: usize = 20;
 const PREVIEW_GRAPHEMES: usize = 72;
 
+struct TurnTarget {
+    item_index: usize,
+    row: usize,
+    preview: String,
+}
+
 impl Workspace {
+    fn turn_targets(&self) -> Vec<TurnTarget> {
+        let Some(conversation) = &self.selected.timeline.conversation else {
+            return Vec::new();
+        };
+        conversation
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(item_index, item)| {
+                let Item::Message { message, .. } = item else {
+                    return None;
+                };
+                if message.role != Role::User {
+                    return None;
+                }
+                Some(TurnTarget {
+                    item_index,
+                    row: conversation.row_for_item(item_index)?,
+                    preview: prompt_preview(message),
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn scroll_conversation_to_top(&mut self, cx: &mut Context<Self>) {
+        self.selected.timeline.list.scroll_to(ListOffset::default());
+        cx.notify();
+    }
+
+    pub(super) fn page_conversation(&mut self, up: bool, cx: &mut Context<Self>) {
+        let list = &self.selected.timeline.list;
+        let height = list.viewport_bounds().size.height;
+        if height > px(0.) {
+            list.scroll_by(if up { -height } else { height });
+            cx.notify();
+        }
+    }
+
+    pub(super) fn jump_conversation_turn(&mut self, previous: bool, cx: &mut Context<Self>) {
+        let targets = self.turn_targets();
+        let top = self.selected.timeline.list.logical_scroll_top();
+        let current = targets.iter().rposition(|target| target.row <= top.item_ix);
+        let next = match (current, previous) {
+            (Some(index), true) => index.checked_sub(1),
+            (Some(index), false) => Some(index + 1),
+            (None, false) => Some(0),
+            (None, true) => None,
+        };
+        if let Some(target) = next.and_then(|index| targets.get(index)) {
+            self.selected.timeline.list.scroll_to(ListOffset {
+                item_ix: target.row,
+                offset_in_item: px(0.),
+            });
+            cx.notify();
+        }
+    }
+
     pub(super) fn scroll_conversation_to_end(&mut self, cx: &mut Context<Self>) {
         self.selected
             .timeline
@@ -25,17 +88,7 @@ impl Workspace {
         let Some(conversation) = &self.selected.timeline.conversation else {
             return gds_uim::el! { #div }.into_any_element();
         };
-        let prompts: Vec<_> = conversation
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| match item {
-                Item::Message { message, .. } if message.role == Role::User => {
-                    Some((index, prompt_preview(message)))
-                }
-                _ => None,
-            })
-            .collect();
+        let prompts = self.turn_targets();
         let session = conversation.session.id;
         let rail = gds_uim::el! { #div {
             id: "turn-navigation"; test_support; absolute;
@@ -54,10 +107,11 @@ impl Workspace {
             overflow_y_scroll;
         } };
 
-        for (item_index, prompt) in prompts {
+        for target in prompts {
+            let item_index = target.item_index;
             let marker_id = SharedString::from(format!("turn-marker-{item_index}"));
             let group = marker_id.clone();
-            let prompt: SharedString = prompt.into();
+            let prompt: SharedString = target.preview.into();
             let tick = gds_uim::el! {
                 #div { size_full; flex; items_center; justify_center; } [
                     #div {

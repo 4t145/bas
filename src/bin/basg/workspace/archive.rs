@@ -70,7 +70,14 @@ impl Workspace {
         el! {
             #layout::icon_button($SharedString::from(format!("{location}-{id}")), icon) {
                 accessibility_label: label;
-                tooltip: label;
+                hoverable_tooltip: $move |window, cx| {
+                    let hint = if archived {
+                        label.to_owned()
+                    } else {
+                        shortcuts::hint(label, &shortcuts::ArchiveThread, window)
+                    };
+                    crate::ui::tooltip::view(hint, window, cx)
+                };
                 disabled: $!self.backend.connected
                     || self.sessions.pending.archiving.contains(&id)
                     || self.sessions.pending.deleting.contains(&id);

@@ -18,6 +18,11 @@ impl Workspace {
             self.sessions.seen_replies.remove(&session);
             self.renaming.forget(session);
         }
+        if let Some(store) = &mut self.navigation.restore.store
+            && let Err(error) = store.forget_reads(removed)
+        {
+            tracing::warn!(%error, "cannot remove saved read replies");
+        }
         if self.selected.id.is_some_and(|id| removed.contains(&id)) {
             if let Some(next) = self
                 .sessions
@@ -93,8 +98,8 @@ impl Workspace {
             .filter(|conversation| conversation.session.id == session)
             .and_then(|conversation| conversation.last_reply)
             .map_or(0, |reply| reply.cursor);
-        let seen = self.sessions.seen_replies.entry(session).or_default();
-        *seen = (*seen).max(cursor).max(replayed);
+        self.see_reply(session, cursor.max(replayed), cx);
+        self.persist_read_state();
         cx.notify();
     }
 

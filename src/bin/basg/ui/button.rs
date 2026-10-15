@@ -19,7 +19,7 @@ pub(crate) struct Button {
 impl Button {
     pub(crate) fn new(id: impl Into<ElementId>) -> Self {
         Self {
-            inner: ComponentButton::new(id),
+            inner: ComponentButton::new(id).line_height(gpui_kit::relative(1.)),
             disabled: false,
             loading: false,
         }
@@ -47,6 +47,14 @@ impl Button {
 
     pub(crate) fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.inner = self.inner.tooltip(tooltip);
+        self
+    }
+
+    pub(crate) fn hoverable_tooltip(
+        mut self,
+        tooltip: impl Fn(&mut Window, &mut App) -> gpui_kit::AnyView + 'static,
+    ) -> Self {
+        self.inner.interactivity().hoverable_tooltip(tooltip);
         self
     }
 

@@ -50,18 +50,21 @@ impl Workspace {
                     );
                 }
                 menu.separator().item(
-                    PopupMenuItem::new(crate::i18n::tr!("workspace-add"))
-                        .icon(IconName::Plus)
-                        .on_click({
-                            let view = view.clone();
-                            move |_, window, cx| {
-                                menus::in_parent(parent, window, cx, |window, cx| {
-                                    let _ = view.update(cx, |this, cx| {
-                                        this.open_workspace_add_menu(window, cx)
-                                    });
+                    shortcuts::menu_item(
+                        crate::i18n::tr!("workspace-add"),
+                        Some(Box::new(shortcuts::AddWorkspace)),
+                    )
+                    .icon(IconName::Plus)
+                    .on_click({
+                        let view = view.clone();
+                        move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |window, cx| {
+                                let _ = view.update(cx, |this, cx| {
+                                    this.open_workspace_add_menu(window, cx)
                                 });
-                            }
-                        }),
+                            });
+                        }
+                    }),
                 )
             },
             cx,
@@ -99,7 +102,11 @@ impl Workspace {
         });
     }
 
-    fn choose_local_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::workspace) fn choose_local_workspace(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.navigation.picker.pending {
             return;
         }

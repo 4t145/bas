@@ -256,7 +256,14 @@ fn rows_status_changes_preserve_title_time_and_hover_actions(cx: &mut TestAppCon
                 assert_eq!(indicator.center(), rail.center());
             }
             window.hover(format!("session-{id}"), cx);
-            assert!(window.find(format!("thread-status-{id}")).visible());
+            if dimensions.0 == 0. {
+                assert!(window.try_find(format!("thread-status-{id}")).is_none());
+            } else {
+                let status = window.find(format!("thread-status-{id}"));
+                assert!(status.visible());
+                assert_eq!(status.role(), Some(gpui_kit::Role::Status));
+                assert_eq!(status.focused(), None);
+            }
             assert!(window.find(format!("rename-{id}")).visible());
             assert!(window.find(format!("archive-{id}")).visible());
             assert_eq!(
@@ -298,7 +305,7 @@ fn rows_and_workspace_headers_hover_across_full_width_with_adjacent_actions(
         assert_eq!(row.right(), header.right());
         assert!(row.size.width >= px(SIDEBAR_WIDTH - 1.));
         assert_eq!(plus.right(), more.left());
-        assert!(window.find(status_id.clone()).visible());
+        assert!(window.try_find(status_id.clone()).is_none());
         assert!(!window.find(rename_id.clone()).visible());
         assert!(!window.find(archive_id.clone()).visible());
         assert!(!window.find("new-thread-0").visible());
@@ -312,14 +319,14 @@ fn rows_and_workspace_headers_hover_across_full_width_with_adjacent_actions(
         for x in [row.left() + px(1.), row.right() - px(1.)] {
             window.simulate_mouse_move(gpui_kit::point(x, row.center().y), cx);
             window.render_frame(cx);
-            assert!(window.find(status_id.clone()).visible());
+            assert!(window.try_find(status_id.clone()).is_none());
             assert!(window.find(rename_id.clone()).visible());
             assert!(window.find(archive_id.clone()).visible());
         }
         assert!(
             window
-                .find(format!("thread-status-{}", second.id))
-                .visible()
+                .try_find(format!("thread-status-{}", second.id))
+                .is_none()
         );
         assert!(!window.find(format!("rename-{}", second.id)).visible());
         assert!(!window.find(format!("archive-{}", second.id)).visible());
@@ -334,7 +341,7 @@ fn rows_and_workspace_headers_hover_across_full_width_with_adjacent_actions(
         assert_eq!(window.find(row_id).bounds(), row);
         assert_eq!(window.find(title_id).bounds(), title);
         window.hover("thread-search", cx);
-        assert!(window.find(status_id).visible());
+        assert!(window.try_find(status_id).is_none());
         assert!(!window.find(rename_id).visible());
         assert!(!window.find(archive_id).visible());
         assert!(!window.find("new-thread-0").visible());
@@ -983,6 +990,12 @@ fn rows_context_pin_and_rename_target_without_selecting_on_open(cx: &mut TestApp
     let menu = open_row_menu(&fixture, target.id, cx);
     cx.update_window(menu, |_, window, cx| {
         assert_eq!(fixture.view.read(cx).selected.id, Some(active.id));
+        for label in [
+            crate::i18n::tr!("session-rename"),
+            crate::i18n::tr!("session-delete"),
+        ] {
+            assert!(window.within(label).find("shortcut").visible());
+        }
         assert!(fixture.commands.try_recv().is_err());
         window.press("down", cx);
         window.press("enter", cx);

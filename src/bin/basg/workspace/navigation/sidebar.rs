@@ -24,7 +24,7 @@ impl Workspace {
                 } [$self.application_button(cx)],
                 #layout::icon_button("add-workspace-button", IconName::FolderPlus) {
                     accessibility_label: $crate::i18n::tr!("workspace-add");
-                    tooltip: $crate::i18n::tr!("workspace-add");
+                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("workspace-add"), shortcuts::AddWorkspace);
                     on_click: $cx.listener(Self::on_sidebar_add_workspace);
                 },
                 #layout::icon_button("new-session", IconName::Plus) {
@@ -235,7 +235,7 @@ impl Workspace {
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned());
             menu.item(
-                PopupMenuItem::new(crate::i18n::tr!("session-new"))
+                shortcuts::menu_item(crate::i18n::tr!("session-new"), Some(Box::new(NewSession)))
                     .icon(IconName::Plus)
                     .on_click(move |_, window, cx| {
                         menus::in_parent(parent, window, cx, |window, cx| {
@@ -273,14 +273,17 @@ impl Workspace {
                     }),
             )
             .item(
-                PopupMenuItem::new(crate::i18n::tr!("workspace-add"))
-                    .icon(IconName::FolderPlus)
-                    .on_click(move |_, window, cx| {
-                        menus::in_parent(parent, window, cx, |window, cx| {
-                            let _ = add_owner
-                                .update(cx, |this, cx| this.open_workspace_add_menu(window, cx));
-                        });
-                    }),
+                shortcuts::menu_item(
+                    crate::i18n::tr!("workspace-add"),
+                    Some(Box::new(shortcuts::AddWorkspace)),
+                )
+                .icon(IconName::FolderPlus)
+                .on_click(move |_, window, cx| {
+                    menus::in_parent(parent, window, cx, |window, cx| {
+                        let _ = add_owner
+                            .update(cx, |this, cx| this.open_workspace_add_menu(window, cx));
+                    });
+                }),
             )
         })
     }

@@ -486,13 +486,21 @@ fn an_empty_agent_picker_still_opens_the_installation_catalogue(cx: &mut TestApp
         window.within("popup-menu").click(0usize, cx);
     })
     .expect("installation entry");
-    let settings = settings_window(cx);
-    cx.update_window(settings.into(), |_, window, cx| {
+    let onboarding = cx.update(|cx| window::open_catalog(cx).expect("onboarding window"));
+    assert!(cx.update(|cx| window::current(cx).is_none()));
+    cx.update_window(onboarding.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("agents-registry").is_some());
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-w"
+            } else {
+                "ctrl-w"
+            },
+            cx,
+        );
     })
     .expect("catalogue opened from chat");
-    close_settings(cx);
 }
 
 #[gpui_kit::test]

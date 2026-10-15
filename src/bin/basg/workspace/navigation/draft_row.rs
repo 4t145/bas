@@ -106,7 +106,8 @@ impl Workspace {
             } [
                 #layout::icon_button($SharedString::from(format!("rename-draft-{index}")), IconName::Pencil) {
                     accessibility_label: $crate::i18n::tr!("session-rename");
-                    tooltip: $crate::i18n::tr!("session-rename"); disabled: disabled;
+                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("session-rename"), shortcuts::RenameThread);
+                    disabled: disabled;
                     on_click: $cx.listener(Self::on_draft_row_rename);
                 },
                 #layout::icon_button($SharedString::from(format!("discard-draft-{index}")), IconName::Trash) {
@@ -197,21 +198,24 @@ impl Workspace {
             let discard_owner = owner.clone();
             let discard_directory = directory.clone();
             menu.item(
-                PopupMenuItem::new(crate::i18n::tr!("session-rename"))
-                    .icon(IconName::Pencil)
-                    .disabled(disabled)
-                    .on_click(move |_, window, cx| {
-                        menus::in_parent(parent, window, cx, |window, cx| {
-                            let _ = rename_owner.update(cx, |this, cx| {
-                                this.on_draft_row_menu_rename(
-                                    &rename_directory,
-                                    generation,
-                                    window,
-                                    cx,
-                                );
-                            });
+                shortcuts::menu_item(
+                    crate::i18n::tr!("session-rename"),
+                    Some(Box::new(shortcuts::RenameThread)),
+                )
+                .icon(IconName::Pencil)
+                .disabled(disabled)
+                .on_click(move |_, window, cx| {
+                    menus::in_parent(parent, window, cx, |window, cx| {
+                        let _ = rename_owner.update(cx, |this, cx| {
+                            this.on_draft_row_menu_rename(
+                                &rename_directory,
+                                generation,
+                                window,
+                                cx,
+                            );
                         });
-                    }),
+                    });
+                }),
             )
             .item(
                 PopupMenuItem::new(crate::i18n::tr!("draft-discard"))

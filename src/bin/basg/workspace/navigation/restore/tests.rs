@@ -10,6 +10,10 @@ fn concurrent_writers_are_rejected_before_read_modify_write() {
     let id = SessionId::new();
     assert!(matches!(second.set_pinned(id, true), Err(Error::Busy)));
     assert!(matches!(second.save(Some(id)), Err(Error::Busy)));
+    assert!(matches!(
+        second.save_reads(&HashMap::from([(id, 4)])),
+        Err(Error::Busy)
+    ));
     assert!(!path.exists(), "a contending writer must not replace state");
     drop(lock);
     first
@@ -30,6 +34,7 @@ fn pins_persist_and_legacy_selection_files_remain_readable() {
     let mut store = Store::open(path.clone());
     assert_eq!(store.thread(), Some(thread));
     assert!(store.pinned().is_empty());
+    assert!(store.seen_replies().is_empty());
     store.set_pinned(thread, true).expect("pin");
     store.save(None).expect("selection change");
     let mut restored = Store::open(path);
@@ -64,9 +69,49 @@ fn malformed_state_is_not_overwritten_on_pin_or_selection_change() {
     let mut store = Store::open(path.clone());
     assert!(store.set_pinned(SessionId::new(), true).is_err());
     assert!(store.save(None).is_err());
+    assert!(
+        store
+            .save_reads(&HashMap::from([(SessionId::new(), 7)]))
+            .is_err()
+    );
     assert_eq!(
         std::fs::read_to_string(path).expect("state preserved"),
         "{invalid"
     );
     assert!(store.pinned().is_empty());
+}
+
+#[test]
+fn read_frontiers_merge_monotonically_without_overwriting_other_state() {
+    let dir = tempfile::tempdir().expect("state directory");
+    let path = dir.path().join("state.json");
+    let first = SessionId::new();
+    let second = SessionId::new();
+    let mut a = Store::open(path.clone());
+    let mut b = Store::open(path.clone());
+    a.save_reads(&HashMap::from([(first, 9)]))
+        .expect("read first");
+    b.save_reads(&HashMap::from([(first, 5), (second, 7)]))
+        .expect("merge stale writer");
+    a.set_pinned(second, true).expect("pin preserves reads");
+    b.save(Some(second)).expect("selection preserves reads");
+    let mut restored = Store::open(path.clone());
+    assert_eq!(
+        restored.seen_replies(),
+        HashMap::from([(first, 9), (second, 7)])
+    );
+    assert_eq!(restored.thread(), Some(second));
+    assert!(restored.pinned().contains(&second));
+    restored
+        .forget_reads(&[first])
+        .expect("remove only deleted session");
+    assert_eq!(
+        Store::open(path).seen_replies(),
+        HashMap::from([(second, 7)])
+    );
+    assert!(
+        Store::open(dir.path().join("other-server.json"))
+            .seen_replies()
+            .is_empty()
+    );
 }

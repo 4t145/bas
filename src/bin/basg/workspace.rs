@@ -63,6 +63,8 @@ use crate::{
     ui::Button,
 };
 
+mod shortcuts;
+
 const EVENT_BATCH: usize = 64;
 const LIST_OVERDRAW: f32 = 800.;
 const SIDEBAR_WIDTH: f32 = 252.;
@@ -91,6 +93,7 @@ actions!(
 
 pub(super) fn bind_keys(cx: &mut App) {
     composer::bind_keys(cx);
+    shortcuts::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("ctrl-n", NewSession, Some("BasWorkspace")),
         KeyBinding::new("ctrl-f", FocusSearch, Some("BasWorkspace")),
@@ -146,8 +149,7 @@ impl Workspace {
     ) -> Self {
         let (connection, events) = Connection::new(server, runtime);
         let mut view = Self::with_connection(connection, events, server, cwd, compact, window, cx);
-        view.navigation
-            .attach_restore(navigation::restore::Store::discover(server));
+        view.attach_restore(navigation::restore::Store::discover(server));
         view.resize_window(window, cx);
         view.navigation._clock = Some(cx.spawn_in(window, async move |view, cx| {
             loop {
@@ -194,6 +196,10 @@ impl Workspace {
         crate::agents::metadata::ensure(server, cx);
         let agent_metadata = crate::agents::metadata::entity(cx);
         let mut subscriptions = vec![
+            cx.on_app_quit(|this, _| {
+                this.persist_read_state();
+                std::future::ready(())
+            }),
             cx.observe_global_in::<crate::agents::Changes>(window, |this, window, cx| {
                 let changes = cx.global::<crate::agents::Changes>().clone();
                 if changes.server != Some(this.backend.server) {

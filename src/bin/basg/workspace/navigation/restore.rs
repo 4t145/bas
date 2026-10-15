@@ -7,11 +7,15 @@ use crate::workspace::*;
 #[cfg(test)]
 mod tests;
 
+const READ_SAVE_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
 #[derive(Default, Deserialize, Serialize)]
 struct Saved {
     thread: Option<SessionId>,
     #[serde(default)]
     pinned: std::collections::BTreeSet<SessionId>,
+    #[serde(default)]
+    seen_replies: std::collections::BTreeMap<SessionId, u64>,
 }
 
 pub(in crate::workspace) struct Store {
@@ -59,6 +63,60 @@ impl Store {
 
     pub fn pinned(&self) -> HashSet<SessionId> {
         self.saved.pinned.iter().copied().collect()
+    }
+
+    pub fn seen_replies(&self) -> HashMap<SessionId, u64> {
+        self.saved
+            .seen_replies
+            .iter()
+            .map(|(&id, &cursor)| (id, cursor))
+            .collect()
+    }
+
+    /// # Errors
+    /// Returns lock, read or write failures without replacing corrupt state.
+    pub fn save_reads(&mut self, seen: &HashMap<SessionId, u64>) -> Result<(), Error> {
+        if !seen
+            .iter()
+            .any(|(id, cursor)| *cursor > self.saved.seen_replies.get(id).copied().unwrap_or(0))
+        {
+            return Ok(());
+        }
+        let _lock = self.lock()?;
+        let mut saved = self.latest()?;
+        let mut changed = false;
+        for (&id, &cursor) in seen {
+            if cursor > saved.seen_replies.get(&id).copied().unwrap_or(0) {
+                saved.seen_replies.insert(id, cursor);
+                changed = true;
+            }
+        }
+        if changed {
+            self.write(saved)
+        } else {
+            self.saved = saved;
+            Ok(())
+        }
+    }
+
+    /// # Errors
+    /// Returns persistence failures without altering unrelated saved state.
+    pub fn forget_reads(&mut self, removed: &[SessionId]) -> Result<(), Error> {
+        if removed.is_empty() {
+            return Ok(());
+        }
+        let _lock = self.lock()?;
+        let mut saved = self.latest()?;
+        let mut changed = false;
+        for id in removed {
+            changed |= saved.seen_replies.remove(id).is_some();
+        }
+        if changed {
+            self.write(saved)
+        } else {
+            self.saved = saved;
+            Ok(())
+        }
     }
 
     /// # Errors
@@ -142,7 +200,46 @@ impl Store {
 }
 
 impl Workspace {
+    pub(in crate::workspace) fn attach_restore(&mut self, store: Option<Store>) {
+        if let Some(store) = &store {
+            for (id, cursor) in store.seen_replies() {
+                let seen = self.sessions.seen_replies.entry(id).or_default();
+                *seen = (*seen).max(cursor);
+            }
+        }
+        self.navigation.attach_restore(store);
+    }
+
+    pub(in crate::workspace) fn see_reply(
+        &mut self,
+        session: SessionId,
+        cursor: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let seen = self.sessions.seen_replies.entry(session).or_default();
+        if cursor <= *seen {
+            return;
+        }
+        *seen = cursor;
+        if self.navigation.restore.store.is_some() {
+            self.navigation.restore.read_save = Some(cx.spawn(async move |view, cx| {
+                cx.background_executor().timer(READ_SAVE_DELAY).await;
+                let _ = view.update(cx, |view, _| view.persist_read_state());
+            }));
+        }
+    }
+
+    pub(in crate::workspace) fn persist_read_state(&mut self) {
+        self.navigation.restore.read_save.take();
+        if let Some(store) = &mut self.navigation.restore.store
+            && let Err(error) = store.save_reads(&self.sessions.seen_replies)
+        {
+            tracing::warn!(%error, "cannot save read replies");
+        }
+    }
+
     pub(in crate::workspace) fn remember_thread(&mut self) {
+        self.persist_read_state();
         if let Some(store) = &mut self.navigation.restore.store
             && let Err(error) = store.save(self.selected.id)
         {

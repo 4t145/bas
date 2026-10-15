@@ -83,13 +83,20 @@ impl RowStatus {
         .into_any_element()
     }
 
-    fn slot(self, id: SessionId, cx: &App) -> Button {
-        gds_uim::el! { Button($SharedString::from(format!("thread-status-{id}"))) {
-            ghost; xsmall; cursor_default;
-            w: layout::ICON_BUTTON_SIZE.px; h: layout::ICON_BUTTON_SIZE.px;
-            p_0; flex_shrink_0; tab_stop: false; role: gpui_kit::Role::Status;
-            accessibility_label: $self.label(); tooltip: $self.label();
-        } [$self.indicator(id, cx)] }
+    fn slot(self, id: SessionId, cx: &App) -> AnyElement {
+        let slot = gds_uim::el! { #div {
+            size: layout::ICON_BUTTON_SIZE.px; flex_shrink_0;
+            flex; items_center; justify_center;
+        } [$self.indicator(id, cx)] };
+        if self == Self::Idle {
+            return slot.into_any_element();
+        }
+        gds_uim::el! { $slot {
+            id: $SharedString::from(format!("thread-status-{id}")); test_support;
+            cursor_default; role: gpui_kit::Role::Status;
+            aria_label: $self.label();
+            hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(self.label(), window, cx);
+        } }.into_any_element()
     }
 }
 
@@ -141,7 +148,8 @@ impl Workspace {
             } [
                 #layout::icon_button($SharedString::from(format!("rename-{id}")), IconName::Pencil) {
                     accessibility_label: $crate::i18n::tr!("session-rename");
-                    tooltip: $crate::i18n::tr!("session-rename"); disabled: disabled;
+                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("session-rename"), shortcuts::RenameThread);
+                    disabled: disabled;
                     on_click: $cx.listener(move |this, _, window, cx| {
                         this.on_thread_row_rename(id, window, cx);
                     });
@@ -258,11 +266,14 @@ impl Workspace {
                 let delete_owner = owner.clone();
                 let read_owner = owner.clone();
                 menu.item(
-                    PopupMenuItem::new(if pinned {
-                        crate::i18n::tr!("session-unpin")
-                    } else {
-                        crate::i18n::tr!("session-pin")
-                    })
+                    shortcuts::menu_item(
+                        if pinned {
+                            crate::i18n::tr!("session-unpin")
+                        } else {
+                            crate::i18n::tr!("session-pin")
+                        },
+                        Some(Box::new(shortcuts::ToggleThreadPin)),
+                    )
                     .icon(IconName::Pin)
                     .on_click(move |_, window, cx| {
                         menus::in_parent(parent, window, cx, |_, cx| {
@@ -271,24 +282,32 @@ impl Workspace {
                     }),
                 )
                 .item(
-                    PopupMenuItem::new(crate::i18n::tr!("session-rename"))
-                        .disabled(disabled)
-                        .on_click(move |_, window, cx| {
-                            menus::in_parent(parent, window, cx, |window, cx| {
-                                let _ = rename_owner.update(cx, |this, cx| {
-                                    this.begin_sidebar_rename(id, window, cx);
-                                });
+                    shortcuts::menu_item(
+                        crate::i18n::tr!("session-rename"),
+                        Some(Box::new(shortcuts::RenameThread)),
+                    )
+                    .disabled(disabled)
+                    .on_click(move |_, window, cx| {
+                        menus::in_parent(parent, window, cx, |window, cx| {
+                            let _ = rename_owner.update(cx, |this, cx| {
+                                this.begin_sidebar_rename(id, window, cx);
                             });
-                        }),
+                        });
+                    }),
                 )
                 .item(
-                    PopupMenuItem::new(if draft {
-                        crate::i18n::tr!("draft-discard")
-                    } else if archived {
-                        crate::i18n::tr!("session-restore")
-                    } else {
-                        crate::i18n::tr!("session-archive")
-                    })
+                    shortcuts::menu_item(
+                        if draft {
+                            crate::i18n::tr!("draft-discard")
+                        } else if archived {
+                            crate::i18n::tr!("session-restore")
+                        } else {
+                            crate::i18n::tr!("session-archive")
+                        },
+                        (!draft && !archived).then(|| {
+                            Box::new(shortcuts::ArchiveThread) as Box<dyn gpui_kit::Action>
+                        }),
+                    )
                     .icon(if draft {
                         IconName::Trash
                     } else {
@@ -317,14 +336,17 @@ impl Workspace {
                 })
                 .separator()
                 .item(
-                    PopupMenuItem::new(crate::i18n::tr!("session-delete"))
-                        .disabled(disabled)
-                        .on_click(move |_, window, cx| {
-                            menus::in_parent(parent, window, cx, |window, cx| {
-                                let _ = delete_owner
-                                    .update(cx, |this, cx| this.request_delete(id, window, cx));
-                            });
-                        }),
+                    shortcuts::menu_item(
+                        crate::i18n::tr!("session-delete"),
+                        Some(Box::new(shortcuts::DeleteThread)),
+                    )
+                    .disabled(disabled)
+                    .on_click(move |_, window, cx| {
+                        menus::in_parent(parent, window, cx, |window, cx| {
+                            let _ = delete_owner
+                                .update(cx, |this, cx| this.request_delete(id, window, cx));
+                        });
+                    }),
                 )
             }),
             window,

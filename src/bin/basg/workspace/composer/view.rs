@@ -186,7 +186,6 @@ impl Workspace {
             #div {
                 id: "composer-panel";
                 test_support;
-                rounded_lg;
                 flex;
                 flex_col;
                 @fills_thread => { flex_1; min_h_0; };
@@ -208,7 +207,7 @@ impl Workspace {
                 @$(!self.window.compact) => { pb: $px(COMPOSER_SIDE_PADDING); };
             } [
                 $panel {
-                    @$(!self.window.compact) => { border_1; border_color: $cx.theme().border; };
+                    @$(!self.window.compact) => { border_t_1; border_color: $cx.theme().border; };
                 } [
                     $self.render_commands(cx),
                     ..$self.render_composer_feedback(cx),

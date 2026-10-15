@@ -209,7 +209,7 @@ impl Workspace {
                 ));
             }
         }
-        if matches!(fixture, "sample" | "layout") {
+        if matches!(fixture, "sample" | "layout" | "inline-wrap") {
             let updates = if fixture == "layout" {
                 vec![
                     acp::SessionUpdate::ToolCall(
@@ -230,7 +230,13 @@ impl Workspace {
                         "请展示 Markdown：中文、English、日本語、한국어，以及 `行内代码`。".into(),
                     )),
                     acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-                        include_str!("assets/panel-preview.md").to_owned().into(),
+                        (if fixture == "inline-wrap" {
+                            include_str!("markdown/assets/inline-wrap.md")
+                        } else {
+                            include_str!("assets/panel-preview.md")
+                        })
+                        .to_owned()
+                        .into(),
                     )),
                 ]
             };

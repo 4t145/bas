@@ -8,8 +8,8 @@ mod source;
 mod tests;
 
 use gpui_kit::{
-    App, Global, Pixels, Task, Window, WindowBackgroundAppearance,
-    component::{Theme, ThemeConfig, ThemeMode},
+    AnyView, App, Context, Global, Pixels, Styled, Task, Window, WindowBackgroundAppearance,
+    component::{Root, StyledExt, Theme, ThemeConfig, ThemeMode},
     px,
 };
 use loader::Loader;
@@ -275,9 +275,23 @@ fn complete_highlight(config: &mut ThemeConfig) {
     }
 }
 
+/// All native windows share UI typography, including overlays hosted by Root.
+pub(super) fn window_root(
+    view: impl Into<AnyView>,
+    window: &mut Window,
+    cx: &mut Context<Root>,
+) -> Root {
+    cx.observe_global::<Appearance>(|root, cx| {
+        root.style().text = font_style(cx).text;
+        cx.notify();
+    })
+    .detach();
+    Root::new(view, window, cx).refine_style(&font_style(cx))
+}
+
 pub(super) fn font_style(cx: &App) -> gpui_kit::StyleRefinement {
     let mut style = gpui_kit::StyleRefinement::default();
-    style.text.font_size = Some(crate::ui::BODY.into());
+    style.text.font_size = Some(crate::ui::SMALL.into());
     style.text.font_fallbacks = cx
         .try_global::<Appearance>()
         .map(|appearance| appearance.font_fallbacks.clone());

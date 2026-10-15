@@ -1,4 +1,5 @@
 use super::*;
+use crate::workspace::turn_navigation::RAIL_WIDTH;
 
 #[gpui_kit::test]
 fn composer_controls_stay_aligned_after_resize_font_change_and_cursor_movement(
@@ -34,11 +35,9 @@ fn composer_controls_stay_aligned_after_resize_font_change_and_cursor_movement(
             let panel = window.find("composer-panel").bounds();
             let body = window.find("thread-body").bounds();
             let status = window.find("conversation-status").bounds();
-            assert_eq!(panel.left() - body.left(), px(chat::THREAD_BODY_PADDING));
-            assert_eq!(
-                body.right() - panel.right(),
-                px(crate::workspace::turn_navigation::RAIL_WIDTH + chat::THREAD_BODY_PADDING)
-            );
+            let available = body.size.width - px(2. * chat::THREAD_BODY_PADDING + RAIL_WIDTH);
+            assert_eq!(panel.size.width, px(chat::CONTENT_WIDTH).min(available));
+            assert_eq!(panel.center().x, body.center().x - px(RAIL_WIDTH / 2.));
             assert_eq!(status.left(), panel.left());
             assert_eq!(status.right(), panel.right());
             let editor_bounds = window.find("composer-editor").bounds();
@@ -185,12 +184,7 @@ fn full_body_uses_shared_padding_for_initialization_history_and_composer(cx: &mu
                 } else {
                     "agent-initialization-messages"
                 };
-                for id in [
-                    "conversation-status",
-                    "composer-panel",
-                    region,
-                    message_id.as_str(),
-                ] {
+                for id in [region, message_id.as_str()] {
                     let bounds = window.find(id.to_owned()).bounds();
                     assert_eq!(bounds.left(), left, "left edge of {id}");
                     assert_eq!(bounds.right(), right, "right edge of {id}");
@@ -198,6 +192,11 @@ fn full_body_uses_shared_padding_for_initialization_history_and_composer(cx: &mu
                 let content = window
                     .find(format!("message-content-{message_id}"))
                     .bounds();
+                for id in ["conversation-status", "composer-panel"] {
+                    let bounds = window.find(id).bounds();
+                    assert_eq!(bounds.left(), content.left(), "left edge of {id}");
+                    assert_eq!(bounds.right(), content.right(), "right edge of {id}");
+                }
                 assert_eq!(
                     content.center().x,
                     window.find(message_id.clone()).bounds().center().x

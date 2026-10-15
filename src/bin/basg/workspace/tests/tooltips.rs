@@ -5,6 +5,31 @@ use gpui_kit::{point, px, size};
 use super::*;
 
 #[gpui_kit::test]
+fn existing_workspace_button_shows_its_registered_shortcut(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.hover("add-workspace-button", cx);
+    })
+    .expect("existing workspace button");
+    cx.executor().advance_clock(Duration::from_millis(600));
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let expected = crate::workspace::shortcuts::hint(
+            crate::i18n::tr!("workspace-add"),
+            &crate::workspace::shortcuts::AddWorkspace,
+            window,
+        );
+        assert_ne!(expected, crate::i18n::tr!("workspace-add"));
+        assert_eq!(
+            window.find("bounded-tooltip-content").label(),
+            Some(expected.as_str())
+        );
+    })
+    .expect("shortcut hint");
+}
+
+#[gpui_kit::test]
 fn failed_initialization_send_hint_fits_compact_minimum(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {

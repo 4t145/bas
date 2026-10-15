@@ -347,7 +347,11 @@ impl Manager {
         Ok(Catalog {
             entries,
             warning,
-            settings_path: self.store.as_ref().map(|store| store.path().to_path_buf()),
+            settings_path: self
+                .store
+                .as_ref()
+                .map(|store| std::path::absolute(store.path()))
+                .transpose()?,
             can_install: self.store.is_some(),
         })
     }

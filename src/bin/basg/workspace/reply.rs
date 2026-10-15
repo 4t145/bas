@@ -119,8 +119,7 @@ impl Workspace {
             && let Some(reply) = visible_reply
             && let Some(session) = self.selected.id
         {
-            let seen = self.sessions.seen_replies.entry(session).or_default();
-            *seen = (*seen).max(reply.cursor);
+            self.see_reply(session, reply.cursor, cx);
         }
     }
 
@@ -352,7 +351,7 @@ impl Workspace {
             popup_options(parent, trigger, preview_size),
             |window, cx| {
                 cx.new(|cx| {
-                    gds_uim::el! { Root($preview, $window, $cx) {
+                    gds_uim::el! { #theme::window_root(preview, window, cx) {
                         bordered: false; window_shadow_size: 0.0.px;
                     } }
                 })

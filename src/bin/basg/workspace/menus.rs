@@ -241,8 +241,8 @@ impl Workspace {
                 menu.focus_handle(cx).focus(window, cx);
                 let surface = cx.new(|_| MenuSurface { content: menu });
                 cx.new(|cx| {
-                    gds_uim::el! { Root($surface, $window, $cx) {
-                        refine_style: $&theme::font_style(cx).bg(gpui_kit::transparent_black());
+                    gds_uim::el! { #theme::window_root(surface, window, cx) {
+                        bg: $gpui_kit::transparent_black();
                         bordered: false; window_shadow_size: 0.0.px;
                     } }
                 })

@@ -4,6 +4,25 @@ mod lifecycle;
 mod persistence;
 
 #[tokio::test]
+async fn catalog_resolves_configuration_paths_in_the_daemon() {
+    let fixture = fixture::Fixture::serve(None, false).await;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut manager = fixture::manager(&directory, &fixture.url);
+    let relative = PathBuf::from("relative-backend-settings.json");
+    Arc::get_mut(&mut manager)
+        .expect("the manager has no other owners")
+        .store = Some(Store::at(relative.clone()));
+    let catalog = manager
+        .catalog(vec![AgentSpec::embedded().into()], false)
+        .await
+        .expect("backend catalog");
+    assert_eq!(
+        catalog.settings_path,
+        Some(std::path::absolute(relative).expect("daemon working directory"))
+    );
+}
+
+#[tokio::test]
 async fn installation_registers_exact_boundaries_and_removal_keeps_credentials_and_versions() {
     let fixture = fixture::Fixture::serve(None, false).await;
     let directory = tempfile::tempdir().expect("temporary directory");

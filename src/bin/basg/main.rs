@@ -24,10 +24,8 @@ use std::{net::SocketAddr, path::PathBuf};
 use anyhow::{Context as _, Result};
 use clap::Parser;
 use gpui_kit::{
-    AppContext, Bounds, WindowBounds, WindowDecorations, WindowKind, WindowOptions,
-    component::{Root, StyledExt},
-    prelude::*,
-    px, size, transparent_black,
+    AppContext, Bounds, WindowBounds, WindowDecorations, WindowKind, WindowOptions, prelude::*, px,
+    size, transparent_black,
 };
 
 const NETWORK_THREADS: usize = 2;
@@ -53,7 +51,7 @@ struct Args {
     #[arg(long, env = "BAS_SETTINGS_FILE")]
     settings_file: Option<PathBuf>,
     #[cfg(feature = "gui-tests")]
-    #[arg(long, hide = true, value_parser = ["empty", "startup", "agent-menu", "sample", "layout", "connecting", "disconnected", "menus", "files", "images", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "tool-details", "thread-feedback", "markdown-actions", "markdown-copy-hover", "subtle-actions", "turn-navigation", "turn-navigation-hover", "turn-navigation-many", "usage", "usage-details", "usage-hover", "agent-hover", "attachment-hint", "app-menu", "thread-menu", "clipboard", "settings"])]
+    #[arg(long, hide = true, value_parser = ["empty", "startup", "agent-menu", "sample", "layout", "inline-wrap", "connecting", "disconnected", "menus", "files", "images", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "tool-details", "thread-feedback", "markdown-actions", "markdown-copy-hover", "subtle-actions", "turn-navigation", "turn-navigation-hover", "turn-navigation-many", "usage", "usage-details", "usage-hover", "agent-hover", "attachment-hint", "app-menu", "thread-menu", "clipboard", "settings", "settings-agents", "agent-onboarding"])]
     preview_panel: Option<String>,
     #[cfg(all(feature = "gui-tests", target_os = "linux"))]
     #[arg(long, hide = true)]
@@ -102,8 +100,15 @@ fn main() -> Result<()> {
             })
             .detach();
             #[cfg(feature = "gui-tests")]
-            if args.preview_panel.as_deref() == Some("settings") {
-                if let Err(error) = settings::window::open(cx) {
+            if let Some(panel @ ("settings" | "settings-agents" | "agent-onboarding")) =
+                args.preview_panel.as_deref()
+            {
+                let opened = match panel {
+                    "settings-agents" => settings::window::open_agent("embedded", cx),
+                    "agent-onboarding" => settings::window::open_catalog(cx),
+                    _ => settings::window::open(cx),
+                };
+                if let Err(error) = opened {
                     tracing::error!(%error, "cannot open the BasG settings window");
                     cx.quit();
                 }
@@ -131,8 +136,7 @@ fn main() -> Result<()> {
                     workspace::Workspace::new(args.server, cwd, !args.window, &handle, window, cx)
                 });
                 cx.new(|cx| {
-                    Root::new(view, window, cx)
-                        .refine_style(&theme::font_style(cx))
+                    theme::window_root(view, window, cx)
                         .bordered(false)
                         .bg(transparent_black())
                 })

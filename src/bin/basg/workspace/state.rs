@@ -145,6 +145,7 @@ impl NavigationState {
 pub(super) struct RestoreState {
     pub(super) store: Option<navigation::restore::Store>,
     pub(super) on_connect: bool,
+    pub(super) read_save: Option<Task<()>>,
 }
 
 #[derive(Default)]

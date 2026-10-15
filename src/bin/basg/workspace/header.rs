@@ -17,6 +17,7 @@ impl Workspace {
                     truncate;
                     text_size: $crate::ui::SMALL;
                     cursor_pointer;
+                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("session-rename"), shortcuts::RenameThread);
                     on_click: $cx.listener(Self::on_header_rename);
                 } [
                     $self.current().map(title).unwrap_or_else(|| self.draft_title()),
@@ -76,42 +77,11 @@ impl Workspace {
         }
     }
 
-    fn header_row(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let controls = window.window_controls();
-        let client_controls = !cfg!(target_os = "macos");
+    fn header_row(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let show_application = !self.window.sidebar_visible;
-        let minimize = (client_controls && controls.minimize).then(|| {
-            el! {
-                #layout::icon_button("window-minimize", IconName::WindowMinimize) {
-                    tooltip: $crate::i18n::tr!("window-minimize");
-                    on_click: Self::on_window_minimize;
-                }
-            }
-        });
-        let maximize = (client_controls && controls.maximize).then(|| {
-            let (icon, hint) = if window.is_maximized() {
-                (IconName::WindowRestore, crate::i18n::tr!("window-restore"))
-            } else {
-                (
-                    IconName::WindowMaximize,
-                    crate::i18n::tr!("window-maximize"),
-                )
-            };
-            el! {
-                #layout::icon_button("window-maximize", icon) {
-                    tooltip: hint;
-                    on_click: $cx.listener(Self::on_window_zoom);
-                }
-            }
-        });
-        let close = client_controls.then(|| {
-            el! {
-                #layout::icon_button("window-close", IconName::WindowClose) {
-                    tooltip: $crate::i18n::tr!("window-close");
-                    on_click: $cx.listener(Self::on_window_close);
-                }
-            }
-        });
+        let controls = crate::ui::window_controls::WindowControls::new()
+            .on_maximize(cx.listener(Self::on_window_zoom))
+            .on_close_window(cx.listener(Self::on_window_close));
         el! {
             #div {
                 id: "conversation-header-row";
@@ -135,9 +105,7 @@ impl Workspace {
                 #caption("/", cx),
                 $self.title_slot(cx),
                 $self.mode_button(cx),
-                ..minimize,
-                ..maximize,
-                ..close,
+                $controls,
             ]
         }
     }
@@ -148,10 +116,6 @@ impl Workspace {
 
     fn on_sidebar_toggle(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.toggle_sidebar(window, cx);
-    }
-
-    fn on_window_minimize(_: &ClickEvent, window: &mut Window, _: &mut App) {
-        window.minimize_window();
     }
 
     fn on_window_zoom(&mut self, _: &ClickEvent, window: &mut Window, _: &mut Context<Self>) {

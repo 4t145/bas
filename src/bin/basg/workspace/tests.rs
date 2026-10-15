@@ -22,10 +22,12 @@ mod navigation;
 mod operations;
 mod picker;
 mod protocol_elements;
+mod read_state;
 mod rename;
 mod rows;
 mod runtime;
 mod settings;
+mod shortcuts;
 mod submission;
 mod thread_actions;
 mod timeline;
@@ -1091,6 +1093,61 @@ fn command_menu_handles_escape_mouse_selection_and_live_catalog_replacement(
         matches!(fixture.commands.try_recv(), Ok(Command::Prompt { submission, .. }) if submission::text(&submission) == "/unknown raw arguments")
     );
     assert!(fixture.commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
+fn session_controls_render_shared_small_typography(cx: &mut TestAppContext) {
+    use bas::acp;
+    let fixture = fixture(cx);
+    let mut meta = session();
+    meta.acp = Some(
+        acp::NewSessionResponse::new(meta.id.to_string()).config_options(vec![
+            acp::SessionConfigOption::boolean("fast-mode", "Fast", false),
+            acp::SessionConfigOption::select(
+                "model",
+                "Model",
+                "fast",
+                vec![acp::SessionConfigSelectOption::new("fast", "Fast")],
+            ),
+        ]),
+    );
+    attach(&fixture, meta.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        for rem_size in [16., 22.] {
+            gpui_kit::component::Theme::global_mut(cx).font_size = px(rem_size);
+            for pending in [false, true] {
+                fixture.view.update(cx, |view, cx| {
+                    if pending {
+                        view.sessions.pending.configuring.insert(meta.id);
+                    } else {
+                        view.sessions.pending.configuring.remove(&meta.id);
+                    }
+                    cx.notify();
+                });
+                window.render_frame(cx);
+                window.render_frame(cx);
+                let font_size = crate::ui::SMALL.to_pixels(px(rem_size));
+                let expected = window.text_system().shape_line(
+                    "Fast".into(),
+                    font_size,
+                    &[window.text_style().to_run("Fast".len())],
+                    None,
+                );
+                for id in ["config-label-fast-mode", "config-label-model"] {
+                    let width = window.find(id).bounds().size.width;
+                    assert!(
+                        f32::from(width - expected.width).abs() <= 1.,
+                        "{id}: rendered width {width:?}, SMALL width {:?}",
+                        expected.width
+                    );
+                }
+                let height = window.find("config-label-model").bounds().size.height;
+                assert!(f32::from(height - font_size.round()).abs() <= 1.);
+                assert_eq!(window.find("config-model").label(), Some("Fast"));
+            }
+        }
+    })
+    .expect("render session control typography");
 }
 
 #[gpui_kit::test]

@@ -7,9 +7,10 @@ const PANEL_BORDER_WIDTH: f32 = 1.;
 const COMMAND_ROW_HEIGHT: f32 = 44.;
 const COMMAND_HINT_HEIGHT: f32 = 28.;
 const OUTPUT_HEIGHT: f32 = 440.;
-pub(super) const HEADER_HEIGHT: f32 = 44.;
+pub(super) const HEADER_HEIGHT: f32 = crate::ui::window_controls::HEIGHT;
 pub(super) const ICON_BUTTON_SIZE: f32 = crate::ui::COMPACT_CONTROL;
-pub(super) const MACOS_WINDOW_CONTROLS_WIDTH: f32 = 80.;
+pub(super) const MACOS_WINDOW_CONTROLS_WIDTH: f32 =
+    crate::ui::window_controls::MACOS_CONTROLS_WIDTH;
 
 pub(super) fn icon_button(id: impl Into<gpui_kit::ElementId>, icon: IconName) -> Button {
     crate::ui::icon_button(id, icon)
@@ -209,7 +210,7 @@ impl Workspace {
         gds_uim::el! {
             #div {
                 id: "bas-workspace"; key_context: "BasWorkspace"; size_full; flex;
-                refine_style: $&theme::font_style(cx); text_color: $cx.theme().foreground;
+                text_color: $cx.theme().foreground;
                 capture_any_mouse_down: $cx.listener(Self::on_layout_mouse_down);
                 on_action: $|_: &gpui_kit::component::input::Enter, _, _| {};
                 on_action: $cx.listener(Self::on_layout_new_session_action);
@@ -224,6 +225,11 @@ impl Workspace {
                 on_action: $cx.listener(Self::on_layout_refresh);
                 on_action: $cx.listener(Self::on_layout_scroll_end);
                 on_action: $cx.listener(Self::on_layout_open_settings);
+                on_action: $cx.listener(Self::on_rename_thread);
+                on_action: $cx.listener(Self::on_archive_thread);
+                on_action: $cx.listener(Self::on_toggle_thread_pin);
+                on_action: $cx.listener(Self::on_delete_thread);
+                on_action: $cx.listener(Self::on_add_workspace);
             } [
                 $(if self.window.compact {
                 self.render_popup(cx)
@@ -233,6 +239,11 @@ impl Workspace {
                 ..$self.inline_context_menu(),
             ]
         }
+        .on_action(cx.listener(Self::on_conversation_top))
+        .on_action(cx.listener(Self::on_conversation_page_up))
+        .on_action(cx.listener(Self::on_conversation_page_down))
+        .on_action(cx.listener(Self::on_conversation_previous_turn))
+        .on_action(cx.listener(Self::on_conversation_next_turn))
         .into_any_element()
     }
 

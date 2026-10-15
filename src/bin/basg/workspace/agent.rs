@@ -181,14 +181,20 @@ impl Workspace {
                         .map(|value| value.name.clone())
                         .unwrap_or_else(|| current.to_string());
                     let hint = crate::i18n::tr!("option-choose", name = option.name.as_str());
+                    // A first-party label keeps text size independent of button geometry.
                     let control = crate::ui::tooltip::bounded(
                         SharedString::from(format!("config-hint-{}", option.id)),
                         self.menu_button(
                             gds_uim::el! { Button(id) {
                                 flex_shrink_0;
                                 disabled: $self.sessions.pending.configuring.contains(&session);
-                                ghost; xsmall; label: name; max_w: 130.0.px; icon: IconName::ChevronDown;
-                            } },
+                                accessibility_label: $name.clone();
+                                ghost; xsmall; max_w: 130.0.px; icon: IconName::ChevronDown;
+                            } [#div {
+                                id: $SharedString::from(format!("config-label-{}", option.id));
+                                test_support; min_w_0; whitespace_nowrap; text_ellipsis;
+                                line_height: $gpui_kit::relative(1.); text_size: $crate::ui::SMALL;
+                            } [$name]] },
                             choices.len(),
                             self.sessions.pending.configuring.contains(&session),
                             move |mut menu, _, _| {

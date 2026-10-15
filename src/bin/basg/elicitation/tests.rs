@@ -39,6 +39,47 @@ fn request(mode: &str) -> Request {
 }
 
 #[gpui_kit::test]
+fn labeled_checkbox_renders_small_typography_independent_of_control_size(cx: &mut TestAppContext) {
+    use std::{cell::RefCell, rc::Rc};
+
+    struct Probe(Rc<RefCell<Option<gpui_kit::TextStyle>>>);
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let metrics = self.0.clone();
+            crate::ui::checkbox("checkbox-typography")
+                .label("Read")
+                .child(
+                    gpui_kit::canvas(
+                        move |_, window, _| {
+                            *metrics.borrow_mut() = Some(window.text_style());
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .size(gpui_kit::px(1.)),
+                )
+        }
+    }
+
+    cx.update(gpui_kit::init);
+    let metrics = Rc::new(RefCell::new(None));
+    let window = cx.open_window(size(px(400.), px(200.)), |_, _| Probe(metrics.clone()));
+    for rem_size in [16., 22.] {
+        cx.update_window(window.into(), |_, window, cx| {
+            window.set_rem_size(px(rem_size));
+            window.render_frame(cx);
+            let metrics = metrics.borrow();
+            let actual = metrics.as_ref().expect("checkbox content was prepainted");
+            assert_eq!(
+                actual.font_size.to_pixels(px(rem_size)),
+                crate::ui::SMALL.to_pixels(px(rem_size))
+            );
+            assert_eq!(window.find("checkbox-typography").label(), Some("Read"));
+        })
+        .expect("render checkbox typography");
+    }
+}
+
+#[gpui_kit::test]
 fn choice_fields_validate_required_values_and_toggle_native_selections(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);

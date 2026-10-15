@@ -12,6 +12,7 @@ use gpui_kit::{
 
 use super::*;
 
+mod embedded;
 mod references;
 
 #[cfg(all(test, feature = "gui-tests"))]
@@ -36,6 +37,7 @@ pub(super) struct Cache {
     errors: BTreeMap<u64, String>,
     fallback: Option<Arc<RenderImage>>,
     content: Option<u64>,
+    embedded: embedded::Owners,
 }
 
 impl Cache {
@@ -48,8 +50,10 @@ impl Cache {
             errors: BTreeMap::new(),
             fallback: None,
             content: None,
+            embedded: embedded::Owners::default(),
         });
         cx.observe_release(&cache, |cache, cx| {
+            cache.embedded.release(cx);
             for entry in cache.resources.values() {
                 if let Some(Ok(image)) = entry.get() {
                     cx.drop_image(image, None);
@@ -155,20 +159,24 @@ impl Cache {
 
     fn markdown_changed(&mut self, source: &str, window: &mut Window, cx: &mut App) {
         let content = gpui_kit::hash(&source);
-        if self.content == Some(content) {
-            return;
+        if self.content != Some(content) {
+            self.content = Some(content);
+            if let Some(references) = markdown_references(source) {
+                self.embedded
+                    .update(&references, self.owner.entity_id(), cx);
+                self.retain(references, window, cx);
+            }
         }
-        self.content = Some(content);
-        if self.inline.is_empty() && self.resources.is_empty() && self.errors.is_empty() {
-            return;
-        }
-        if let Some(references) = markdown_references(source) {
-            self.retain(references, window, cx);
+        // TextView renders embedded bytes directly, bypassing ImageCache. Keep
+        // application validation/error reporting and document ownership explicit.
+        for uri in self.embedded.uris() {
+            let _ = self.load(&Resource::Uri(uri), window, cx);
         }
     }
 
     fn image_changed(&mut self, source: &SharedUri, window: &mut Window, cx: &mut App) {
         self.content = None;
+        self.embedded.release(cx);
         self.retain(
             HashSet::from_iter([Resource::Uri(source.clone())]),
             window,
@@ -298,6 +306,7 @@ fn frame(id: &str, cache: &Entity<Cache>, content: AnyElement, cx: &App) -> Div 
                 #div {
                     id: $SharedString::from(format!("image-error-{id}-{key}"));
                     test_support;
+                    min_h: $px(crate::ui::CONTROL);
                     text_size: crate::ui::SMALL;
                     text_color: $cx.theme().muted_foreground;
                 } [$message.clone()]

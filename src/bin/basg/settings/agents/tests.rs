@@ -1,6 +1,11 @@
 use super::*;
 use gpui_kit::{ScrollDelta, TestAppContext, point, px, size, test::TestWindowExt};
 
+pub(super) fn init(cx: &mut App) {
+    gpui_kit::init(cx);
+    crate::theme::init_default(cx);
+}
+
 pub(super) fn managed_fixture(directory: &std::path::Path, spec: &AgentSpec) -> AgentRegistration {
     let path = directory.join(bas::config::INSTALLATION_FILE);
     let bytes = serde_json::to_vec(&serde_json::json!({
@@ -67,7 +72,7 @@ fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
     .expect("write initial settings");
     let initial_settings: bas::config::Settings =
         serde_json::from_value(initial.clone()).expect("typed initial settings");
-    cx.update(gpui_kit::init);
+    cx.update(init);
     let mut view = None;
     let window = cx.open_window(size(px(760.), px(680.)), |window, cx| {
         let page = cx.new(|cx| Agents::new(Store::at(path.clone()), window, cx));
@@ -75,7 +80,8 @@ fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
         Root::new(page, window, cx)
     });
     let view = view.expect("created Agents view");
-    cx.update_window(window.into(), |_, window, cx| {
+    let installation = cx.update(|cx| window::open(view.clone(), cx).expect("installation window"));
+    cx.update_window(installation.into(), |_, window, cx| {
         window.render_frame(cx);
         for id in [
             "agents-preset-codex",
@@ -103,7 +109,7 @@ fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
         click(window, "agents-cancel", cx);
     })
     .expect("custom draft without writes");
-    cx.update_window(window.into(), |_, window, cx| {
+    cx.update_window(installation.into(), |_, window, cx| {
         click(window, "agents-add-custom", cx);
         fill(window, "agents-id", "custom", cx);
         fill(window, "agents-program", "/test/agent", cx);
@@ -182,7 +188,7 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
             vec![AgentSpec::embedded().into(), spec.into()],
         )
         .expect("write initial agent catalog");
-    cx.update(gpui_kit::init);
+    cx.update(init);
     let mut view = None;
     let window = cx.open_window(size(px(760.), px(680.)), |window, cx| {
         let page = cx.new(|cx| Agents::new(Store::at(path.clone()), window, cx));
@@ -191,7 +197,8 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
     });
     let view = view.expect("created Agents view");
     let before = std::fs::read(&path).expect("read initial catalog bytes");
-    cx.update_window(window.into(), |_, window, cx| {
+    let installation = cx.update(|cx| window::open(view.clone(), cx).expect("installation window"));
+    cx.update_window(installation.into(), |_, window, cx| {
         click(window, "agents-add-custom", cx);
         click(window, "agents-save", cx);
         assert_eq!(
@@ -200,6 +207,9 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
         );
         assert!(view.read(cx).dirty(cx));
         click(window, "agents-cancel", cx);
+    })
+    .expect("reject invalid draft in installation window");
+    cx.update_window(window.into(), |_, window, cx| {
         click(window, "agents-edit-1", cx);
         click(window, "agents-args", cx);
         window.press("ctrl-a", cx);
@@ -219,7 +229,7 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
             .env["KEEP"],
         "original"
     );
-    cx.update_window(window.into(), |_, window, cx| {
+    cx.update_window(installation.into(), |_, window, cx| {
         click(window, "agents-add-custom", cx);
         fill(window, "agents-id", "other", cx);
         fill(window, "agents-program", "/test/other", cx);
@@ -234,9 +244,19 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
             std::fs::read(&path).expect("read after conflicting save"),
             external_bytes
         );
+    })
+    .expect("preserve conflicting installation draft");
+    let external_bytes = std::fs::read(&path).expect("external catalog");
+    cx.update_window(window.into(), |_, window, cx| {
         click(window, "agents-reload", cx);
         assert!(view.read(cx).dirty(cx));
+    })
+    .expect("reload does not discard installation draft");
+    cx.update_window(installation.into(), |_, window, cx| {
         click(window, "agents-cancel", cx);
+    })
+    .expect("cancel installation draft");
+    cx.update_window(window.into(), |_, window, cx| {
         click(window, "agents-reload", cx);
         click(window, "agents-edit-0", cx);
         click(window, "agents-delete", cx);
@@ -335,7 +355,7 @@ fn managed_entries_have_no_advanced_editor_and_custom_edits_preserve_references(
     store
         .save_agents(&mut document, vec![managed.clone(), custom.clone().into()])
         .expect("mixed registrations");
-    cx.update(gpui_kit::init);
+    cx.update(init);
     let mut view = None;
     let window = cx.open_window(size(px(960.), px(900.)), |window, cx| {
         let page = cx.new(|cx| Agents::new(store.clone(), window, cx));
@@ -345,7 +365,6 @@ fn managed_entries_have_no_advanced_editor_and_custom_edits_preserve_references(
     let view = view.expect("page");
     cx.update_window(window.into(), |_, window, cx| {
         view.update(cx, |page, cx| {
-            page.show_installation = false;
             assert_eq!(page.catalog(), vec![custom.clone()]);
             page.edit(managed_spec.clone(), Some(custom.id.clone()), window, cx);
             assert!(
@@ -359,9 +378,9 @@ fn managed_entries_have_no_advanced_editor_and_custom_edits_preserve_references(
             );
         });
         window.render_frame(cx);
-        assert!(window.try_find("agents-edit-1").is_none());
+        assert!(window.try_find("agents-edit-0").is_none());
         assert!(window.try_find("agents-delete").is_none());
-        click(window, "agents-edit-0", cx);
+        click(window, "agents-edit-1", cx);
         fill(window, "agents-program", "/custom/edited", cx);
         click(window, "agents-save", cx);
         let saved = store.load().expect("saved selected profile");
@@ -376,7 +395,10 @@ fn managed_entries_have_no_advanced_editor_and_custom_edits_preserve_references(
             std::path::PathBuf::from("/custom/edited")
         );
         assert_eq!(view.read(cx).store.path(), path);
-
+    })
+    .expect("edit custom configuration while managed entries remain visible");
+    let installation = cx.update(|cx| window::open(view.clone(), cx).expect("installation window"));
+    cx.update_window(installation.into(), |_, window, cx| {
         click(window, "agents-add-custom", cx);
         fill(window, "agents-id", "registry", cx);
         fill(window, "agents-program", "/attempted/override", cx);
@@ -385,8 +407,10 @@ fn managed_entries_have_no_advanced_editor_and_custom_edits_preserve_references(
         assert!(view.read(cx).dirty(cx));
         assert_eq!(std::fs::read(&path).expect("after collision"), before);
         click(window, "agents-cancel", cx);
-
-        click(window, "agents-edit-0", cx);
+    })
+    .expect("reject custom collision with managed registration");
+    cx.update_window(window.into(), |_, window, cx| {
+        click(window, "agents-edit-1", cx);
         click(window, "agents-delete", cx);
         click(window, "agents-save", cx);
         assert_eq!(
@@ -433,7 +457,7 @@ fn stable_id_edits_follow_reordered_custom_and_managed_registrations(cx: &mut Te
             vec![managed.clone(), target.clone().into(), other.clone().into()],
         )
         .expect("mixed catalog");
-    cx.update(gpui_kit::init);
+    cx.update(init);
     let mut view = None;
     let window = cx.open_window(size(px(960.), px(900.)), |window, cx| {
         let page = cx.new(|cx| Agents::new(store.clone(), window, cx));
@@ -463,7 +487,7 @@ fn stable_id_edits_follow_reordered_custom_and_managed_registrations(cx: &mut Te
         });
         window.render_frame(cx);
         let form = window.find("agents-program").bounds();
-        let target_card = window.find("agents-card-1").bounds();
+        let target_card = window.find("agents-card-2").bounds();
         assert!(form.top() >= target_card.top() && form.bottom() <= target_card.bottom());
         view.update(cx, |page, cx| {
             page.save(cx);

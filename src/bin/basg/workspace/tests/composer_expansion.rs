@@ -1,4 +1,5 @@
 use super::*;
+use crate::workspace::turn_navigation::RAIL_WIDTH;
 
 fn save_enter_behavior(mode: composer::Mode, window: &mut Window, cx: &mut App) {
     let editor = theme::Editor::current(cx);
@@ -35,10 +36,10 @@ fn new_thread_editor_fills_the_content_area_until_the_first_prompt(cx: &mut Test
             let toolbar = window.find("composer-toolbar").bounds();
             let expand = window.find("expand-message-editor").bounds();
             let send = window.find("send-message").bounds();
-            let margin = panel.left() - body.left();
-            assert_eq!(margin, px(chat::THREAD_BODY_PADDING));
-            assert_eq!(body.right() - panel.right(),
-                px(crate::workspace::turn_navigation::RAIL_WIDTH + chat::THREAD_BODY_PADDING));
+            let available = body.size.width
+                - px(2. * chat::THREAD_BODY_PADDING + RAIL_WIDTH);
+            assert_eq!(panel.size.width, px(chat::CONTENT_WIDTH).min(available));
+            assert_eq!(panel.center().x, body.center().x - px(RAIL_WIDTH / 2.));
             assert_eq!(body.bottom() - panel.bottom(), px(composer::COMPOSER_SIDE_PADDING));
             assert!(panel.size.height >= body.size.height - px(60.));
             assert!(editor.size.height >= body.size.height - px(110.));

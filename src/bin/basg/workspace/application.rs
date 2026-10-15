@@ -8,10 +8,18 @@ fn application_item(
     label: &'static str,
     action: Option<Box<dyn gpui_kit::Action>>,
 ) -> PopupMenuItem {
+    action_item(label, action, None)
+}
+
+pub(super) fn action_item(
+    label: &'static str,
+    action: Option<Box<dyn gpui_kit::Action>>,
+    context: Option<&'static str>,
+) -> PopupMenuItem {
     let hint_action = action.as_ref().map(|action| action.boxed_clone());
     let item = PopupMenuItem::element(move |window, cx| {
         let shortcut = hint_action.as_ref().and_then(|action| {
-            Kbd::binding_for_action(action.as_ref(), None, window).map(|kbd| {
+            Kbd::binding_for_action(action.as_ref(), context, window).map(|kbd| {
                 el! {
                     #div {
                         id: "shortcut";

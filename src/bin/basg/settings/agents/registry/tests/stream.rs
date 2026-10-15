@@ -232,13 +232,12 @@ impl Fixture {
     }
 
     fn open(&self, cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Agents>) {
-        cx.update(gpui_kit::init);
+        cx.update(super::super::super::tests::init);
         let mut page = None;
         let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
             let view = cx.new(|cx| Agents::new(self.store.clone(), window, cx));
             view.update(cx, |page, cx| {
                 page.apply_catalog(self.catalog.lock().expect("catalog").clone(), true, cx);
-                page.open_installation(cx);
             });
             page = Some(view.clone());
             Root::new(view, window, cx)
@@ -246,7 +245,12 @@ impl Fixture {
         // Initialize after opening the page, so the only first network operation
         // is the install action exercised below.
         cx.update(|cx| cx.set_global(Service::new(self.address, self.runtime.handle().clone())));
-        (window.into(), page.expect("fixture page"))
+        let page = page.expect("fixture page");
+        let installation = cx.update(|cx| {
+            super::super::super::window::open(page.clone(), cx).expect("native installation window")
+        });
+        let _configuration = window;
+        (installation.into(), page)
     }
 
     fn begin(&self, cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Agents>) {
@@ -365,15 +369,15 @@ fn checking_and_login_are_independent_and_only_checking_records_a_probe_result(
         window.render_frame(cx);
         assert_eq!(
             window.find("agents-registry-check-codex").label(),
-            Some("检测")
+            Some("验证可用性")
         );
         assert!(window.try_find("authentication-method-0").is_none());
-        assert!(!page.read(cx).check_detail(&spec).contains("上次检测"));
+        assert!(!page.read(cx).check_detail(&spec).contains("上次验证"));
         window.click("agents-registry-check-codex", cx);
         window.render_frame(cx);
         assert_eq!(
             window.find("agents-registry-check-codex").label(),
-            Some("正在检测…")
+            Some("正在验证可用性…")
         );
         assert!(
             page.read(cx)
@@ -392,13 +396,13 @@ fn checking_and_login_are_independent_and_only_checking_records_a_probe_result(
         window.render_frame(cx);
         assert_eq!(
             window.find("agents-registry-check-codex").label(),
-            Some("重新检测")
+            Some("重新验证可用性")
         );
         assert!(window.find("agents-registry-start-chat-codex").visible());
         assert!(window.try_find("authentication-method-0").is_none());
         let page = page.read(cx);
         assert!(page.checks[&spec.id].completed_at.is_some());
-        assert!(page.check_detail(&spec).contains("上次检测"));
+        assert!(page.check_detail(&spec).contains("上次验证"));
         assert!(page.check_detail(&spec).contains("已就绪，可以开始对话"));
         assert!(
             cx.global::<crate::agents::Changes>().select.is_none(),
@@ -431,7 +435,7 @@ fn checking_and_login_are_independent_and_only_checking_records_a_probe_result(
         window.render_frame(cx);
         assert_eq!(
             window.find("agents-registry-check-codex").label(),
-            Some("重新检测")
+            Some("重新验证可用性")
         );
         assert_eq!(
             window.find("authentication-method-0").label(),
@@ -755,7 +759,7 @@ fn old_daemon_empty_unimplemented_authentication_reports_restart_instead_of_blan
         };
         assert!(message.contains("使用交互认证"));
         assert!(message.contains("重启 bas"));
-        assert!(message.contains("重新检测"));
+        assert!(message.contains("重新验证可用性"));
         assert!(!page.status(&spec).expect("authentication status").busy());
     });
     cx.update_window(window, |_, window, cx| {

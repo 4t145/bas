@@ -335,6 +335,76 @@ fn many_turn_shortcuts_scroll_independently_and_keep_the_end_reachable(cx: &mut 
 }
 
 #[gpui_kit::test]
+fn keyboard_pages_and_turns_navigate_without_editing_the_composer(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        let targets = add_turns(&fixture, 4, window, cx);
+        fixture.view.update(cx, |view, cx| {
+            view.composer.input.update(cx, |input, cx| {
+                input.set_value("keep this draft", window, cx);
+            });
+            view.focus_input(window, cx);
+        });
+        window.render_frame(cx);
+        let list = fixture.view.read(cx).selected.timeline.list.clone();
+        window.press("ctrl-home", cx);
+        assert_eq!(list.logical_scroll_top().item_ix, 0);
+        assert_eq!(list.logical_scroll_top().offset_in_item, px(0.));
+        assert!(!list.is_following_tail());
+        for &row in targets.user_rows.iter().skip(1) {
+            window.press("ctrl-pagedown", cx);
+            assert_eq!(list.logical_scroll_top().item_ix, row);
+            assert_eq!(list.logical_scroll_top().offset_in_item, px(0.));
+        }
+        for &row in targets.user_rows.iter().rev().skip(1) {
+            window.press("ctrl-pageup", cx);
+            assert_eq!(list.logical_scroll_top().item_ix, row);
+        }
+        window.press("ctrl-pageup", cx);
+        assert_eq!(list.logical_scroll_top().item_ix, targets.user_rows[0]);
+        window.press("ctrl-pagedown", cx);
+        window.render_frame(cx);
+        window.press("pagedown", cx);
+        window.render_frame(cx);
+        let before = list.logical_scroll_top();
+        let height = list.viewport_bounds().size.height;
+        window.press("pagedown", cx);
+        window.render_frame(cx);
+        let after = list.logical_scroll_top();
+        assert_eq!(
+            before.item_ix, after.item_ix,
+            "long reply stays in the same row"
+        );
+        assert!((f32::from(after.offset_in_item - before.offset_in_item - height)).abs() < 1.);
+        window.press("pageup", cx);
+        window.render_frame(cx);
+        assert_eq!(list.logical_scroll_top().item_ix, before.item_ix);
+        assert_eq!(
+            list.logical_scroll_top().offset_in_item,
+            before.offset_in_item
+        );
+        window.press("ctrl-end", cx);
+        assert!(list.is_following_tail());
+        assert_eq!(
+            fixture.view.read(cx).composer.input.read(cx).value(),
+            "keep this draft"
+        );
+        fixture.view.update(cx, |view, cx| {
+            view.navigation
+                .search
+                .update(cx, |input, cx| input.focus(window, cx));
+        });
+        window.press("ctrl-home", cx);
+        assert_eq!(list.logical_scroll_top().item_ix, 0);
+        assert_eq!(list.logical_scroll_top().offset_in_item, px(0.));
+    })
+    .expect("keyboard timeline navigation");
+    assert!(fixture.commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
 fn end_marker_and_ctrl_end_resume_following_the_timeline(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     attach(&fixture, session(), cx);
