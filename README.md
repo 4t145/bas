@@ -233,6 +233,7 @@ GUI 使用 Agent 返回的 `configOptions` 构建选项控件，并展示图片�
 计划、上下文用量、累计费用、通知和上下文压缩也有对应界面，
 逐项支持范围见 [ACP 展示元素](docs/gui.md#acp-展示元素)。
 类型映射、客户端示例和兼容性说明见 [RPC 接口](docs/rpc.md)。
+未接入能力、稳定协议与实验提案的区别及实施建议见 [ACP 客户端能力差距](docs/acp-client-gaps.md)。
 
 ### 会话、attach 与游标
 
