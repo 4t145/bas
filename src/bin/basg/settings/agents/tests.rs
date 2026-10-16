@@ -29,7 +29,8 @@ fn click(window: &mut Window, id: &'static str, cx: &mut App) {
         let viewport = window.find("agents-sections").bounds();
         if target.visible()
             && ((bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom())
-                || id == "agents-reload")
+                || id == "agents-reload"
+                || id == "agents-cancel")
         {
             window.click(id, cx);
             return;
@@ -93,6 +94,23 @@ fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
         click(window, "agents-add-custom", cx);
         window.render_frame(cx);
         assert!(view.read(cx).dirty(cx));
+        assert!(
+            window.try_find("agents-delete").is_none(),
+            "unsaved agents cannot be deleted"
+        );
+        let back = window.find("agents-cancel").bounds();
+        let form = window.find("agents-id").bounds();
+        let save = window.find("agents-save").bounds();
+        let actions = window.find("agents-form-actions").bounds();
+        assert!(back.bottom() < form.top());
+        assert_eq!(
+            back.size,
+            size(
+                px(crate::ui::COMPACT_CONTROL),
+                px(crate::ui::COMPACT_CONTROL)
+            )
+        );
+        assert_eq!(save.right(), actions.right());
         assert!(
             view.read(cx).candidate(cx).is_err(),
             "custom path and ID are required"

@@ -287,7 +287,6 @@ fn navigation_reveals_sections_and_search_filters_settings(cx: &mut TestAppConte
 #[gpui_kit::test]
 fn compact_settings_actions_render_and_persist_without_save(cx: &mut TestAppContext) {
     use crate::theme::preferences::Preferences;
-    use std::{cell::Cell, rc::Rc};
 
     let directory = tempfile::tempdir().expect("settings fixture");
     let path = directory.path().join("settings.json");
@@ -301,12 +300,8 @@ fn compact_settings_actions_render_and_persist_without_save(cx: &mut TestAppCont
         crate::configuration::init(Some(path.clone()), cx);
         crate::theme::init(None, cx);
     });
-    let closed = Rc::new(Cell::new(false));
-    let observed = closed.clone();
     let window = cx.open_window(size(px(680.), px(720.)), |window, cx| {
         let settings = cx.new(|cx| Settings::new(window, cx));
-        cx.subscribe(&settings, move |_, _, _: &Close, _| observed.set(true))
-            .detach();
         Root::new(settings, window, cx)
     });
     let read = || {
@@ -324,7 +319,6 @@ fn compact_settings_actions_render_and_persist_without_save(cx: &mut TestAppCont
             "appearance-opacity-default",
             "appearance-line-height-default",
             "settings-reset",
-            "settings-close",
         ] {
             let button = window.find(id);
             assert!(button.visible(), "{id}");
@@ -333,12 +327,17 @@ fn compact_settings_actions_render_and_persist_without_save(cx: &mut TestAppCont
             assert!(bounds.origin.x >= px(0.), "{id}");
             assert!(bounds.right() <= px(680.), "{id}");
             assert!(bounds.bottom() <= px(720.), "{id}");
-            assert_eq!(bounds.size.height, px(crate::ui::CONTROL), "{id}");
+            let height = if id == "settings-reset" {
+                crate::ui::CONTROL
+            } else {
+                crate::ui::COMPACT_CONTROL
+            };
+            assert_eq!(bounds.size.height, px(height), "{id}");
         }
         let input = window.find("appearance-opacity").bounds();
         let default = window.find("appearance-opacity-default").bounds();
-        assert!(input.size.width > px(80.));
-        assert!(input.right() <= default.origin.x);
+        assert!(input.size.width > px(crate::ui::COMPACT_CONTROL));
+        assert!(default.right() <= window.find("appearance-opacity-stepper").bounds().left());
         window.hover("appearance-opacity-default", cx);
         window.render_frame(cx);
         window.click("appearance-opacity-default", cx);
@@ -354,10 +353,9 @@ fn compact_settings_actions_render_and_persist_without_save(cx: &mut TestAppCont
     assert_eq!(read(), Preferences::default());
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
-        window.click("settings-close", cx);
+        assert!(window.try_find("settings-close").is_none());
     })
-    .expect("close action");
-    assert!(closed.get());
+    .expect("no duplicate close action");
 }
 
 #[gpui_kit::test]

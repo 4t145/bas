@@ -105,18 +105,28 @@ fn turn_shortcuts_stay_together_and_jump_to_grouped_rows(cx: &mut TestAppContext
     cx.update_window(fixture.window.into(), |_, window, cx| {
         let targets = add_turns(&fixture, 3, window, cx);
         assert_ne!(targets.user_items[1], targets.user_rows[1]);
+        fixture
+            .view
+            .read(cx)
+            .selected
+            .timeline
+            .list
+            .set_follow_mode(FollowMode::Tail);
         window.render_frame(cx);
 
-        let timeline = window.find("conversation-timeline").bounds();
         let body = window.find("thread-body").bounds();
         let rail = window.find("turn-navigation");
         assert!(rail.visible());
         let rail = rail.bounds();
         assert_eq!(
             rail.left(),
-            timeline.right() + px(chat::THREAD_BODY_PADDING)
+            window.find("timeline-navigation-anchor").bounds().right()
         );
-        assert_eq!(rail.right(), body.right());
+        assert!(rail.right() <= body.right());
+        assert_eq!(
+            window.find("timeline-scrollbar").bounds().right(),
+            body.right()
+        );
         assert_eq!(rail.size.width, px(24.));
         let mut prompt_centers = Vec::new();
         for index in 0..targets.item_count {
@@ -402,6 +412,94 @@ fn keyboard_pages_and_turns_navigate_without_editing_the_composer(cx: &mut TestA
     })
     .expect("keyboard timeline navigation");
     assert!(fixture.commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
+fn turn_navigation_tracks_browsing_and_stays_beside_wide_content(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        let targets = add_turns(&fixture, 4, window, cx);
+        window.resize(size(px(1800.), px(850.)));
+        window.bounds_changed(cx);
+        fixture
+            .view
+            .update(cx, |view, cx| view.focus_input(window, cx));
+        window.render_frame(cx);
+        let anchor = window.find("timeline-navigation-anchor").bounds();
+        assert_eq!(anchor.size.width, px(chat::CONTENT_WIDTH));
+        assert_eq!(
+            window.find("turn-navigation").bounds().left(),
+            anchor.right()
+        );
+        assert!(window.find("timeline-scrollbar").bounds().left() > anchor.right() + px(24.));
+        window.press("ctrl-home", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window
+                .find(format!("turn-marker-line-{}", targets.user_items[0]))
+                .bounds()
+                .size
+                .width,
+            px(20.)
+        );
+        window.press("ctrl-pagedown", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window
+                .find(format!("turn-marker-line-{}", targets.user_items[0]))
+                .bounds()
+                .size
+                .width,
+            px(14.)
+        );
+        assert_eq!(
+            window
+                .find(format!("turn-marker-line-{}", targets.user_items[1]))
+                .bounds()
+                .size
+                .width,
+            px(20.)
+        );
+        window.press("ctrl-end", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window
+                .find(format!("turn-marker-line-{}", targets.user_items[1]))
+                .bounds()
+                .size
+                .width,
+            px(14.)
+        );
+        window.press("ctrl-home", cx);
+        window.scroll(
+            "conversation-timeline",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-600.))),
+            cx,
+        );
+        let list = &fixture.view.read(cx).selected.timeline.list;
+        let top = list.logical_scroll_top().item_ix;
+        assert!(
+            top > targets.user_rows[0],
+            "the overlay must not block wheel scrolling"
+        );
+        assert!(!list.is_following_tail());
+        let active = targets
+            .user_rows
+            .iter()
+            .rposition(|row| *row <= top)
+            .expect("visible turn");
+        assert_eq!(
+            window
+                .find(format!("turn-marker-line-{}", targets.user_items[active]))
+                .bounds()
+                .size
+                .width,
+            px(20.),
+            "wheel scrolling updates the highlighted turn",
+        );
+    })
+    .expect("content-local navigation");
 }
 
 #[gpui_kit::test]

@@ -11,6 +11,28 @@ pub(super) use bas::config::appearance::ComposerEnterBehavior as Mode;
 
 actions!(bas, [SendComposer, ExpandMessageEditor]);
 
+fn text_menu(
+    menu: gpui_kit::component::native_menu::NativeMenu,
+    editable: bool,
+    copyable: bool,
+    cx: &App,
+) -> gpui_kit::component::native_menu::NativeMenu {
+    use gpui_kit::base::input::{Copy, Cut, Paste, SelectAll};
+    menu.menu_with_disabled(
+        crate::i18n::tr!("edit-cut"),
+        !(editable && copyable),
+        Box::new(Cut),
+    )
+    .menu_with_disabled(crate::i18n::tr!("edit-copy"), !copyable, Box::new(Copy))
+    .menu_with_disabled(
+        crate::i18n::tr!("edit-paste"),
+        !(editable && cx.read_from_clipboard().is_some()),
+        Box::new(Paste),
+    )
+    .separator()
+    .menu(crate::i18n::tr!("edit-select-all"), Box::new(SelectAll))
+}
+
 pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new(

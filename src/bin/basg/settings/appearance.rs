@@ -1,5 +1,6 @@
 //! Appearance owns its form and persistence; the settings shell owns navigation.
 
+mod controls;
 mod form;
 use crate::theme::{self, preferences::Preferences};
 use form::{DraftError, Form};
@@ -80,17 +81,16 @@ enum Field {
     ComposerEnter,
 }
 impl Field {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 12] = [
         Self::Language,
         Self::Source,
         Self::Mode,
         Self::Background,
         Self::ThemeFile,
         Self::UiFont,
+        Self::ContentSize,
         Self::MonoFont,
         Self::Fallbacks,
-        Self::UiSize,
-        Self::ContentSize,
         Self::LineHeight,
         Self::Opacity,
         Self::ComposerEnter,
@@ -139,7 +139,8 @@ impl Field {
             Self::UiFont => crate::i18n::tr!("appearance-ui-font-help"),
             Self::MonoFont => crate::i18n::tr!("appearance-mono-font-help"),
             Self::Fallbacks => crate::i18n::tr!("appearance-fallbacks-help"),
-            Self::UiSize | Self::ContentSize => crate::i18n::tr!("appearance-size-help"),
+            Self::UiSize => crate::i18n::tr!("appearance-size-help"),
+            Self::ContentSize => crate::i18n::tr!("appearance-content-size-help"),
             Self::LineHeight => crate::i18n::tr!("appearance-line-height-help"),
             Self::Opacity => crate::i18n::tr!("appearance-opacity-help"),
             Self::ComposerEnter => {
@@ -158,6 +159,9 @@ impl Field {
         }
     }
     fn matches(self, query: &str) -> bool {
+        if matches!(self, Self::UiFont) && Self::UiSize.matches(query) {
+            return true;
+        }
         format!(
             "{} {} {} {}",
             crate::i18n::tr!("settings-appearance"),
@@ -376,7 +380,7 @@ impl AppearancePage {
         }
     }
 
-    fn control(&self, field: Field, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    fn control(&self, field: Field) -> gpui_kit::AnyElement {
         match field {
             Field::Language => gds_uim::el! {
                 #div { id: $field.id(); test_support; } [
@@ -429,49 +433,15 @@ impl AppearancePage {
                     _ => unreachable!("select fields handled above"),
                 }
                 .clone();
-                let control = gds_uim::el! { Input($&input) { small; } };
-                let reset = gds_uim::el! {
-                    $super::action_button(format!("{}-default", field.id())) {
-                        label: $crate::i18n::tr!("action-reset");
-                        on_click: $cx.listener(move |this, _, window, cx| {
-                            this.reset_input(&input, window, cx);
-                        });
-                    }
-                };
                 gds_uim::el! {
-                    #div { flex; items_center; gap_2; } [
-                        #div { id: $field.id(); test_support; flex_1; min_w_0; } [
-                            $control
-                        ],
-                        $reset,
+                    #div { id: $field.id(); test_support; w_full; min_w_0; } [
+                        Input($&input) { small; disabled: $self.document.is_none(); },
                     ]
                 }
                 .into_any_element()
             }
         }
     }
-    fn row(&self, field: Field, last: bool, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        gds_uim::el! {
-            #div {
-                id: $format!("{}-row", field.id()); test_support;
-                flex; flex_shrink_0; items_center; justify_between; gap_3; py_3;
-                @$(!last) => { border_b_1; border_color: $cx.theme().border; };
-            } [
-                #div { flex_1; min_w_0; flex; flex_col; gap_1; } [
-                    #div {
-                        id: $format!("{}-label", field.id()); test_support;
-                    } [ $field.label() ],
-                    #div {
-                        text_size: $crate::ui::SMALL;
-                        text_color: $cx.theme().muted_foreground;
-                    } [ $field.help() ],
-                ],
-                #div { w: $px(250.); flex_shrink_0; } [ $self.control(field, cx) ],
-            ]
-        }
-        .into_any_element()
-    }
-
     fn group_card(
         &self,
         group: Group,
@@ -499,16 +469,6 @@ impl AppearancePage {
                 ],
             ]
         }.into_any_element()
-    }
-
-    fn reset_input(
-        &mut self,
-        input: &gpui_kit::Entity<InputState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        input.update(cx, |input, cx| input.set_value("", window, cx));
-        self.flush_pending(window, cx);
     }
 
     fn on_reset_all(
@@ -543,6 +503,7 @@ impl Render for AppearancePage {
         if self.reload {
             self.refresh(window, cx);
         }
+        self.sync_numeric_placeholders(window, cx);
         let sections = self.sections();
         if let Some(index) = self.scroll_to.take() {
             self.scroll

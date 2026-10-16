@@ -184,10 +184,16 @@ fn full_body_uses_shared_padding_for_initialization_history_and_composer(cx: &mu
                 } else {
                     "agent-initialization-messages"
                 };
+                let expected_width = if started {
+                    right - left
+                } else {
+                    px(chat::CONTENT_WIDTH).min(right - left)
+                };
+                let expected_left = (left + right - expected_width) / 2.;
                 for id in [region, message_id.as_str()] {
                     let bounds = window.find(id.to_owned()).bounds();
-                    assert_eq!(bounds.left(), left, "left edge of {id}");
-                    assert_eq!(bounds.right(), right, "right edge of {id}");
+                    assert_eq!(bounds.left(), expected_left, "left edge of {id}");
+                    assert_eq!(bounds.size.width, expected_width, "width of {id}");
                 }
                 let content = window
                     .find(format!("message-content-{message_id}"))

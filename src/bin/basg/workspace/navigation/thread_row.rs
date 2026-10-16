@@ -257,7 +257,7 @@ impl Workspace {
         let owner = cx.entity().downgrade();
         self.open_context_menu(
             position,
-            if state == RowStatus::Unread { 6 } else { 5 },
+            (if state == RowStatus::Unread { 6 } else { 5 }) - usize::from(draft),
             std::rc::Rc::new(move |menu, window, _| {
                 let parent = window.window_handle();
                 let pin_owner = owner.clone();
@@ -334,20 +334,21 @@ impl Workspace {
                         ),
                     )
                 })
-                .separator()
-                .item(
-                    shortcuts::menu_item(
-                        crate::i18n::tr!("session-delete"),
-                        Some(Box::new(shortcuts::DeleteThread)),
+                .when(!draft, |menu| {
+                    menu.separator().item(
+                        shortcuts::menu_item(
+                            crate::i18n::tr!("session-delete"),
+                            Some(Box::new(shortcuts::DeleteThread)),
+                        )
+                        .disabled(disabled)
+                        .on_click(move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |window, cx| {
+                                let _ = delete_owner
+                                    .update(cx, |this, cx| this.request_delete(id, window, cx));
+                            });
+                        }),
                     )
-                    .disabled(disabled)
-                    .on_click(move |_, window, cx| {
-                        menus::in_parent(parent, window, cx, |window, cx| {
-                            let _ = delete_owner
-                                .update(cx, |this, cx| this.request_delete(id, window, cx));
-                        });
-                    }),
-                )
+                })
             }),
             window,
             cx,

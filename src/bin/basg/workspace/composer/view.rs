@@ -228,6 +228,8 @@ impl Workspace {
     ) -> AnyElement {
         // Trim the component's measured blank inset while retaining native editing and overlays.
         let inset = -(self.composer.content_left.get() - px(COMPOSER_TEXT_INSET)).max(px(0.));
+        let copyable = self.composer.input.read(cx).is_copyable();
+        let editable = !(composition_locked || self.composer.paste_pending);
         let editor = gds_uim::el! {
             Editor($&self.composer.input) {
                 w_auto; flex_1; min_w_0;
@@ -238,6 +240,7 @@ impl Workspace {
                 appearance: false;
                 bordered: false;
                 readonly: $(composition_locked || self.composer.paste_pending);
+                context_menu: $move |menu, _, cx| super::text_menu(menu, editable, copyable, cx);
                 aria_label: $crate::i18n::tr!("composer-message");
                 @fills_thread => { h_full; };
                 @$(!fills_thread) => { h: $px(self.composer_height(cx)); };

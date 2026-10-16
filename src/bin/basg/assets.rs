@@ -34,6 +34,9 @@ gpui_kit::assets::icon_assets!(
     ExtraIcons,
     [
         RefreshCw,
+        ArrowLeft,
+        RotateCcw,
+        Minus,
         Pencil,
         Trash,
         Square,

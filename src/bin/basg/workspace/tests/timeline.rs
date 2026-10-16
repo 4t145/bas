@@ -754,7 +754,11 @@ fn user_message_cards_share_edges_and_clear_the_navigation_rail_in_both_modes(
             assert_eq!(first.left(), last.left());
             assert_eq!(first.right(), last.right());
             assert_eq!(first.left() - body.left(), px(chat::THREAD_BODY_PADDING));
-            assert_eq!(rail.left() - first.right(), px(chat::THREAD_BODY_PADDING));
+            assert_eq!(
+                rail.left(),
+                first.right(),
+                "turn navigation sits at the content edge"
+            );
         })
         .expect("consistent message gutters");
     }

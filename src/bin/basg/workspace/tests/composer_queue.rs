@@ -1,6 +1,102 @@
 use super::*;
 
 #[gpui_kit::test]
+fn composer_context_menu_contains_only_working_text_actions(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.composer.input.update(cx, |input, cx| {
+                input.set_value("copy this", window, cx);
+                input.set_selected_range(0..9, cx);
+                input.focus(window, cx);
+            });
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            fixture
+                .view
+                .read(cx)
+                .composer
+                .input
+                .read(cx)
+                .selected_range(),
+            0..9
+        );
+        use gpui_kit::InputEvent;
+        let position = fixture
+            .view
+            .read(cx)
+            .composer
+            .input
+            .read(cx)
+            .range_to_bounds(&(0..9))
+            .expect("selected text")
+            .center();
+        window.simulate_mouse_move(position, cx);
+        window.dispatch_event(
+            gpui_kit::MouseDownEvent {
+                button: gpui_kit::MouseButton::Right,
+                position,
+                modifiers: Default::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        window.dispatch_event(
+            gpui_kit::MouseUpEvent {
+                button: gpui_kit::MouseButton::Right,
+                position,
+                modifiers: Default::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        assert_eq!(
+            fixture
+                .view
+                .read(cx)
+                .composer
+                .input
+                .read(cx)
+                .selected_range(),
+            0..9
+        );
+    })
+    .expect("composer right-click");
+    cx.run_until_parked();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        for (index, label) in ["edit-cut", "edit-copy", "edit-paste"].iter().enumerate() {
+            let expected = match *label {
+                "edit-cut" => crate::i18n::tr!("edit-cut"),
+                "edit-copy" => crate::i18n::tr!("edit-copy"),
+                _ => crate::i18n::tr!("edit-paste"),
+            };
+            assert_eq!(
+                window.within("popup-menu").find(index).label(),
+                Some(expected)
+            );
+        }
+        window.within("popup-menu").click(1usize, cx);
+    })
+    .expect("copy action");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("copy this")
+        )
+    });
+}
+
+#[gpui_kit::test]
 fn new_workspace_uses_the_persisted_enter_behavior(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {

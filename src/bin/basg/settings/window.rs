@@ -2,7 +2,7 @@
 
 use gds_uim::el;
 use gpui_kit::{
-    App, AppContext, Bounds, ClickEvent, Context, Entity, Focusable, Global, Render, Subscription,
+    App, AppContext, Bounds, ClickEvent, Context, Entity, Focusable, Global, Render,
     TestSupportExt, WeakEntity, Window, WindowBounds, WindowDecorations, WindowHandle, WindowKind,
     WindowOptions, actions,
     component::{ActiveTheme, Root},
@@ -12,10 +12,7 @@ use gpui_kit::{
 };
 
 use crate::ui::window_controls::TitleBar;
-use crate::{
-    settings::{Close, Settings},
-    theme,
-};
+use crate::{settings::Settings, theme};
 
 const WIDTH: f32 = 960.;
 const HEIGHT: f32 = 720.;
@@ -122,7 +119,6 @@ pub(crate) fn flush_pending(cx: &mut App) {
 
 struct Host {
     settings: Entity<Settings>,
-    _close: Subscription,
 }
 
 impl Host {
@@ -133,29 +129,15 @@ impl Host {
             let _ = weak.update(cx, |settings, cx| settings.flush_pending(window, cx));
             true
         });
-        let close = cx.subscribe_in(&settings, window, Self::on_settings_close);
         settings.read(cx).focus_handle(cx).focus(window, cx);
         window.activate_window();
-        Self {
-            settings,
-            _close: close,
-        }
+        Self { settings }
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings
             .update(cx, |settings, cx| settings.flush_pending(window, cx));
         window.remove_window();
-    }
-
-    fn on_settings_close(
-        &mut self,
-        _: &Entity<Settings>,
-        _: &Close,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.close(window, cx);
     }
 
     fn on_close_action(&mut self, _: &CloseWindow, window: &mut Window, cx: &mut Context<Self>) {

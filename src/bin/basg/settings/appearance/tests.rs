@@ -86,12 +86,202 @@ fn language_selection_saves_and_updates_existing_controls(cx: &mut TestAppContex
             assert_eq!(crate::i18n::language(), language);
             assert_eq!(form.language.entity_id(), select.entity_id());
             assert_eq!(
-                form.ui_size.read(cx).presentation().placeholder().as_ref(),
+                form.fallbacks
+                    .read(cx)
+                    .presentation()
+                    .placeholder()
+                    .as_ref(),
                 placeholder
             );
         })
         .expect("language applies without replacing the controls");
     }
+}
+
+#[gpui_kit::test]
+fn font_controls_step_from_effective_values_and_reset_only_their_overrides(
+    cx: &mut TestAppContext,
+) {
+    let fixture = fixture(
+        cx,
+        Preferences {
+            mono_font_family: Some("Fixture Mono".into()),
+            ..builtin()
+        },
+    );
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |page, cx| {
+            page.scroll_to = Some(Group::Fonts.index());
+            cx.notify();
+        });
+        window.render_frame(cx);
+        let initial = f32::from(cx.theme().font_size);
+        assert!(window.try_find("appearance-ui-font-default").is_none());
+        assert!(window.try_find("appearance-ui-size-row").is_none());
+        assert_eq!(
+            fixture
+                .view
+                .read(cx)
+                .form
+                .ui_size
+                .read(cx)
+                .presentation()
+                .placeholder()
+                .as_ref(),
+            initial.to_string()
+        );
+        window.click("appearance-ui-size-increase", cx);
+        assert_eq!(read(&fixture).ui_font_size, Some(initial + 1.));
+        window.render_frame(cx);
+        window.click("appearance-ui-size-decrease", cx);
+        assert_eq!(read(&fixture).ui_font_size, Some(initial));
+        window.click("appearance-ui-font-default", cx);
+        assert_eq!(read(&fixture).ui_font_size, None);
+        assert_eq!(
+            read(&fixture).mono_font_family.as_deref(),
+            Some("Fixture Mono")
+        );
+        window.render_frame(cx);
+        assert!(window.try_find("appearance-ui-font-default").is_none());
+        window.click("appearance-mono-font-default", cx);
+        assert_eq!(read(&fixture).mono_font_family, None);
+        let content = f32::from(theme::content_font_size(cx));
+        window.click("appearance-content-size-increase", cx);
+        assert_eq!(read(&fixture).content_font_size, Some(content + 1.));
+        window.render_frame(cx);
+        window.click("appearance-content-size-default", cx);
+        assert_eq!(read(&fixture).content_font_size, None);
+        assert_eq!(read(&fixture).theme_source, ThemeSource::Builtin);
+    })
+    .expect("font controls persist and inherit");
+}
+
+#[gpui_kit::test]
+fn font_steppers_preserve_invalid_edits_and_fit_narrow_settings(cx: &mut TestAppContext) {
+    let fixture = fixture(cx, builtin());
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |page, cx| {
+            page.scroll_to = Some(Group::Fonts.index());
+            page.form
+                .content_size
+                .update(cx, |input, cx| input.set_value("invalid", window, cx));
+            cx.notify();
+        });
+        window.resize(size(px(480.), px(720.)));
+        window.bounds_changed(cx);
+        window.render_frame(cx);
+        window.click("appearance-content-size-increase", cx);
+        assert_eq!(
+            fixture.view.read(cx).form.content_size.read(cx).value(),
+            "invalid"
+        );
+        assert_eq!(read(&fixture).content_font_size, None);
+        for id in [
+            "appearance-ui-size-stepper",
+            "appearance-content-size-stepper",
+        ] {
+            let bounds = window.find(id).bounds();
+            assert!(bounds.left() >= px(0.) && bounds.right() <= px(480.));
+        }
+        window.click("appearance-content-size-default", cx);
+        assert!(
+            fixture
+                .view
+                .read(cx)
+                .form
+                .content_size
+                .read(cx)
+                .value()
+                .is_empty()
+        );
+    })
+    .expect("safe font stepper boundaries");
+}
+
+#[gpui_kit::test]
+fn layout_numbers_share_stepping_inheritance_and_boundary_rules(cx: &mut TestAppContext) {
+    let fixture = fixture(cx, builtin());
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |page, cx| {
+            page.scroll_to = Some(Group::Layout.index());
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("appearance-line-height-default").is_none());
+        assert!(window.try_find("appearance-opacity-default").is_none());
+        assert_eq!(
+            fixture
+                .view
+                .read(cx)
+                .form
+                .line_height
+                .read(cx)
+                .presentation()
+                .placeholder()
+                .as_ref(),
+            "1.6"
+        );
+        window.click("appearance-line-height-increase", cx);
+        assert_eq!(read(&fixture).content_line_height, Some(1.7));
+        window.click("appearance-line-height-decrease", cx);
+        assert_eq!(read(&fixture).content_line_height, Some(1.6));
+        window.click("appearance-line-height-default", cx);
+        assert_eq!(read(&fixture).content_line_height, None);
+        for (value, action, expected) in [
+            ("0.98", "appearance-opacity-increase", 1.),
+            ("1", "appearance-opacity-increase", 1.),
+            ("0.02", "appearance-opacity-decrease", 0.),
+            ("0", "appearance-opacity-decrease", 0.),
+        ] {
+            fixture.view.update(cx, |page, cx| {
+                page.form
+                    .opacity
+                    .update(cx, |input, cx| input.set_value(value, window, cx));
+                page.flush_pending(window, cx);
+            });
+            window.render_frame(cx);
+            window.click(action, cx);
+            assert_eq!(read(&fixture).content_opacity, Some(expected));
+        }
+        window.click("appearance-opacity-default", cx);
+        window.render_frame(cx);
+        assert_eq!(read(&fixture).content_opacity, None);
+        assert!(window.try_find("appearance-opacity-default").is_none());
+    })
+    .expect("numeric controls in layout settings");
+}
+
+#[gpui_kit::test]
+fn text_overrides_have_contextual_reset_icons_without_changing_other_fields(
+    cx: &mut TestAppContext,
+) {
+    let fixture = fixture(
+        cx,
+        Preferences {
+            font_fallbacks: Some(vec![]),
+            content_line_height: Some(1.8),
+            ..builtin()
+        },
+    );
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |page, cx| {
+            page.scroll_to = Some(Group::Fonts.index());
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("appearance-theme-file-default").is_none());
+        let reset = window.find("appearance-fallbacks-default").bounds();
+        let input = window.find("appearance-fallbacks").bounds();
+        assert_eq!(reset.size.width, px(crate::ui::COMPACT_CONTROL));
+        assert!(reset.right() <= input.left());
+        assert_eq!(fixture.view.read(cx).form.fallbacks.read(cx).value(), "[]");
+        window.click("appearance-fallbacks-default", cx);
+        window.render_frame(cx);
+        assert_eq!(read(&fixture).font_fallbacks, None);
+        assert_eq!(read(&fixture).content_line_height, Some(1.8));
+        assert!(window.try_find("appearance-fallbacks-default").is_none());
+    })
+    .expect("text override reset");
 }
 
 #[gpui_kit::test]
@@ -196,7 +386,7 @@ fn font_default_can_be_chosen_with_the_real_searchable_dropdown(cx: &mut TestApp
     cx.executor().run_until_parked();
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
-        window.input("自动", cx);
+        window.input(crate::i18n::tr!("appearance-font-default"), cx);
     })
     .expect("search font dropdown");
     cx.executor().run_until_parked();

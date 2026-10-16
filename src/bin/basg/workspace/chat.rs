@@ -144,7 +144,7 @@ impl Workspace {
             .filter(|state| !state.rows.is_empty())?;
         Some(
             gds_uim::el! {
-                #div {
+                #content_panel() {
                     id: "agent-initialization-messages";
                     test_support;
                     flex_shrink_0;
@@ -248,7 +248,26 @@ impl Workspace {
                 $list(self.selected.timeline.list.clone(), move |index, _, cx| {
                     view.update(cx, |this, cx| this.render_item(index, cx))
                 }) { size_full; },
-                $self.render_turn_navigation(cx),
+                #div {
+                    absolute; inset_0;
+                    @$self.window.compact => {
+                        pl: THREAD_BODY_PADDING.px;
+                        pr: $(turn_navigation::RAIL_WIDTH + THREAD_BODY_PADDING).px;
+                    };
+                } [
+                    #content_panel() {
+                        id: "timeline-navigation-anchor"; test_support; relative; h_full;
+                    } [$self.render_turn_navigation(cx)],
+                ],
+                #div {
+                    id: "timeline-scrollbar"; test_support;
+                    absolute; top_0; bottom_0; w: THREAD_BODY_PADDING.px;
+                    right: $(if self.window.compact { 0. } else { -turn_navigation::RAIL_WIDTH - THREAD_BODY_PADDING }).px;
+                } [
+                    $gpui_kit::base::Scrollbar::vertical(&self.selected.timeline.list)
+                        .viewport_from_layout()
+                        .mode(gpui_kit::base::ScrollbarMode::Always),
+                ],
             ]
         }
         .into_any_element()

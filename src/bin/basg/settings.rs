@@ -5,8 +5,8 @@ use std::collections::HashSet;
 use crate::ui::Button;
 use gds_uim::el;
 use gpui_kit::{
-    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Subscription,
-    TestSupportExt, Window,
+    App, ClickEvent, Context, Entity, FocusHandle, Focusable, Render, Subscription, TestSupportExt,
+    Window,
     component::{button::*, input::*, *},
     div,
     prelude::*,
@@ -48,8 +48,6 @@ fn navigation_button(
         ]
     }
 }
-
-pub(crate) struct Close;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Category {
@@ -177,10 +175,6 @@ impl Settings {
         });
         self.agents.update(cx, |page, cx| page.localize(window, cx));
         cx.notify();
-    }
-
-    fn on_close(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(Close);
     }
 
     fn toggle_category(&mut self, category: Category, cx: &mut Context<Self>) {
@@ -457,7 +451,6 @@ impl Settings {
     }
 }
 
-impl EventEmitter<Close> for Settings {}
 impl Focusable for Settings {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -526,10 +519,6 @@ impl Render for Settings {
                             Category::Agents => crate::i18n::tr!("settings-agents-footer"),
                         }),
                     ],
-                    #action_button("settings-close") {
-                        label: $crate::i18n::tr!("settings-close");
-                        on_click: $cx.listener(Self::on_close);
-                    },
                 ],
                 #div {
                     flex_1;

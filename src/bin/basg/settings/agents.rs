@@ -895,6 +895,15 @@ impl Agents {
         .into_any_element()
     }
 
+    fn back_button(&self, cx: &mut Context<Self>) -> crate::ui::Button {
+        item::action(
+            "agents-cancel",
+            gpui_kit::assets::IconName::ArrowLeft,
+            crate::i18n::tr!("agent-back"),
+        )
+        .on_click(cx.listener(Self::on_cancel_edit))
+    }
+
     fn form_content(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let embedded = self
             .editor
@@ -902,7 +911,14 @@ impl Agents {
             .is_some_and(|spec| spec.kind == Kind::Embedded);
         let connected = self.draft_connected(cx);
         let actions = gds_uim::el! {
-            #div { flex; flex_wrap; gap_2; } [
+            #div { id: "agents-form-actions"; test_support; w_full; flex; items_center; gap_2; } [
+                ..$self.editor.selected().is_some().then(|| gds_uim::el! {
+                    #item::action("agents-delete", $gpui_kit::assets::IconName::Trash, $crate::i18n::tr!("agent-mark-remove")) {
+                        disabled: $self.editor.deleting();
+                        on_click: $cx.listener(Self::on_mark_delete);
+                    }
+                }),
+                #div { flex_1; },
                 $button("agents-save") {
                     disabled: $(!self.registry.editable() || self.document.is_none());
                     label: $(if self.editor.deleting() {
@@ -914,19 +930,13 @@ impl Agents {
                     });
                     on_click: $cx.listener(Self::on_save);
                 },
-                $button("agents-cancel") {
-                    label: $crate::i18n::tr!("action-cancel-edit");
-                    on_click: $cx.listener(Self::on_cancel_edit);
-                },
-                $button("agents-delete") {
-                    label: $crate::i18n::tr!("agent-mark-remove");
-                    disabled: $(self.editor.selected().is_none() || self.editor.deleting());
-                    on_click: $cx.listener(Self::on_mark_delete);
-                },
             ]
         };
         gds_uim::el! {
             #div { flex; flex_col; gap_4; } [
+                ..$self.editor.selected().is_some().then(|| gds_uim::el! {
+                    #div { flex; items_start; } [$self.back_button(cx)]
+                }),
                 ..$bool::then(!embedded && !connected, || gds_uim::el! {
                     #div {
                         id: "agents-connection-help"; test_support;
@@ -1035,8 +1045,11 @@ impl Agents {
         }
         let header = if page == Page::Onboarding && drafting {
             gds_uim::el! {
-                #div { text_size: $crate::ui::HEADING; } [
-                    $crate::i18n::tr!("agent-add-custom")
+                #div { flex; items_center; gap_2; } [
+                    $self.back_button(cx),
+                    #div { text_size: $crate::ui::HEADING; } [
+                        $crate::i18n::tr!("agent-add-custom")
+                    ],
                 ]
             }
             .into_any_element()

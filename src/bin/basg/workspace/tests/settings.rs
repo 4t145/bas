@@ -35,19 +35,13 @@ fn language_updates_open_windows_and_preserves_draft_selection_and_focus(cx: &mu
     })
     .expect("prepare draft and open settings");
     let settings = settings_window(cx);
-    for (language, search, composer, close) in [
+    for (language, search, composer) in [
         (
             Language::English,
             "Search conversations…",
             "Describe your task…",
-            "Close settings",
         ),
-        (
-            Language::Chinese,
-            "搜索会话…",
-            "描述你想完成的任务…",
-            "关闭设置",
-        ),
+        (Language::Chinese, "搜索会话…", "描述你想完成的任务…"),
     ] {
         cx.update_window(settings.into(), |_, window, cx| {
             let editor = theme::Editor::current(cx);
@@ -88,7 +82,7 @@ fn language_updates_open_windows_and_preserves_draft_selection_and_focus(cx: &mu
         .expect("workspace localizes without disturbing the draft or taking focus");
         cx.update_window(settings.into(), |_, window, cx| {
             window.render_frame(cx);
-            assert_eq!(window.find("settings-close").label(), Some(close));
+            assert!(window.try_find("settings-close").is_none());
             assert!(window.is_window_active());
         })
         .expect("existing settings window localizes and keeps focus");

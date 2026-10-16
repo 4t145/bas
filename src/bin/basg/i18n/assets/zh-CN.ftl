@@ -4,6 +4,18 @@
 
 ## Shared actions
 
+appearance-font-default = 默认
+appearance-value-decrease = 减小{ $field }
+appearance-value-increase = 增大{ $field }
+appearance-reset-field = 重置{ $field }
+appearance-content-size-help = 用于会话、Markdown 正文和代码。正文沿用界面字体。
+
+edit-cut = 剪切
+edit-copy = 复制
+edit-paste = 粘贴
+edit-select-all = 全选
+agent-back = 返回 · 放弃编辑
+
 action-cancel = 取消
 action-cancel-edit = 取消编辑
 action-close = 关闭
@@ -56,7 +68,7 @@ appearance-background = 窗口背景
 appearance-background-help = 模糊效果取决于系统支持。
 appearance-blurred = 模糊
 appearance-builtin = 内置
-appearance-content-size = 正文字号
+appearance-content-size = 内容字号
 appearance-current-theme = 当前主题：{ $theme }
 appearance-dark = 深色
 appearance-desktop = 跟随桌面

@@ -332,7 +332,7 @@ impl SelectItem for FontChoice {
     type Value = Self;
     fn title(&self) -> gpui_kit::SharedString {
         match self {
-            Self::Default => crate::i18n::tr!("appearance-inherit").into(),
+            Self::Default => crate::i18n::tr!("appearance-font-default").into(),
             Self::Named(name) => name.clone().into(),
         }
     }

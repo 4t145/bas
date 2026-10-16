@@ -980,6 +980,35 @@ fn rows_workspace_right_click_and_more_menu_toggle_the_same_group(cx: &mut TestA
 }
 
 #[gpui_kit::test]
+fn draft_context_menu_has_only_one_destructive_action(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let draft = session();
+    attach(&fixture, draft.clone(), cx);
+    cx.update(|cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.sessions.unstarted.insert(draft.id);
+            cx.notify();
+        })
+    });
+    let menu = open_row_menu(&fixture, draft.id, cx);
+    cx.update_window(menu, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(crate::i18n::tr!("draft-discard")).visible());
+        assert!(
+            window
+                .try_find(crate::i18n::tr!("session-delete"))
+                .is_none()
+        );
+        assert!(
+            window
+                .try_find(crate::i18n::tr!("session-archive"))
+                .is_none()
+        );
+    })
+    .expect("one draft removal entry");
+}
+
+#[gpui_kit::test]
 fn rows_context_pin_and_rename_target_without_selecting_on_open(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let target = session();

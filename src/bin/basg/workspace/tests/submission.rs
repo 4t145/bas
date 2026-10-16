@@ -411,6 +411,59 @@ fn unknown_actions_preserve_payload_attachments_and_new_edits_until_background_a
 }
 
 #[gpui_kit::test]
+fn accepted_image_message_resets_names_but_rejected_message_keeps_references(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = fixture(cx);
+    let mut meta = session();
+    meta.initialization = Some(
+        acp::InitializeResponse::new(agent_client_protocol::schema::ProtocolVersion::V1)
+            .agent_capabilities(
+                acp::AgentCapabilities::new()
+                    .prompt_capabilities(acp::PromptCapabilities::new().image(true)),
+            ),
+    );
+    attach(&fixture, meta.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    let image = gpui_kit::Image::from_bytes(
+        gpui_kit::ImageFormat::Png,
+        include_bytes!("../images/assets/sample.png").to_vec(),
+    );
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.add_attachments(
+                meta.id,
+                vec![
+                    Attachment::image(&image).expect("first image"),
+                    Attachment::image(&image).expect("second image"),
+                ],
+                window,
+                cx,
+            );
+            let original = view.composer.attachments.clone();
+            assert_ne!(original[0].mention, original[1].mention);
+            view.send_prompt(window, cx);
+            let first = payload(fixture.commands.try_recv().expect("send images"));
+            view.update(rejected(meta.id, &first, "retry"), window, cx);
+            assert_eq!(view.composer.attachments[1].mention, original[1].mention);
+            view.send_prompt(window, cx);
+            let retry = payload(fixture.commands.try_recv().expect("retry images"));
+            view.update(accepted(meta.id, &retry), window, cx);
+            assert!(view.composer.attachments.is_empty());
+            view.add_attachments(
+                meta.id,
+                vec![Attachment::image(&image).expect("next message image")],
+                window,
+                cx,
+            );
+            assert_eq!(view.composer.attachments[0].label, original[0].label);
+            assert_eq!(view.composer.attachments.len(), 1);
+        });
+    })
+    .expect("message-scoped attachment labels");
+}
+
+#[gpui_kit::test]
 fn acceptance_clears_only_unchanged_compositions_in_current_and_background_sessions(
     cx: &mut TestAppContext,
 ) {

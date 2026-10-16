@@ -4,6 +4,18 @@
 
 ## Shared actions
 
+appearance-font-default = Default
+appearance-value-decrease = Decrease { $field }
+appearance-value-increase = Increase { $field }
+appearance-reset-field = Reset { $field }
+appearance-content-size-help = Used for conversations, rendered Markdown and code. Prose uses the UI font.
+
+edit-cut = Cut
+edit-copy = Copy
+edit-paste = Paste
+edit-select-all = Select all
+agent-back = Back · Discard edits
+
 action-cancel = Cancel
 action-cancel-edit = Cancel editing
 action-close = Close
@@ -56,7 +68,7 @@ appearance-background = Window background
 appearance-background-help = Blur depends on system support.
 appearance-blurred = Blurred
 appearance-builtin = Built-in
-appearance-content-size = Message font size
+appearance-content-size = Content font size
 appearance-current-theme = Current theme: { $theme }
 appearance-dark = Dark
 appearance-desktop = Follow desktop

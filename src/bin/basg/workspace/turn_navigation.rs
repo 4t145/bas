@@ -89,15 +89,22 @@ impl Workspace {
             return gds_uim::el! { #div }.into_any_element();
         };
         let prompts = self.turn_targets();
+        let list = &self.selected.timeline.list;
+        let at_end = list.is_following_tail() || list.is_scrolled_to_end().unwrap_or(false);
+        let top = list.logical_scroll_top().item_ix;
+        let active = (!at_end)
+            .then(|| {
+                prompts
+                    .iter()
+                    .rfind(|target| target.row <= top)
+                    .map(|target| target.item_index)
+            })
+            .flatten();
         let session = conversation.session.id;
         let rail = gds_uim::el! { #div {
             id: "turn-navigation"; test_support; absolute;
             top: 0.0.px; bottom: 0.0.px;
-            right: $px(if self.window.compact {
-                0.
-            } else {
-                -RAIL_WIDTH - chat::THREAD_BODY_PADDING
-            });
+            right: $px(-RAIL_WIDTH);
             flex; flex_col; justify_center; py_1; w: RAIL_WIDTH.px; flex_shrink_0;
         } };
         let mut markers = gds_uim::el! { #div {
@@ -109,6 +116,7 @@ impl Workspace {
 
         for target in prompts {
             let item_index = target.item_index;
+            let selected = active == Some(item_index);
             let marker_id = SharedString::from(format!("turn-marker-{item_index}"));
             let group = marker_id.clone();
             let prompt: SharedString = target.preview.into();
@@ -116,8 +124,9 @@ impl Workspace {
                 #div { size_full; flex; items_center; justify_center; } [
                     #div {
                         id: $SharedString::from(format!("turn-marker-line-{item_index}"));
-                        test_support; w: TICK_WIDTH.px; h: 2.0.px; rounded_full;
-                        bg: $cx.theme().muted_foreground.opacity(0.7);
+                        test_support; w: $(if selected { HOVER_TICK_WIDTH } else { TICK_WIDTH }).px;
+                        h: 2.0.px; rounded_full;
+                        bg: $(if selected { cx.theme().primary } else { cx.theme().muted_foreground.opacity(0.7) });
                         group_hover: $group.clone(), $gds_uim::m! {
                             w: HOVER_TICK_WIDTH.px; h: 3.0.px; bg: $cx.theme().primary;
                         };
@@ -145,7 +154,7 @@ impl Workspace {
                 #div {
                     id: "turn-marker-line-end"; test_support;
                     w: END_TICK_WIDTH.px; h: 3.0.px; rounded_full;
-                    bg: $cx.theme().primary.opacity(0.85);
+                    bg: $(if at_end { cx.theme().primary } else { cx.theme().muted_foreground.opacity(0.7) });
                     group_hover: $group.clone(), $gds_uim::m! {
                         w: HOVER_TICK_WIDTH.px; h: 4.0.px; bg: $cx.theme().primary;
                     };
