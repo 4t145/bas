@@ -4,7 +4,16 @@ use super::{ContentBlock, MessageId, Timestamp};
 
 /// Who produced a message.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, strum::Display, strum::EnumString,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
 )]
 #[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]

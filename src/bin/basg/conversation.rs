@@ -49,6 +49,13 @@ pub(super) struct Conversation {
     turn_start: usize,
     next_notice: u64,
     interruption_message: Option<String>,
+    message_ids: HashMap<(Role, acp::MessageId), usize>,
+    legacy_message: Option<usize>,
+}
+
+struct ChunkChange {
+    item: usize,
+    changed: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -86,6 +93,8 @@ impl Conversation {
             turn_start: 0,
             next_notice: 0,
             interruption_message: None,
+            message_ids: HashMap::new(),
+            legacy_message: None,
         }
     }
 
@@ -144,18 +153,18 @@ impl Conversation {
         match event.kind {
             EventKind::Acp(update) => match update {
                 acp::SessionUpdate::UserMessageChunk(chunk) => {
-                    self.chunk(Role::User, chunk.content, event.at)
+                    Some(self.chunk(Role::User, chunk, event.at).changed)
                 }
                 acp::SessionUpdate::AgentMessageChunk(chunk) => {
-                    let changed = self.chunk(Role::Agent, chunk.content, event.at);
+                    let change = self.chunk(Role::Agent, chunk, event.at);
                     self.last_reply = Some(ReplyPosition {
-                        index: self.items.len() - 1,
+                        index: change.item,
                         cursor: self.cursor,
                     });
-                    changed
+                    Some(change.changed)
                 }
                 acp::SessionUpdate::AgentThoughtChunk(chunk) => {
-                    self.chunk(Role::Thought, chunk.content, event.at)
+                    Some(self.chunk(Role::Thought, chunk, event.at).changed)
                 }
                 acp::SessionUpdate::ToolCall(tool) => {
                     terminal::apply(&mut self.terminals, tool.meta.as_ref());
@@ -244,13 +253,35 @@ impl Conversation {
         }
     }
 
-    fn chunk(&mut self, role: Role, content: ContentBlock, at: Timestamp) -> Option<usize> {
-        if let Some(Item::Message {
-            message,
-            streaming: true,
-        }) = self.items.last_mut()
-            && message.role == role
+    fn chunk(&mut self, role: Role, chunk: acp::ContentChunk, at: Timestamp) -> ChunkChange {
+        // ACP identity is scoped by message type and session. ID-less peers retain
+        // adjacency-based grouping, but cannot append to an identified message.
+        let key = chunk.message_id.map(|id| (role, id));
+        let existing = match &key {
+            Some(key) => self.message_ids.get(key).copied(),
+            None => self.legacy_message.filter(|&index| {
+                index + 1 == self.items.len()
+                    && matches!(&self.items[index], Item::Message { message, streaming: true } if message.role == role)
+            }),
+        };
+        let sealed = if existing.is_some_and(|index| {
+            matches!(
+                &self.items[index],
+                Item::Message {
+                    streaming: true,
+                    ..
+                }
+            )
+        }) {
+            None
+        } else {
+            self.seal()
+        };
+        let content = chunk.content;
+        if let Some(index) = existing
+            && let Item::Message { message, streaming } = &mut self.items[index]
         {
+            *streaming = true;
             match (message.content.last_mut(), &content) {
                 (Some(ContentBlock::Text(old)), ContentBlock::Text(new))
                     if old.annotations == new.annotations && old.meta == new.meta =>
@@ -259,16 +290,27 @@ impl Conversation {
                 }
                 _ => message.content.push(content),
             }
-            return Some(self.items.len() - 1);
+            return ChunkChange {
+                item: index,
+                changed: sealed.map_or(index, |sealed| sealed.min(index)),
+            };
         }
-        let changed = self.seal();
+        let index = self.items.len();
         let mut message = Message::new(role, vec![content]);
         message.at = at;
         self.items.push(Item::Message {
             message,
             streaming: true,
         });
-        changed.or(Some(self.items.len() - 1))
+        if let Some(key) = key {
+            self.message_ids.insert(key, index);
+        } else {
+            self.legacy_message = Some(index);
+        }
+        ChunkChange {
+            item: index,
+            changed: sealed.unwrap_or(index),
+        }
     }
 
     fn seal(&mut self) -> Option<usize> {
