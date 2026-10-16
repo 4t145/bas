@@ -11,6 +11,8 @@ use super::{Completion, Session, SessionError};
 use crate::agent::{self, Catalog, Host, Kind, LaunchRequest};
 use crate::storage::{self, ResumeData, Storage};
 
+mod history;
+
 pub const DEFAULT_HISTORY: usize = 4096;
 pub const DEFAULT_BUFFER: usize = 1024;
 pub const DEFAULT_STARTUP_TIMEOUT: u64 = 30;
@@ -75,6 +77,7 @@ pub struct Registry {
     stopping: CancellationToken,
     completions: Option<mpsc::Sender<Completion>>,
     storage: Option<Arc<dyn Storage>>,
+    history_gate: tokio::sync::Mutex<()>,
 }
 
 /// A failed or cancelled launch has never returned its id to a client.
@@ -138,6 +141,7 @@ impl Registry {
             stopping: CancellationToken::new(),
             completions: None,
             storage: None,
+            history_gate: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -169,6 +173,11 @@ impl Registry {
                 Some(Arc::clone(storage)),
                 !running,
             );
+            if let Some(stored) = storage.load(session.id()).await?
+                && let Some(resume) = stored.resume
+            {
+                session.remember_backend_id(resume.acp_session_id()?.to_owned());
+            }
             if let Err(error) = session.recover().await {
                 tracing::error!(session = %session.id(), %error, "could not commit session recovery");
             }
@@ -239,13 +248,17 @@ impl Registry {
         tokio::select! {
             biased;
             () = self.stopping.cancelled() => Err(CreateError::Stopping),
-            result = tokio::time::timeout(self.limits.startup_timeout, self.launch(request)) => {
+            result = tokio::time::timeout(self.limits.startup_timeout, self.launch(request, None)) => {
                 result.map_err(|_| CreateError::Timeout)?
             }
         }
     }
 
-    async fn launch(&self, request: CreateRequest) -> Result<Arc<Session>, CreateError> {
+    async fn launch(
+        &self,
+        request: CreateRequest,
+        backend_session_id: Option<String>,
+    ) -> Result<Arc<Session>, CreateError> {
         // Resolve both the specification and driver from one generation.
         let catalog = self.catalog();
         let spec = catalog
@@ -256,9 +269,18 @@ impl Registry {
             Some(cwd) => cwd,
             None => std::env::current_dir().map_err(CreateError::Cwd)?,
         };
-        let cwd = tokio::fs::canonicalize(cwd)
-            .await
-            .map_err(CreateError::Cwd)?;
+        let cwd = if backend_session_id.is_some() {
+            if !cwd.is_absolute() {
+                return Err(CreateError::NotResumable(
+                    "import requires an absolute Agent workspace",
+                ));
+            }
+            cwd
+        } else {
+            tokio::fs::canonicalize(cwd)
+                .await
+                .map_err(CreateError::Cwd)?
+        };
         bas::service::utf8_cwd(&cwd).map_err(|error| {
             CreateError::Cwd(std::io::Error::new(std::io::ErrorKind::InvalidInput, error))
         })?;
@@ -287,15 +309,29 @@ impl Registry {
         let (updates, inbox) = mpsc::channel(self.limits.live_capacity.get());
         // Drain initialization updates too, so protocol startup cannot deadlock on a full queue.
         session.listen(inbox);
-        let mut agent = catalog
-            .launch(LaunchRequest {
-                session: id,
-                spec,
-                cwd,
-                host: Arc::clone(&self.host),
-                updates,
-            })
-            .await?;
+        let launch = LaunchRequest {
+            session: id,
+            spec,
+            cwd,
+            host: Arc::clone(&self.host),
+            updates: updates.clone(),
+        };
+        let mut agent = if let Some(backend_id) = backend_session_id {
+            let agent = catalog.restore(launch, backend_id).await?;
+            // An import has no existing transcript: retain the Agent's load replay.
+            // Drain it before publishing the ready snapshot or returning the ID.
+            let (ack, drained) = tokio::sync::oneshot::channel();
+            updates
+                .send(agent::Update::Barrier(ack))
+                .await
+                .map_err(|_| CreateError::NotResumable("import listener closed during replay"))?;
+            drained
+                .await
+                .map_err(|_| CreateError::NotResumable("import listener closed during replay"))?;
+            agent
+        } else {
+            catalog.launch(launch).await?
+        };
         if let Some(storage) = &self.storage
             && let Err(error) = storage
                 .save_resume(id, agent.acp_session_id().map(ResumeData::acp))

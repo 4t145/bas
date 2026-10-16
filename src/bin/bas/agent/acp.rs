@@ -22,6 +22,7 @@ use super::{
 
 mod authentication;
 mod convert;
+pub mod history;
 mod probe;
 pub use authentication::{authenticate_expected, interactive as authenticate_interactive};
 pub(crate) use probe::AuthenticationError;
@@ -151,6 +152,8 @@ impl Driver {
             cancel: CancellationToken::new(),
             cancel_request: Arc::new(std::sync::Mutex::new(None)),
             cancellation_grace: request.spec.cancellation_grace,
+            closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            close_attempted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }))
     }
 }
@@ -426,6 +429,8 @@ struct Session {
     cancel: CancellationToken,
     cancel_request: Arc<std::sync::Mutex<Option<v1::CancelNotification>>>,
     cancellation_grace: Duration,
+    closed: Arc<std::sync::atomic::AtomicBool>,
+    close_attempted: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[async_trait]
@@ -586,7 +591,57 @@ impl AgentTrait for Session {
         Ok(())
     }
 
+    fn close_session(&self) -> BoxFuture<'static, Result<(), Error>> {
+        let supported = self
+            .initialized
+            .agent_capabilities
+            .session_capabilities
+            .close
+            .is_some();
+        let agent = self.agent.clone();
+        let connection = self.connection.clone();
+        let session = self.acp_session.clone();
+        let closed = Arc::clone(&self.closed);
+        let attempted = Arc::clone(&self.close_attempted);
+        let deadline = self.cancellation_grace;
+        Box::pin(async move {
+            if closed.load(std::sync::atomic::Ordering::Acquire) {
+                return Ok(());
+            }
+            if !supported {
+                return Err(Error::Unsupported {
+                    agent,
+                    operation: "session/close",
+                });
+            }
+            attempted.store(true, std::sync::atomic::Ordering::Release);
+            tokio::time::timeout(
+                deadline,
+                connection
+                    .send_request(v1::CloseSessionRequest::new(session))
+                    .block_task(),
+            )
+            .await
+            .map_err(|_| Error::backend(agent, "ACP session/close timed out"))??;
+            closed.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        })
+    }
+
     async fn shutdown(&mut self) {
+        if self
+            .initialized
+            .agent_capabilities
+            .session_capabilities
+            .close
+            .is_some()
+            && !self
+                .close_attempted
+                .load(std::sync::atomic::Ordering::Acquire)
+            && let Err(error) = self.close_session().await
+        {
+            tracing::warn!(%error, "ACP close failed; releasing the owned process");
+        }
         let tasks: Vec<_> = [self.turn_task.take(), self.connection_task.take()]
             .into_iter()
             .flatten()

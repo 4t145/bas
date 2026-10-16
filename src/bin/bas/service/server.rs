@@ -464,6 +464,94 @@ impl Bas for Service {
         }))
     }
 
+    async fn list_agent_sessions(
+        &self,
+        request: Request<pb::ListAgentSessionsRequest>,
+    ) -> Result<Response<pb::ListAgentSessionsResponse>, Status> {
+        let request = request.into_inner();
+        let cwd = request.cwd.map(PathBuf::from);
+        if cwd.as_ref().is_some_and(|cwd| !cwd.is_absolute()) {
+            return Err(Status::invalid_argument(
+                "Agent history cwd must be absolute",
+            ));
+        }
+        let agent: bas::model::AgentId = request.agent.into();
+        let listing = self
+            .registry
+            .list_agent_sessions(agent.clone(), cwd)
+            .await?;
+        Ok(Response::new(pb::ListAgentSessionsResponse {
+            sessions: Some((&listing.sessions).into()),
+            initialization: Some((&listing.initialization).into()),
+            imported_sessions: self.registry.imported_sessions(&agent).await,
+        }))
+    }
+
+    async fn import_agent_session(
+        &self,
+        request: Request<pb::ImportAgentSessionRequest>,
+    ) -> Result<Response<pb::CreateSessionResponse>, Status> {
+        let request = request.into_inner();
+        let info: acp::SessionInfo = request
+            .session_info
+            .ok_or_else(|| Status::invalid_argument("Agent SessionInfo is required"))?
+            .decode()
+            .map_err(metadata_error)?;
+        if !info.cwd.is_absolute() {
+            return Err(Status::invalid_argument("Agent workspace must be absolute"));
+        }
+        if !info.additional_directories.is_empty() {
+            return Err(Status::failed_precondition(
+                "Importing additional workspace roots is not supported yet",
+            ));
+        }
+        let session = self
+            .registry
+            .import_agent_session(
+                CreateRequest {
+                    agent: request.agent.into(),
+                    owner: Owner::current(),
+                    cwd: Some(info.cwd),
+                    title: info.title,
+                },
+                info.session_id.to_string(),
+            )
+            .await?;
+        Ok(Response::new(pb::CreateSessionResponse {
+            session: Some(pb::Session::try_from(&session.snapshot()).map_err(metadata_error)?),
+        }))
+    }
+
+    async fn delete_agent_session(
+        &self,
+        request: Request<pb::DeleteAgentSessionRequest>,
+    ) -> Result<Response<pb::DeleteSessionResponse>, Status> {
+        let request = request.into_inner();
+        if request.session_id.is_empty() {
+            return Err(Status::invalid_argument("Agent session ID is required"));
+        }
+        self.registry
+            .delete_agent_session(request.agent.into(), request.session_id)
+            .await?;
+        Ok(Response::new(pb::DeleteSessionResponse {}))
+    }
+
+    async fn close_session(
+        &self,
+        request: Request<pb::GetSessionRequest>,
+    ) -> Result<Response<pb::GetSessionResponse>, Status> {
+        let session = self.session(&request.into_inner().session).await?;
+        if session.meta().status != bas::model::SessionStatus::Stopped {
+            self.registry.ensure_restored(&session).await?;
+            session.close_backend().await?;
+            self.registry.permissions().close(session.id());
+            self.registry.elicitations().close(session.id());
+        }
+        Ok(Response::new(pb::GetSessionResponse {
+            session: Some(pb::Session::try_from(&session.snapshot()).map_err(metadata_error)?),
+        }))
+    }
+
     async fn list_sessions(
         &self,
         request: Request<pb::ListSessionsRequest>,

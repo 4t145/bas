@@ -55,6 +55,7 @@ pub struct Session {
     transaction: tokio::sync::Mutex<()>,
     updates_task: Mutex<Option<AbortOnDropHandle<()>>>,
     pub(super) restore_gate: Arc<tokio::sync::Mutex<()>>,
+    pub(super) backend_id: std::sync::OnceLock<String>,
 }
 
 /// A connected foreground viewer; it never retains or stops the backend.
@@ -87,6 +88,7 @@ struct State {
     acceptances: HashMap<TurnId, storage::PromptAcceptance>,
     restored: bool,
     deleted: bool,
+    closing: bool,
 }
 
 impl Session {
@@ -128,11 +130,17 @@ impl Session {
                 acceptances: HashMap::new(),
                 restored,
                 deleted: false,
+                closing: false,
             }),
             transaction: tokio::sync::Mutex::new(()),
             updates_task: Mutex::new(None),
             restore_gate: Arc::new(tokio::sync::Mutex::new(())),
+            backend_id: std::sync::OnceLock::new(),
         })
+    }
+
+    pub(super) fn remember_backend_id(&self, id: String) {
+        let _ = self.backend_id.set(id);
     }
 
     pub(super) fn is_restored(&self) -> bool {
@@ -224,6 +232,9 @@ impl Session {
                 (meta, updates)
             };
             session.publish_with_meta_locked(updates, &mut meta).await?;
+            if let Some(id) = agent.acp_session_id() {
+                session.remember_backend_id(id);
+            }
             let mut state = session.lock();
             state.agent = Some(agent);
             state.restored = true;
@@ -417,6 +428,9 @@ impl Session {
                     &mut meta,
                 )
                 .await?;
+            if let Some(id) = agent.acp_session_id() {
+                session.remember_backend_id(id);
+            }
             let mut state = session.lock();
             state.startup_config = None;
             state.startup_mode = None;
@@ -674,6 +688,38 @@ impl Session {
                     .publish_locked([EventKind::TitleChanged { title }])
                     .await?;
             }
+            Ok(())
+        })
+        .await
+    }
+
+    /// # Errors
+    /// Keeps the session intact if standard closure is unsupported or rejected.
+    /// Transport failures release the uncertain runtime, without claiming remote success.
+    /// Success preserves Bas history but stops this runtime.
+    pub async fn close_backend(self: &Arc<Self>) -> Result<(), SessionError> {
+        self.owned(|session| async move {
+            let _restore = session.restore_gate.lock().await;
+            let close = {
+                let _transaction = session.transaction.lock().await;
+                let mut state = session.lock();
+                if state.meta.status == SessionStatus::Stopped {
+                    return Ok(());
+                }
+                state.require_ready()?;
+                state.closing = true;
+                state.agent.as_ref().expect("ready agent").close_session()
+            };
+            // Do not hold the commit lock while the Agent flushes final updates.
+            let result = close.await;
+            if let Err(error) = result {
+                session.lock().closing = false;
+                if matches!(error, agent::Error::Backend { .. }) {
+                    session.shutdown_owned().await;
+                }
+                return Err(error.into());
+            }
+            session.shutdown_owned().await;
             Ok(())
         })
         .await
@@ -996,6 +1042,7 @@ impl State {
     fn require_ready(&self) -> Result<(), SessionError> {
         self.check_health()?;
         if self.deleted
+            || self.closing
             || !self.restored
             || self.agent.is_none()
             || !matches!(

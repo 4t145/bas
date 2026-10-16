@@ -370,6 +370,8 @@ acp_payload!(
     serde_json::Value,
     crate::acp::Error,
     crate::acp::InitializeResponse,
+    crate::acp::ListSessionsResponse,
+    crate::acp::SessionInfo,
     crate::acp::NewSessionResponse,
     crate::acp::AvailableCommandsUpdate,
     crate::acp::PromptRequest,

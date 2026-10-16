@@ -172,6 +172,17 @@ pub trait Agent: Send {
     /// Returns an error if cancellation cannot be sent to the backend.
     fn cancel(&mut self, request: acp::CancelNotification) -> Result<(), Error>;
 
+    /// # Errors
+    /// Returns Unsupported unless the backend advertises standard session closure.
+    fn close_session(&self) -> BoxFuture<'static, Result<(), Error>> {
+        Box::pin(async {
+            Err(Error::Unsupported {
+                agent: "backend".into(),
+                operation: "session/close",
+            })
+        })
+    }
+
     /// Stops and joins all backend tasks. Dropping this future must also stop them.
     async fn shutdown(&mut self);
 }

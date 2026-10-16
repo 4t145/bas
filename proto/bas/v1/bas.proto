@@ -25,6 +25,14 @@ service Bas {
   rpc AuthenticateAgentInteractive(stream AuthenticationInput) returns (stream AuthenticationEvent);
   // Starts a session on a backend.
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  // Discovers Agent-owned history; follows all ACP pagination on one connection.
+  rpc ListAgentSessions(ListAgentSessionsRequest) returns (ListAgentSessionsResponse);
+  // Imports an Agent session by loading/replaying it, never by creating a replacement.
+  rpc ImportAgentSession(ImportAgentSessionRequest) returns (CreateSessionResponse);
+  // Deletes Agent history only. Imported sessions must first be explicitly closed.
+  rpc DeleteAgentSession(DeleteAgentSessionRequest) returns (DeleteSessionResponse);
+  // Standard ACP close, retaining the local transcript as a stopped session.
+  rpc CloseSession(GetSessionRequest) returns (GetSessionResponse);
   // Lists non-archived sessions by default.
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   // Reads one session's metadata.
@@ -75,6 +83,28 @@ message Agent {
 }
 
 message ListAgentsRequest {}
+
+message ListAgentSessionsRequest {
+  string agent = 1;
+  optional string cwd = 2;
+}
+message ListAgentSessionsResponse {
+  // ACP ListSessionsResponse with all pages combined and no retained ACP cursor.
+  AcpPayload sessions = 1;
+  AcpPayload initialization = 2;
+  // Agent session ID -> public Bas session ID. No import is implicit in discovery.
+  map<string, string> imported_sessions = 3;
+}
+message ImportAgentSessionRequest {
+  string agent = 1;
+  // ACP SessionInfo from discovery. cwd is preserved, including symlink spelling.
+  AcpPayload session_info = 2;
+}
+message DeleteAgentSessionRequest {
+  string agent = 1;
+  // The Agent's opaque identifier, not a Bas UUID.
+  string session_id = 2;
+}
 
 message ListAgentCatalogRequest { bool refresh = 1; }
 message ListAgentCatalogResponse {

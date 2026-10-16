@@ -20,6 +20,8 @@ mod elicitation;
 #[cfg(unix)]
 mod fixture;
 #[cfg(unix)]
+mod history;
+#[cfg(unix)]
 mod permissions;
 
 #[cfg(unix)]

@@ -95,6 +95,30 @@ struct Service {
 
 #[tonic::async_trait]
 impl Bas for Service {
+    async fn list_agent_sessions(
+        &self,
+        _: Request<pb::ListAgentSessionsRequest>,
+    ) -> Result<Response<pb::ListAgentSessionsResponse>, Status> {
+        Err(Status::unimplemented("unrelated history"))
+    }
+    async fn import_agent_session(
+        &self,
+        _: Request<pb::ImportAgentSessionRequest>,
+    ) -> Result<Response<pb::CreateSessionResponse>, Status> {
+        Err(Status::unimplemented("unrelated history"))
+    }
+    async fn delete_agent_session(
+        &self,
+        _: Request<pb::DeleteAgentSessionRequest>,
+    ) -> Result<Response<pb::DeleteSessionResponse>, Status> {
+        Err(Status::unimplemented("unrelated history"))
+    }
+    async fn close_session(
+        &self,
+        _: Request<pb::GetSessionRequest>,
+    ) -> Result<Response<pb::GetSessionResponse>, Status> {
+        Err(Status::unimplemented("unrelated history"))
+    }
     type AuthenticateAgentInteractiveStream =
         Pin<Box<dyn Stream<Item = Result<pb::AuthenticationEvent, Status>> + Send>>;
     type WatchElicitationsStream =
