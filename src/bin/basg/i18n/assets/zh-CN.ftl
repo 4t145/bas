@@ -43,6 +43,33 @@ action-submit = 提交
 action-update = 更新
 action-user-message = 返回本轮消息
 
+## Agent history
+
+agent-history-title = Agent 历史会话
+agent-history-agent-filter = ACP Agent ID
+agent-history-all-agents = 全部 Agent
+agent-history-workspace-filter = 主工作区
+agent-history-all-workspaces = 全部主工作区
+agent-history-no-agents = 没有已配置的 ACP Agent。
+agent-history-imported = 会话已导入。可以在 Bas 主窗口查看。
+agent-history-operating = 正在处理会话操作…
+agent-history-unavailable = 会话历史网络服务尚未就绪，请重新打开窗口。
+agent-history-back = 返回对话
+agent-history-refresh = 刷新
+agent-history-search = 搜索标题、目录或会话 ID
+agent-history-empty = 没有匹配的 Agent 历史会话。
+agent-history-help = 读取 Agent 自己保存的历史，不会自动导入或发送消息。仅支持 resume 的 Agent 只能续接上下文，不能回放旧消息。
+agent-history-open = 查看 Bas 记录
+agent-history-import = 导入并打开
+agent-history-resume = 续接（无历史回放）
+agent-history-cannot-import = Agent 只支持列出会话，未声明加载或恢复能力。
+agent-history-roots-unsupported = 此会话包含额外工作根；当前不能无损导入。
+agent-history-delete = 删除 Agent 历史
+agent-history-delete-help = 仅删除 Agent 端历史；已导入的会话须先关闭，Bas 本地记录保留。
+agent-history-delete-confirm = 从 Agent 历史中删除“{ $title }”？此操作不删除 Bas 本地记录，不会自动重试。
+agent-session-close = 关闭 Agent 会话
+agent-session-close-confirm = 结束此会话的运行任务并释放 Agent 资源？Bas 中的会话和历史将保留为已停止状态。
+
 ## Application
 
 app-about = 关于 BasG
@@ -576,10 +603,11 @@ option-choose = 选择{ $name }
 option-disable = 关闭{ $name }
 option-enable = 开启{ $name }
 sidebar-toggle = 切换会话列表 · Ctrl+B
-time-days = { $count } 天
-time-hours = { $count } 小时
+time-days = { $count } 天前
+time-hours = { $count } 小时前
 time-just-now = 刚刚
-time-minutes = { $count } 分钟
+time-minutes = { $count } 分钟前
+time-unknown = 时间未知
 time-minutes-ago = 约 { $count } 分钟前
 time-settings-open = 打开设置时
 usage-accessibility = 上下文用量 { $summary } · 查看详情

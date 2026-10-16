@@ -2,6 +2,7 @@ use bas::model::Timestamp;
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::spinner::Spinner;
 
+use crate::ui::time::recent_time;
 use crate::workspace::*;
 
 const STATUS_SIZE: f32 = 12.;
@@ -10,23 +11,6 @@ const STOPPED_WIDTH: f32 = 8.;
 const STOPPED_HEIGHT: f32 = 1.;
 pub(super) const ACTIONS_WIDTH: f32 = layout::ICON_BUTTON_SIZE * 2.;
 pub(super) const ACTIONS_GAP: f32 = 4.;
-const MINUTE_MILLIS: u64 = 60 * 1_000;
-const HOUR_MILLIS: u64 = 60 * MINUTE_MILLIS;
-const DAY_MILLIS: u64 = 24 * HOUR_MILLIS;
-
-pub(super) fn recent_time(updated_at: Timestamp, now: Timestamp) -> String {
-    let elapsed = now.millis().saturating_sub(updated_at.millis());
-    if elapsed < MINUTE_MILLIS {
-        crate::i18n::tr!("time-just-now").into()
-    } else if elapsed < HOUR_MILLIS {
-        crate::i18n::tr!("time-minutes", count = elapsed / MINUTE_MILLIS)
-    } else if elapsed < DAY_MILLIS {
-        crate::i18n::tr!("time-hours", count = elapsed / HOUR_MILLIS)
-    } else {
-        crate::i18n::tr!("time-days", count = elapsed / DAY_MILLIS)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowStatus {
     Starting,
@@ -254,10 +238,19 @@ impl Workspace {
             self.sessions.seen_replies.get(&id).copied().unwrap_or(0),
             self.selected.id == Some(id) && self.has_unread_reply(),
         );
+        let can_close = session
+            .initialization
+            .as_ref()
+            .is_some_and(|init| init.agent_capabilities.session_capabilities.close.is_some())
+            && !matches!(
+                session.status,
+                SessionStatus::Stopped | SessionStatus::Failed
+            );
         let owner = cx.entity().downgrade();
         self.open_context_menu(
             position,
-            (if state == RowStatus::Unread { 6 } else { 5 }) - usize::from(draft),
+            (if state == RowStatus::Unread { 6 } else { 5 }) - usize::from(draft)
+                + usize::from(can_close),
             std::rc::Rc::new(move |menu, window, _| {
                 let parent = window.window_handle();
                 let pin_owner = owner.clone();
@@ -265,6 +258,7 @@ impl Workspace {
                 let archive_owner = owner.clone();
                 let delete_owner = owner.clone();
                 let read_owner = owner.clone();
+                let close_owner = owner.clone();
                 menu.item(
                     shortcuts::menu_item(
                         if pinned {
@@ -332,6 +326,19 @@ impl Workspace {
                                 });
                             },
                         ),
+                    )
+                })
+                .when(can_close, |menu| {
+                    menu.item(
+                        PopupMenuItem::new(crate::i18n::tr!("agent-session-close"))
+                            .disabled(disabled)
+                            .on_click(move |_, window, cx| {
+                                menus::in_parent(parent, window, cx, |_, cx| {
+                                    let _ = close_owner.update(cx, |this, cx| {
+                                        this.request_close_agent_session(id, cx);
+                                    });
+                                });
+                            }),
                     )
                 })
                 .when(!draft, |menu| {

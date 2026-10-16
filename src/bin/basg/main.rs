@@ -11,6 +11,7 @@ mod configuration;
 mod connection;
 mod conversation;
 mod elicitation;
+mod history;
 mod http;
 mod i18n;
 mod settings;
@@ -93,6 +94,7 @@ fn main() -> Result<()> {
             application::init(cx);
             workspace::bind_keys(cx);
             settings::window::bind_keys(cx);
+            history::window::bind_keys(cx);
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();

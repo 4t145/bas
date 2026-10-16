@@ -67,6 +67,10 @@ impl Service {
         self.server
     }
 
+    pub(crate) fn runtime(&self) -> &Handle {
+        &self.runtime
+    }
+
     pub(crate) fn local(&self) -> bool {
         self.server.ip().is_loopback()
     }

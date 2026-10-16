@@ -67,6 +67,7 @@ gpui_kit::assets::icon_assets!(
         FilePen,
         Globe,
         ListTodo,
+        ListClock,
         Circle,
         Clock,
         X

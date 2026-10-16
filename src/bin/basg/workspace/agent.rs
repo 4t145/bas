@@ -51,7 +51,7 @@ impl Workspace {
         } else {
             self.menu_button(
                 button,
-                agents.len() + 2,
+                agents.len() + 3,
                 false,
                 move |menu, _, _| {
                     let mut menu = menu.check_side(Side::Right);
@@ -90,7 +90,19 @@ impl Workspace {
                         );
                     }
                     let view = view.clone();
-                    menu.separator().item(
+                    let history_owner = view.clone();
+                    let history_agent = selected.clone();
+                    menu.separator()
+                    .item(PopupMenuItem::new(crate::i18n::tr!("agent-history-title"))
+                        .icon(IconName::ListClock)
+                        .on_click(move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |window, cx| {
+                                let _ = history_owner.update(cx, |this, cx| {
+                                    this.open_agent_history(history_agent.clone(), window, cx);
+                                });
+                            });
+                        }))
+                    .item(
                         PopupMenuItem::element(|_, _| {
                             gds_uim::el! { #div {
                                 id: "agent-menu-install-label"; test_support; role: gpui_kit::Role::Label;

@@ -13,12 +13,16 @@ impl Workspace {
             | Update::Renamed { session, .. }
             | Update::Archived { session, .. }
             | Update::Deleted { session, .. }
+            | Update::ClosedSession { session, .. }
             | Update::Submission { session, .. }
             | Update::TrackingFailed { session, .. }
             | Update::Cancelled { session, .. } => Some(*session),
             // Creation must still settle its pending attempt; catalogs filter each entry.
             // Session watch messages without an ID are invalidated by selection's epoch.
             Update::Created { .. }
+            | Update::AgentHistory { .. }
+            | Update::ImportedHistory { .. }
+            | Update::DeletedAgentHistory { .. }
             | Update::Catalog(_)
             | Update::AuthenticationRequired { .. }
             | Update::Stream { .. }
@@ -34,6 +38,13 @@ impl Workspace {
             self.sessions.runtimes.observe(session, false);
         }
         match update {
+            // History discovery and mutations belong to the independent history window.
+            Update::AgentHistory { .. }
+            | Update::ImportedHistory { .. }
+            | Update::DeletedAgentHistory { .. } => {}
+            Update::ClosedSession { session, result } => {
+                self.agent_session_closed(session, result, cx)
+            }
             Update::Elicitations {
                 epoch,
                 pending,

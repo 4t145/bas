@@ -3,6 +3,7 @@
 
 mod button;
 pub(crate) mod input_geometry;
+pub(crate) mod time;
 pub(crate) mod tooltip;
 pub(crate) mod window_controls;
 pub(crate) use button::Button;

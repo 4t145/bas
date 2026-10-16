@@ -226,6 +226,7 @@ pub(super) struct PendingOperations {
     pub(super) cancelling: HashSet<SessionId>,
     pub(super) archiving: HashSet<SessionId>,
     pub(super) deleting: HashSet<SessionId>,
+    pub(super) closing: HashSet<SessionId>,
     pub(super) loading_attachments: HashSet<SessionId>,
 }
 
@@ -235,6 +236,7 @@ impl PendingOperations {
         self.cancelling.remove(&id);
         self.archiving.remove(&id);
         self.deleting.remove(&id);
+        self.closing.remove(&id);
         self.loading_attachments.remove(&id);
     }
 }

@@ -22,6 +22,16 @@ impl Workspace {
                 #div {
                     id: "application-menu-slot"; test_support; flex_1; min_w_0; flex; items_center;
                 } [$self.application_button(cx)],
+                #layout::icon_button("agent-history-open", IconName::ListClock) {
+                    accessibility_label: $crate::i18n::tr!("agent-history-title");
+                    tooltip: $crate::i18n::tr!("agent-history-title");
+                    disabled: $!self.backend.connected;
+                    on_click: $cx.listener(|this, _, window, cx| {
+                        let agent = this.current().map(|meta| meta.agent.to_string())
+                            .unwrap_or_else(|| this.selected.agent.clone());
+                        this.open_agent_history(agent, window, cx);
+                    });
+                },
                 #layout::icon_button("add-workspace-button", IconName::FolderPlus) {
                     accessibility_label: $crate::i18n::tr!("workspace-add");
                     hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("workspace-add"), shortcuts::AddWorkspace);

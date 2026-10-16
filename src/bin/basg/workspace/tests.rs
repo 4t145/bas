@@ -16,6 +16,7 @@ mod composer_geometry;
 mod composer_queue;
 mod config;
 mod elicitation;
+mod history;
 mod interruption;
 mod message_actions;
 mod navigation;

@@ -15,6 +15,10 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | gRPC 接口或字段 | ACP 类型 / Bas 职责 |
 | --- | --- |
 | ListAgents、CreateSession、ListSessions、GetSession、DeleteSession | 后端选择、进程与会话生命周期 |
+| ListAgentSessions | 在单条 ACP 连接上调用 `session/list` 并读完分页；返回原生 `ListSessionsResponse`、初始化能力和已导入 ID 映射，不创建会话 |
+| ImportAgentSession | 接收 Agent 原生 `SessionInfo`，加载／恢复指定会话，保存 Bas UUID 与 Agent ID 映射；不调用 `session/new` |
+| CloseSession | 能力协商后调用 `session/close`，保留 Bas 历史为已停止记录 |
+| DeleteAgentSession | 能力协商后调用 `session/delete`，只删除 Agent 历史；已导入活跃会话须先关闭 |
 | ListAgentCatalog | `bas::management::Catalog` JSON，包含 Registry 和已配置后端 |
 | InstallAgent | 可取消的安装进度流，最终返回已保存的 `AgentSpec` |
 | RemoveAgent | 移除托管注册，保留原生凭据与版本目录 |
@@ -76,6 +80,26 @@ let options = client.set_config_option_acp(
 配置和模式请求的 ACP 错误保留在 gRPC status details 中，Rust 客户端可用
 `bas::service::acp_error` 解码原始 code、message、data。
 设置响应和通知由后端有序提交；调用者取消等待不会撤销已经执行的设置或丢失其状态更新。
+
+### Agent 历史与导入
+
+`ListAgentSessions` 可按绝对 `cwd` 过滤；所有 ACP 页在同一连接中读取，
+不把不透明游标保存到 Bas。重复游标返回错误，超过 10,000 条时要求按 workspace 过滤，
+整个发现过程受 daemon 启动超时限制。GUI 独立历史窗口按 ACP Agent ID 分组，
+将所选主工作区的完整 `cwd` 传入此 RPC，并在结果上继续本地搜索和校验主目录。
+全部 Agent 模式最多同时执行两个发现请求；切换筛选时隔离旧响应，不无限启动 Agent 进程。
+
+`ImportAgentSession` 使用 Agent 原始 session ID 与工作目录，并为 Bas 分配公开 UUID。
+同一 Agent／原始 ID 的导入串行去重，已有记录不会重复加载。
+首次 `session/load` 回放保存到 Bas，响应前排空有界更新队列；后续恢复 Bas 已有会话时仍丢弃重复回放。
+只有 resume 能力时恢复上下文但不伪造历史；load／resume 都不支持则失败，不创建替代会话。
+当前拒绝包含额外工作根的 `SessionInfo`，以免无声改变执行上下文。
+
+`CloseSession` 保留本地记录并将运行实例置为 Stopped；当前没有重新打开该实例的 RPC。
+Agent 拒绝关闭时保留原实例，传输超时则释放不确定的本地实例并返回失败。
+进程清理也会在支持时尽力发送一次标准 close，但不把清理失败视为远端成功。
+`DeleteAgentSession` 与原有本地 `DeleteSession` 分开，前者不删除本地历史，
+后者不调用 Agent 历史删除。关闭／删除均保留原生 ACP 错误，不自动重试修改请求。
 
 ### 连接检测与待认证状态
 

@@ -535,14 +535,9 @@ impl Agents {
             .checks
             .get(&spec.id)
             .filter(|check| check.spec == *spec);
-        let age = check.and_then(|check| check.completed_at).map(|at| {
-            let seconds = at.elapsed().as_secs();
-            if seconds < 60 {
-                crate::i18n::tr!("time-just-now").into()
-            } else {
-                crate::i18n::tr!("time-minutes-ago", count = seconds / 60)
-            }
-        });
+        let age = check
+            .and_then(|check| check.completed_at)
+            .map(|at| crate::ui::time::relative_age(at.elapsed()));
         let previous = crate::i18n::tr!(
             "agent-last-check",
             time = (age

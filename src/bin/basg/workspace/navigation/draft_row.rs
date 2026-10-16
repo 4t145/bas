@@ -137,7 +137,7 @@ impl Workspace {
                         id: $SharedString::from(format!("draft-thread-time-{index}"));
                         test_support; h: layout::ICON_BUTTON_SIZE.px; flex; items_center;
                         text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                    } [$thread_row::recent_time(updated_at, now)],
+                    } [$crate::ui::time::recent_time(updated_at, now)],
                     $actions,
                 ],
             ]

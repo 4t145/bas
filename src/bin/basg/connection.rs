@@ -40,6 +40,22 @@ pub(super) struct CreateSession {
 
 pub(super) enum Command {
     Refresh,
+    AgentHistory {
+        epoch: u64,
+        agent: String,
+        cwd: Option<std::path::PathBuf>,
+    },
+    ImportHistory {
+        epoch: u64,
+        agent: String,
+        info: acp::SessionInfo,
+    },
+    DeleteAgentHistory {
+        epoch: u64,
+        agent: String,
+        id: String,
+    },
+    CloseSession(SessionId),
     Create(CreateSession),
     Rename {
         session: SessionId,
@@ -85,7 +101,30 @@ pub(super) struct Catalog {
     pub sessions: Vec<SessionSnapshot>,
 }
 
+pub(super) struct AgentHistory {
+    pub sessions: acp::ListSessionsResponse,
+    pub initialization: acp::InitializeResponse,
+    pub imported: std::collections::HashMap<String, String>,
+}
+
 pub(super) enum Update {
+    AgentHistory {
+        epoch: u64,
+        result: Result<AgentHistory, Failure>,
+    },
+    ImportedHistory {
+        epoch: u64,
+        result: Result<SessionSnapshot, Failure>,
+    },
+    DeletedAgentHistory {
+        epoch: u64,
+        id: String,
+        result: Result<(), Failure>,
+    },
+    ClosedSession {
+        session: SessionId,
+        result: Result<SessionSnapshot, Failure>,
+    },
     Elicitations {
         epoch: u64,
         pending: Vec<PendingElicitation>,
@@ -413,6 +452,80 @@ fn creation_result(
 
 async fn execute(mut client: Client, command: Command) -> Update {
     match command {
+        Command::AgentHistory { epoch, agent, cwd } => {
+            let result = request(async {
+                let response = client
+                    .list_agent_sessions(pb::ListAgentSessionsRequest {
+                        agent,
+                        cwd: cwd
+                            .map(|path| bas::service::utf8_cwd(&path).map(str::to_owned))
+                            .transpose()?,
+                    })
+                    .await?
+                    .into_inner();
+                Ok(AgentHistory {
+                    sessions: response
+                        .sessions
+                        .ok_or_else(|| anyhow::anyhow!("Missing Agent history"))?
+                        .decode()?,
+                    initialization: response
+                        .initialization
+                        .ok_or_else(|| anyhow::anyhow!("Missing Agent initialization"))?
+                        .decode()?,
+                    imported: response.imported_sessions,
+                })
+            })
+            .await;
+            Update::AgentHistory { epoch, result }
+        }
+        Command::ImportHistory { epoch, agent, info } => {
+            let result = request(async {
+                let response = client
+                    .import_agent_session(pb::ImportAgentSessionRequest {
+                        agent,
+                        session_info: Some((&info).into()),
+                    })
+                    .await?
+                    .into_inner();
+                response
+                    .session
+                    .ok_or_else(|| anyhow::anyhow!("Missing imported session"))?
+                    .try_into()
+                    .map_err(Into::into)
+            })
+            .await;
+            Update::ImportedHistory { epoch, result }
+        }
+        Command::DeleteAgentHistory { epoch, agent, id } => {
+            let result = request(async {
+                client
+                    .delete_agent_session(pb::DeleteAgentSessionRequest {
+                        agent,
+                        session_id: id.clone(),
+                    })
+                    .await?;
+                Ok(())
+            })
+            .await;
+            Update::DeletedAgentHistory { epoch, id, result }
+        }
+        Command::CloseSession(session) => {
+            let result = request(async {
+                let response = client
+                    .close_session(pb::GetSessionRequest {
+                        session: session.to_string(),
+                    })
+                    .await?
+                    .into_inner();
+                response
+                    .session
+                    .ok_or_else(|| anyhow::anyhow!("Missing closed session"))?
+                    .try_into()
+                    .map_err(Into::into)
+            })
+            .await;
+            Update::ClosedSession { session, result }
+        }
         Command::RespondElicitation {
             session,
             request_id,

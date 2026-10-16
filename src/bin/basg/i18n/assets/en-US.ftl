@@ -43,6 +43,33 @@ action-submit = Submit
 action-update = Update
 action-user-message = Go to your message
 
+## Agent history
+
+agent-history-title = Agent session history
+agent-history-agent-filter = ACP Agent ID
+agent-history-all-agents = All Agents
+agent-history-workspace-filter = Primary workspace
+agent-history-all-workspaces = All primary workspaces
+agent-history-no-agents = No ACP Agents are configured.
+agent-history-imported = Session imported. You can view it in the main Bas window.
+agent-history-operating = Session operation in progress…
+agent-history-unavailable = The history network service is not ready. Reopen this window.
+agent-history-back = Back to conversation
+agent-history-refresh = Refresh
+agent-history-search = Search title, workspace or session ID
+agent-history-empty = No matching Agent sessions.
+agent-history-help = Read the Agent’s own history without importing or sending messages automatically. Resume-only Agents can restore context, but cannot replay old messages.
+agent-history-open = View Bas record
+agent-history-import = Import and open
+agent-history-resume = Resume without replay
+agent-history-cannot-import = This Agent lists sessions but does not advertise loading or resuming.
+agent-history-roots-unsupported = This session has additional workspace roots and cannot yet be imported losslessly.
+agent-history-delete = Delete Agent history
+agent-history-delete-help = Deletes Agent history only. Close imported sessions first; local Bas records are retained.
+agent-history-delete-confirm = Delete “{ $title }” from the Agent’s history? Local Bas records will remain. This operation is not retried automatically.
+agent-session-close = Close Agent session
+agent-session-close-confirm = Stop this session’s work and release Agent resources? Its Bas record and transcript will remain in the stopped state.
+
 ## Application
 
 app-about = About BasG
@@ -588,10 +615,11 @@ option-choose = Choose { $name }
 option-disable = Turn off { $name }
 option-enable = Turn on { $name }
 sidebar-toggle = Toggle conversations · Ctrl+B
-time-days = { $count }d
-time-hours = { $count }h
+time-days = { $count }d ago
+time-hours = { $count }h ago
 time-just-now = Just now
-time-minutes = { $count }m
+time-minutes = { $count }m ago
+time-unknown = Time unknown
 time-minutes-ago = { $count ->
         [one] About { $count } minute ago
        *[other] About { $count } minutes ago

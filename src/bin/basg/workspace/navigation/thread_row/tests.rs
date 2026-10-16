@@ -3,33 +3,6 @@ use bas::model::{Cursor, Owner};
 use super::*;
 
 #[test]
-fn recent_time_uses_compact_units_and_handles_clock_skew() {
-    let now = Timestamp::from_millis(7 * DAY_MILLIS);
-    for (elapsed, expected) in [
-        (0, "刚刚"),
-        (MINUTE_MILLIS - 1, "刚刚"),
-        (MINUTE_MILLIS, "1 分钟"),
-        (HOUR_MILLIS - 1, "59 分钟"),
-        (HOUR_MILLIS, "1 小时"),
-        (DAY_MILLIS - 1, "23 小时"),
-        (DAY_MILLIS, "1 天"),
-        (3 * DAY_MILLIS, "3 天"),
-    ] {
-        assert_eq!(
-            crate::i18n::visible_text(&recent_time(
-                Timestamp::from_millis(now.millis() - elapsed),
-                now
-            )),
-            expected
-        );
-    }
-    assert_eq!(
-        recent_time(Timestamp::from_millis(now.millis() + HOUR_MILLIS), now),
-        "刚刚"
-    );
-}
-
-#[test]
 fn rows_status_uses_reply_cursor_not_catalog_revision() {
     let mut session = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
     session.status = SessionStatus::Idle;

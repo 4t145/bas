@@ -6,6 +6,7 @@ mod chat;
 mod commands;
 mod composer;
 mod header;
+mod history;
 mod images;
 mod input_layout;
 mod interaction;
@@ -69,7 +70,7 @@ const EVENT_BATCH: usize = 64;
 const LIST_OVERDRAW: f32 = 800.;
 const SIDEBAR_WIDTH: f32 = 252.;
 const AGENT_ICON_SIZE: f32 = 16.;
-const SIDEBAR_TIME_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
+const SIDEBAR_TIME_REFRESH: std::time::Duration = crate::ui::time::REFRESH_INTERVAL;
 
 use crate::application::OpenSettings;
 pub(super) use layout::initial_size;
