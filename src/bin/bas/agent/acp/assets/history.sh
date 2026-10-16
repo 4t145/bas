@@ -38,6 +38,9 @@ while IFS= read -r request; do
             ;;
         *'"method":"session/load"'*)
             printf '%s\n' "$request" >> "$BAS_FIXTURE_PID.load"
+            if [ "$BAS_FIXTURE_MODE" = load_hang ]; then
+                sleep 60
+            fi
             if [ "$BAS_FIXTURE_MODE" = reject_load ]; then
                 printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"unknown session"}}\n' "$id"
             else

@@ -33,6 +33,8 @@ service Bas {
   rpc DeleteAgentSession(DeleteAgentSessionRequest) returns (DeleteSessionResponse);
   // Standard ACP close, retaining the local transcript as a stopped session.
   rpc CloseSession(GetSessionRequest) returns (GetSessionResponse);
+  // Explicitly reloads a stopped Agent session, preserving its ID, history and archive flag.
+  rpc RestartSession(GetSessionRequest) returns (GetSessionResponse);
   // Lists non-archived sessions by default.
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   // Reads one session's metadata.

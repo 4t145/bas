@@ -153,6 +153,150 @@ async fn imports_replay_once_and_continues_using_the_original_agent_id() {
 }
 
 #[tokio::test]
+async fn restart_reuses_identity_preserves_archive_and_does_not_duplicate_replay() {
+    let directory = tempfile::tempdir().expect("directory");
+    let registry = registry("history", &directory);
+    let session = registry
+        .import_agent_session(import_request(&directory), "fixture".into())
+        .await
+        .expect("import");
+    session.close_backend().await.expect("close");
+    session.set_archived(true).await;
+    let previous = events(&session).await;
+    let service = Service::new(Arc::clone(&registry));
+    let response = service
+        .restart_session(Request::new(pb::GetSessionRequest {
+            session: session.id().to_string(),
+        }))
+        .await
+        .expect("restart RPC")
+        .into_inner()
+        .session
+        .expect("snapshot");
+    let snapshot: bas::model::SessionSnapshot = response.try_into().expect("typed snapshot");
+    assert_eq!(snapshot.meta.id, session.id());
+    assert_eq!(snapshot.meta.status, SessionStatus::Idle);
+    assert!(
+        snapshot.meta.archived,
+        "restart does not silently unarchive"
+    );
+    assert_eq!(registry.list().await.len(), 1);
+    let after = events(&session).await;
+    assert_eq!(
+        after.len(),
+        previous.len() + 1,
+        "only the ready transition is added"
+    );
+    assert_eq!(recorded(&directory, "load").len(), 2);
+    assert!(recorded(&directory, "new").is_empty());
+    session.set_archived(false).await;
+    let mut attachment = session
+        .try_attach(AttachOptions {
+            replay: 0,
+            cursor: None,
+        })
+        .await
+        .expect("new live stream");
+    session
+        .prompt(vec!["continue restarted session".into()])
+        .await
+        .expect("prompt");
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if matches!(
+                attachment.recv().await.expect("event").kind,
+                bas::model::EventKind::TurnFinished { .. }
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("restart completes a turn");
+    assert_eq!(
+        recorded(&directory, "prompt")[0]["params"]["sessionId"],
+        "fixture"
+    );
+    registry.shutdown().await;
+}
+
+#[tokio::test]
+async fn rejected_and_unsupported_restarts_leave_the_record_stopped_and_retryable() {
+    let directory = tempfile::tempdir().expect("directory");
+    let registry = registry("history", &directory);
+    let session = registry
+        .import_agent_session(import_request(&directory), "fixture".into())
+        .await
+        .expect("import");
+    session.close_backend().await.expect("close");
+    let before = session.snapshot();
+    let count = events(&session).await.len();
+    for mode in ["reject_load", "unsupported"] {
+        registry.replace_catalog(Arc::new(
+            Catalog::from_specs([spec(mode, &directory)]).expect("catalog"),
+        ));
+        assert!(registry.restart_session(&session).await.is_err());
+        assert_eq!(session.snapshot(), before);
+        assert_eq!(events(&session).await.len(), count);
+        assert!(recorded(&directory, "new").is_empty());
+    }
+    registry.replace_catalog(Arc::new(
+        Catalog::from_specs([spec("history", &directory)]).expect("catalog"),
+    ));
+    let (first, second) = tokio::join!(
+        registry.restart_session(&session),
+        registry.restart_session(&session)
+    );
+    assert_eq!(
+        usize::from(first.is_ok()) + usize::from(second.is_ok()),
+        1,
+        "one restart owns the session"
+    );
+    assert_eq!(session.meta().status, SessionStatus::Idle);
+    registry.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancelled_restart_does_not_change_or_lock_the_stopped_record() {
+    let directory = tempfile::tempdir().expect("directory");
+    let registry = registry("history", &directory);
+    let session = registry
+        .import_agent_session(import_request(&directory), "fixture".into())
+        .await
+        .expect("import");
+    session.close_backend().await.expect("close");
+    let before = session.snapshot();
+    registry.replace_catalog(Arc::new(
+        Catalog::from_specs([spec("load_hang", &directory)]).expect("catalog"),
+    ));
+    let running_registry = registry.clone();
+    let running_session = session.clone();
+    let task =
+        tokio::spawn(async move { running_registry.restart_session(&running_session).await });
+    tokio::time::timeout(TIMEOUT, async {
+        while recorded(&directory, "load").len() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("staged load");
+    task.abort();
+    assert!(task.await.expect_err("cancelled task").is_cancelled());
+    assert_eq!(session.snapshot(), before);
+    registry.replace_catalog(Arc::new(
+        Catalog::from_specs([spec("resume", &directory)]).expect("catalog"),
+    ));
+    registry
+        .restart_session(&session)
+        .await
+        .expect("retry with resume-only Agent");
+    assert_eq!(session.meta().status, SessionStatus::Idle);
+    assert_eq!(recorded(&directory, "resume").len(), 1);
+    assert!(recorded(&directory, "new").is_empty());
+    registry.shutdown().await;
+}
+
+#[tokio::test]
 async fn standard_close_and_history_delete_retain_local_records() {
     let directory = tempfile::tempdir().expect("directory");
     let registry = registry("history", &directory);
@@ -375,7 +519,25 @@ async fn imported_identity_and_transcript_survive_daemon_restart() {
         "restore replay must not duplicate imported history"
     );
     assert!(recorded(&directory, "new").is_empty());
+    session.close_backend().await.expect("durable close");
+    session.set_archived(true).await;
+    let stopped_history = events(&session).await;
     recovered.shutdown().await;
+    drop(session);
+    drop(recovered);
+    let mut reopened = open().await;
+    reopened.recover().await.expect("recover stopped record");
+    let session = reopened.get(id).await.expect("same stopped ID");
+    assert_eq!(session.meta().status, SessionStatus::Stopped);
+    reopened
+        .restart_session(&session)
+        .await
+        .expect("restart after daemon reboot");
+    assert_eq!(session.meta().status, SessionStatus::Idle);
+    assert!(session.meta().archived);
+    assert_eq!(recorded(&directory, "load").len(), 3);
+    assert_eq!(events(&session).await.len(), stopped_history.len() + 1);
+    reopened.shutdown().await;
 }
 
 #[tokio::test]

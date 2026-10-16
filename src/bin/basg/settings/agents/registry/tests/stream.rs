@@ -163,6 +163,7 @@ fixture_service! {
     import_agent_session(pb::ImportAgentSessionRequest) -> pb::CreateSessionResponse;
     delete_agent_session(pb::DeleteAgentSessionRequest) -> pb::DeleteSessionResponse;
     close_session(pb::GetSessionRequest) -> pb::GetSessionResponse;
+    restart_session(pb::GetSessionRequest) -> pb::GetSessionResponse;
     list_agents(pb::ListAgentsRequest) -> pb::ListAgentsResponse;
     remove_agent(pb::RemoveAgentRequest) -> pb::RemoveAgentResponse;
     create_session(pb::CreateSessionRequest) -> pb::CreateSessionResponse;

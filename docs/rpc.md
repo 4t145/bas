@@ -18,6 +18,7 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | ListAgentSessions | 在单条 ACP 连接上调用 `session/list` 并读完分页；返回原生 `ListSessionsResponse`、初始化能力和已导入 ID 映射，不创建会话 |
 | ImportAgentSession | 接收 Agent 原生 `SessionInfo`，加载／恢复指定会话，保存 Bas UUID 与 Agent ID 映射；不调用 `session/new` |
 | CloseSession | 能力协商后调用 `session/close`，保留 Bas 历史为已停止记录 |
+| RestartSession | 显式重新加载已停止会话的原 ACP 身份，保留本地 ID、历史与归档标记，不发送 prompt |
 | DeleteAgentSession | 能力协商后调用 `session/delete`，只删除 Agent 历史；已导入活跃会话须先关闭 |
 | ListAgentCatalog | `bas::management::Catalog` JSON，包含 Registry 和已配置后端 |
 | InstallAgent | 可取消的安装进度流，最终返回已保存的 `AgentSpec` |
@@ -95,7 +96,11 @@ let options = client.set_config_option_acp(
 只有 resume 能力时恢复上下文但不伪造历史；load／resume 都不支持则失败，不创建替代会话。
 当前拒绝包含额外工作根的 `SessionInfo`，以免无声改变执行上下文。
 
-`CloseSession` 保留本地记录并将运行实例置为 Stopped；当前没有重新打开该实例的 RPC。
+`CloseSession` 保留本地记录并将运行实例置为 Stopped。
+`RestartSession` 仅接受健康的已停止 ACP 记录；启动与回放在提交新运行实例前隔离，
+回放不会再次追加到本地历史。加载被拒绝、能力不支持或提交前取消时仍保留停止记录。
+关闭、删除、启动及 daemon 退出通过同一会话恢复锁互斥；持久化提交一旦开始，
+与其他会话操作一样独立于 RPC 调用者完成，因此超时后应查询实际状态，不自动重试。
 Agent 拒绝关闭时保留原实例，传输超时则释放不确定的本地实例并返回失败。
 进程清理也会在支持时尽力发送一次标准 close，但不把清理失败视为远端成功。
 `DeleteAgentSession` 与原有本地 `DeleteSession` 分开，前者不删除本地历史，

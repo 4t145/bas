@@ -12,6 +12,7 @@ use crate::agent::{self, Catalog, Host, Kind, LaunchRequest};
 use crate::storage::{self, ResumeData, Storage};
 
 mod history;
+mod restart;
 
 pub const DEFAULT_HISTORY: usize = 4096;
 pub const DEFAULT_BUFFER: usize = 1024;

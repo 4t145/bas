@@ -119,6 +119,12 @@ impl Bas for Service {
     ) -> Result<Response<pb::GetSessionResponse>, Status> {
         Err(Status::unimplemented("unrelated history"))
     }
+    async fn restart_session(
+        &self,
+        _: Request<pb::GetSessionRequest>,
+    ) -> Result<Response<pb::GetSessionResponse>, Status> {
+        Err(Status::unimplemented("unrelated history"))
+    }
     type AuthenticateAgentInteractiveStream =
         Pin<Box<dyn Stream<Item = Result<pb::AuthenticationEvent, Status>> + Send>>;
     type WatchElicitationsStream =

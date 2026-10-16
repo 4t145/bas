@@ -53,6 +53,8 @@ enum Operation {
     Import { request: u64, target: Target },
     Delete { request: u64, target: Target },
     Close { session: SessionId },
+    Restart { session: SessionId, generation: u64 },
+    Restore { session: SessionId, generation: u64 },
 }
 
 pub(crate) struct Browser {
@@ -343,6 +345,20 @@ impl Browser {
                     }
                 }
             }
+            Update::RestartedSession { session, result } if matches!(&self.operation, Some(Operation::Restart { session: pending, .. }) if *pending == session) =>
+            {
+                let Some(Operation::Restart { generation, .. }) = self.operation.take() else {
+                    unreachable!()
+                };
+                self.complete_open_operation(result, generation, cx);
+            }
+            Update::Archived { session, result } if matches!(&self.operation, Some(Operation::Restore { session: pending, .. }) if *pending == session) =>
+            {
+                let Some(Operation::Restore { generation, .. }) = self.operation.take() else {
+                    unreachable!()
+                };
+                self.complete_open_operation(result, generation, cx);
+            }
             Update::ClosedSession { session, result } => {
                 if matches!(&self.operation, Some(Operation::Close { session: pending }) if *pending == session)
                 {
@@ -425,6 +441,71 @@ impl Browser {
         }
     }
 
+    fn complete_open_operation(
+        &mut self,
+        result: Result<SessionSnapshot, connection::Failure>,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(snapshot) => {
+                self.merge_session(snapshot.clone());
+                if generation == self.generation {
+                    self.open_record(snapshot, cx);
+                }
+            }
+            Err(error) => self.notice = Some(error.presentation()),
+        }
+    }
+
+    fn restart(&mut self, target: Target, cx: &mut Context<Self>) {
+        if !self.current(&target) || self.operation.is_some() {
+            return;
+        }
+        let Some(snapshot) = self.imported(&target.agent, &target.info) else {
+            return;
+        };
+        if snapshot.meta.status != SessionStatus::Stopped {
+            return;
+        }
+        let capabilities = &self.pages[&target.agent].initialization.agent_capabilities;
+        if !(capabilities.load_session || capabilities.session_capabilities.resume.is_some()) {
+            return;
+        }
+        let session = snapshot.meta.id;
+        if self.send(Command::RestartSession(session), cx) {
+            self.operation = Some(Operation::Restart {
+                session,
+                generation: self.generation,
+            });
+        }
+    }
+
+    fn restore(&mut self, target: Target, cx: &mut Context<Self>) {
+        if !self.current(&target) || self.operation.is_some() {
+            return;
+        }
+        let Some(snapshot) = self.imported(&target.agent, &target.info) else {
+            return;
+        };
+        if !snapshot.meta.archived {
+            return;
+        }
+        let session = snapshot.meta.id;
+        if self.send(
+            Command::Archive {
+                session,
+                archived: false,
+            },
+            cx,
+        ) {
+            self.operation = Some(Operation::Restore {
+                session,
+                generation: self.generation,
+            });
+        }
+    }
+
     fn active(&self, target: &Target) -> bool {
         self.imported(&target.agent, &target.info)
             .is_some_and(|snapshot| {
@@ -456,7 +537,7 @@ impl Browser {
                     .info
                     .title
                     .as_deref()
-                    .unwrap_or(target.info.session_id.0.as_ref())
+                    .unwrap_or(crate::i18n::tr!("agent-history-untitled"))
             ),
             confirm_label: crate::i18n::tr!("agent-history-delete").into(),
         };

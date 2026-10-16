@@ -78,6 +78,7 @@ impl Workspace {
         match *command {
             Command::AgentHistory { .. }
             | Command::ImportHistory { .. }
+            | Command::RestartSession(_)
             | Command::DeleteAgentHistory { .. } => {
                 self.selected.error = Some(message);
             }

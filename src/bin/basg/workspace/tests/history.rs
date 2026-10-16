@@ -46,6 +46,42 @@ fn listing() -> connection::AgentHistory {
 }
 
 #[gpui_kit::test]
+fn reopening_restarted_current_session_reattaches_without_clearing_the_draft(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = fixture(cx);
+    let mut meta = session();
+    meta.status = SessionStatus::Stopped;
+    attach(&fixture, meta.clone(), cx);
+    let callback = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            fixture.view.update(cx, |view, cx| {
+                view.selected.stream = StreamState::Closed;
+                view.composer.input.update(cx, |input, cx| {
+                    input.set_value("keep unsent text", window, cx)
+                });
+                view.history_request(meta.agent.to_string(), cx)
+                    .open_session
+            })
+        })
+        .expect("closed stream");
+    while fixture.commands.try_recv().is_ok() {}
+    meta.status = SessionStatus::Idle;
+    meta.revision = Cursor::from_raw(10);
+    cx.update(|cx| assert!(callback(meta.clone().into(), cx)));
+    assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::Watch { session, .. }) if session == meta.id)
+    );
+    cx.update(|cx| {
+        let view = fixture.view.read(cx);
+        assert_eq!(view.selected.id, Some(meta.id));
+        assert_eq!(view.selected.stream, StreamState::Loading);
+        assert_eq!(view.composer.input.read(cx).value(), "keep unsent text");
+    });
+    assert!(fixture.commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
 fn import_window_is_independent_and_import_keeps_the_outgoing_composer(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let mut previous = session();

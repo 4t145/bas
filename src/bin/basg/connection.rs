@@ -56,6 +56,7 @@ pub(super) enum Command {
         id: String,
     },
     CloseSession(SessionId),
+    RestartSession(SessionId),
     Create(CreateSession),
     Rename {
         session: SessionId,
@@ -122,6 +123,10 @@ pub(super) enum Update {
         result: Result<(), Failure>,
     },
     ClosedSession {
+        session: SessionId,
+        result: Result<SessionSnapshot, Failure>,
+    },
+    RestartedSession {
         session: SessionId,
         result: Result<SessionSnapshot, Failure>,
     },
@@ -508,6 +513,23 @@ async fn execute(mut client: Client, command: Command) -> Update {
             })
             .await;
             Update::DeletedAgentHistory { epoch, id, result }
+        }
+        Command::RestartSession(session) => {
+            let result = request(async {
+                let response = client
+                    .restart_session(pb::GetSessionRequest {
+                        session: session.to_string(),
+                    })
+                    .await?
+                    .into_inner();
+                response
+                    .session
+                    .ok_or_else(|| anyhow::anyhow!("Missing restarted session"))?
+                    .try_into()
+                    .map_err(Into::into)
+            })
+            .await;
+            Update::RestartedSession { session, result }
         }
         Command::CloseSession(session) => {
             let result = request(async {

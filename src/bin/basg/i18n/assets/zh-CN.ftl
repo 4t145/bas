@@ -46,10 +46,10 @@ action-user-message = 返回本轮消息
 ## Agent history
 
 agent-history-title = Agent 历史会话
-agent-history-agent-filter = ACP Agent ID
-agent-history-all-agents = 全部 Agent
+agent-history-agent-filter = Agent
+agent-history-all-agents = 全部
 agent-history-workspace-filter = 主工作区
-agent-history-all-workspaces = 全部主工作区
+agent-history-all-workspaces = 全部工作区
 agent-history-no-agents = 没有已配置的 ACP Agent。
 agent-history-imported = 会话已导入。可以在 Bas 主窗口查看。
 agent-history-operating = 正在处理会话操作…
@@ -59,7 +59,11 @@ agent-history-refresh = 刷新
 agent-history-search = 搜索标题、目录或会话 ID
 agent-history-empty = 没有匹配的 Agent 历史会话。
 agent-history-help = 读取 Agent 自己保存的历史，不会自动导入或发送消息。仅支持 resume 的 Agent 只能续接上下文，不能回放旧消息。
-agent-history-open = 查看 Bas 记录
+agent-history-open = 打开
+agent-history-untitled = 未命名会话
+agent-session-restart = 重新启动
+agent-session-restart-help = 重新加载原会话上下文，不自动发送消息。
+agent-history-restore-help = 取消归档并打开；不会重新启动已停止的会话。
 agent-history-import = 导入并打开
 agent-history-resume = 续接（无历史回放）
 agent-history-cannot-import = Agent 只支持列出会话，未声明加载或恢复能力。

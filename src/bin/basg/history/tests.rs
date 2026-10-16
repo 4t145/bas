@@ -340,6 +340,112 @@ fn stale_import_controls_and_receipts_cannot_retarget_a_new_filter(cx: &mut Test
 }
 
 #[gpui_kit::test]
+fn stopped_and_archived_rows_offer_distinct_operations_and_compact_layout(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let (request, _, _) = query(&mut fixture);
+    let info = acp::SessionInfo::new("hidden-backend-id", "/repo");
+    let mut snapshot = SessionSnapshot::from(SessionMeta::new(
+        SessionId::new(),
+        "codex-acp".into(),
+        Owner::current(),
+    ));
+    snapshot.meta.status = SessionStatus::Stopped;
+    snapshot.meta.archived = true;
+    let id = snapshot.meta.id;
+    let mut page = listing(vec![info.clone()]);
+    page.imported
+        .insert(info.session_id.to_string(), id.to_string());
+    deliver(
+        &fixture,
+        Update::AgentHistory {
+            epoch: request,
+            result: Ok(page),
+        },
+        cx,
+    );
+    cx.update(|cx| {
+        fixture
+            .browser
+            .update(cx, |browser, cx| {
+                browser.merge_session(snapshot.clone());
+                cx.notify();
+            })
+            .expect("snapshot")
+    });
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("agent-history-import-0-0").label(),
+            Some("打开")
+        );
+        assert_eq!(
+            window.find("agent-history-title-0-0").label(),
+            Some("未命名会话")
+        );
+        assert_eq!(
+            window.find("agent-history-status-0-0").label(),
+            Some("已停止 · 已归档")
+        );
+        let path = window.find("agent-history-directory-0-0").bounds();
+        let actions = window.find("agent-history-actions-0-0").bounds();
+        assert!(path.right() <= actions.left());
+        assert_eq!(path.center().y, actions.center().y);
+        let name = window.find("agent-history-group-name-0").bounds();
+        let count = window.find("agent-history-group-count-0").bounds();
+        assert!(count.left() - name.right() <= gpui_kit::px(10.));
+        window.click("agent-history-restart-0-0", cx);
+    })
+    .expect("history layout and restart action");
+    assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::RestartSession(session)) if session == id)
+    );
+    snapshot.meta.status = SessionStatus::Idle;
+    snapshot.meta.revision = bas::model::Cursor::from_raw(1);
+    deliver(
+        &fixture,
+        Update::RestartedSession {
+            session: id,
+            result: Ok(snapshot.clone()),
+        },
+        cx,
+    );
+    assert_eq!(&*fixture.opened.borrow(), &[id]);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("agent-history-restart-0-0").is_none());
+        assert!(window.find("agent-history-restore-0-0").visible());
+        window.click("agent-history-restore-0-0", cx);
+    })
+    .expect("restore is independent");
+    assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::Archive { session, archived: false }) if session == id)
+    );
+    snapshot.meta.archived = false;
+    snapshot.meta.revision = bas::model::Cursor::from_raw(2);
+    deliver(
+        &fixture,
+        Update::Archived {
+            session: id,
+            result: Ok(snapshot),
+        },
+        cx,
+    );
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("agent-history-restore-0-0").is_none());
+        assert_eq!(
+            window.find("agent-history-status-0-0").label(),
+            Some("就绪")
+        );
+    })
+    .expect("restored status");
+    assert!(
+        fixture.commands.try_recv().is_err(),
+        "no automatic prompt or new session"
+    );
+}
+
+#[gpui_kit::test]
 fn rows_are_grouped_by_agent_and_real_buttons_import_the_original_provider(
     cx: &mut TestAppContext,
 ) {

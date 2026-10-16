@@ -46,10 +46,10 @@ action-user-message = Go to your message
 ## Agent history
 
 agent-history-title = Agent session history
-agent-history-agent-filter = ACP Agent ID
-agent-history-all-agents = All Agents
+agent-history-agent-filter = Agent
+agent-history-all-agents = All
 agent-history-workspace-filter = Primary workspace
-agent-history-all-workspaces = All primary workspaces
+agent-history-all-workspaces = All workspaces
 agent-history-no-agents = No ACP Agents are configured.
 agent-history-imported = Session imported. You can view it in the main Bas window.
 agent-history-operating = Session operation in progress…
@@ -59,7 +59,11 @@ agent-history-refresh = Refresh
 agent-history-search = Search title, workspace or session ID
 agent-history-empty = No matching Agent sessions.
 agent-history-help = Read the Agent’s own history without importing or sending messages automatically. Resume-only Agents can restore context, but cannot replay old messages.
-agent-history-open = View Bas record
+agent-history-open = Open
+agent-history-untitled = Untitled conversation
+agent-session-restart = Restart
+agent-session-restart-help = Reload this session's context without sending a message.
+agent-history-restore-help = Unarchive and open; stopped sessions are not restarted.
 agent-history-import = Import and open
 agent-history-resume = Resume without replay
 agent-history-cannot-import = This Agent lists sessions but does not advertise loading or resuming.

@@ -14,6 +14,7 @@ impl Workspace {
             | Update::Archived { session, .. }
             | Update::Deleted { session, .. }
             | Update::ClosedSession { session, .. }
+            | Update::RestartedSession { session, .. }
             | Update::Submission { session, .. }
             | Update::TrackingFailed { session, .. }
             | Update::Cancelled { session, .. } => Some(*session),
@@ -41,6 +42,7 @@ impl Workspace {
             // History discovery and mutations belong to the independent history window.
             Update::AgentHistory { .. }
             | Update::ImportedHistory { .. }
+            | Update::RestartedSession { .. }
             | Update::DeletedAgentHistory { .. } => {}
             Update::ClosedSession { session, result } => {
                 self.agent_session_closed(session, result, cx)

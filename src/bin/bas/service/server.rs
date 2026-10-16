@@ -552,6 +552,17 @@ impl Bas for Service {
         }))
     }
 
+    async fn restart_session(
+        &self,
+        request: Request<pb::GetSessionRequest>,
+    ) -> Result<Response<pb::GetSessionResponse>, Status> {
+        let session = self.session(&request.into_inner().session).await?;
+        self.registry.restart_session(&session).await?;
+        Ok(Response::new(pb::GetSessionResponse {
+            session: Some(pb::Session::try_from(&session.snapshot()).map_err(metadata_error)?),
+        }))
+    }
+
     async fn list_sessions(
         &self,
         request: Request<pb::ListSessionsRequest>,

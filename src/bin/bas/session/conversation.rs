@@ -243,6 +243,60 @@ impl Session {
         .await
     }
 
+    pub(super) fn check_restartable(&self) -> Result<(), SessionError> {
+        let state = self.lock();
+        state.check_health()?;
+        if state.deleted || state.meta.status != SessionStatus::Stopped {
+            return Err(SessionError::Inactive(state.meta.status));
+        }
+        Ok(())
+    }
+
+    pub(super) async fn install_restarted(
+        self: &Arc<Self>,
+        agent: Box<dyn Agent>,
+        inbox: mpsc::Receiver<Update>,
+        capacity: usize,
+        restore_gate: tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<(), SessionError> {
+        self.owned(move |session| async move {
+            let _restore = restore_gate;
+            let _transaction = session.transaction.lock().await;
+            let mut meta = {
+                let state = session.lock();
+                state.check_health()?;
+                if state.deleted || state.meta.status != SessionStatus::Stopped {
+                    return Err(SessionError::Inactive(state.meta.status));
+                }
+                state.meta.clone()
+            };
+            meta.initialization = agent.initialization();
+            meta.initialization_raw = agent.initialization_raw();
+            meta.acp = agent.session_info().map(|mut info| {
+                info.session_id = meta.id.to_string().into();
+                info
+            });
+            session
+                .publish_with_meta_locked(
+                    [EventKind::StatusChanged {
+                        status: SessionStatus::Idle,
+                    }],
+                    &mut meta,
+                )
+                .await?;
+            {
+                let mut state = session.lock();
+                state.agent = Some(agent);
+                state.restored = true;
+                state.closing = false;
+                state.events = Some(broadcast::channel(capacity).0);
+            }
+            session.listen(inbox);
+            Ok(())
+        })
+        .await
+    }
+
     /// Stop the process without recording a terminal event: a durable session
     /// will be restarted by the next daemon and restored on its next prompt.
     pub(super) async fn suspend(&self) {

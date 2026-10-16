@@ -79,7 +79,20 @@ impl Workspace {
             self.sessions.entries.insert(0, snapshot.meta);
         }
         self.sessions.record_prompt(id);
-        self.select(id, window, cx);
+        if self.selected.id == Some(id) {
+            // The stopped stream has ended. Reattach even when opening the same row,
+            // without switching or clearing the user's unsent composition.
+            self.selected.reload();
+            self.command(
+                Command::Watch {
+                    session: id,
+                    epoch: self.selected.epoch,
+                },
+                cx,
+            );
+        } else {
+            self.select(id, window, cx);
+        }
         cx.notify();
     }
 
