@@ -1,6 +1,7 @@
 { pkgs }:
 with pkgs;
 lib.optionals stdenv.isLinux [
+  alsa-lib
   fontconfig
   freetype
   libxkbcommon

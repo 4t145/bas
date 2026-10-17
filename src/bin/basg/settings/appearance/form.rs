@@ -12,6 +12,8 @@ use gpui_kit::{
 
 pub(super) struct Form {
     pub confirm_delete: Option<bool>,
+    pub default_agent: Entity<SelectState<Vec<Choice<Option<String>>>>>,
+    pub default_agent_choices: Vec<Option<String>>,
     pub language: Entity<SelectState<Vec<Choice<Language>>>>,
     pub ui_font: Entity<SelectState<SearchableVec<FontChoice>>>,
     pub mono_font: Entity<SelectState<SearchableVec<FontChoice>>>,
@@ -28,7 +30,20 @@ pub(super) struct Form {
 }
 
 #[derive(Clone)]
-pub(super) struct Choice<T>(T);
+pub(super) struct Choice<T>(pub T);
+
+impl SelectItem for Choice<Option<String>> {
+    type Value = Option<String>;
+    fn title(&self) -> gpui_kit::SharedString {
+        self.0
+            .clone()
+            .unwrap_or_else(|| crate::i18n::tr!("settings-last-agent").into())
+            .into()
+    }
+    fn value(&self) -> &Self::Value {
+        &self.0
+    }
+}
 
 impl SelectItem for Choice<Language> {
     type Value = Language;
@@ -137,6 +152,15 @@ fn validation_message(error: &theme::preferences::ValidationError) -> String {
 
 impl Form {
     pub fn new(p: &Preferences, window: &mut Window, cx: &mut Context<AppearancePage>) -> Self {
+        let default_agent_choices: Vec<_> = std::iter::once(None)
+            .chain(p.default_agent.clone().map(Some))
+            .collect();
+        let default_agent = choice(
+            default_agent_choices.clone(),
+            p.default_agent.clone(),
+            window,
+            cx,
+        );
         let mut input = |value: String| {
             cx.new(|cx| {
                 let mut input = InputState::new(window, cx)
@@ -147,6 +171,8 @@ impl Form {
         };
         Self {
             confirm_delete: p.confirm_session_delete,
+            default_agent,
+            default_agent_choices,
             fallbacks: input(
                 p.font_fallbacks
                     .as_ref()
@@ -236,6 +262,12 @@ impl Form {
         };
         let p = Preferences {
             confirm_session_delete: self.confirm_delete,
+            default_agent: self
+                .default_agent
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .flatten(),
             language: self
                 .language
                 .read(cx)

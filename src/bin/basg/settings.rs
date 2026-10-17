@@ -15,6 +15,7 @@ use gpui_kit::{
 
 mod agents;
 mod appearance;
+mod form;
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
 pub(crate) mod window;

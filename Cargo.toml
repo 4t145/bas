@@ -43,6 +43,7 @@ gui = [
     "dep:markdown",
     "dep:html5ever",
     "dep:markup5ever_rcdom",
+    "dep:rodio",
 ]
 gui-tests = ["gui", "gpui-kit/test-support"]
 
@@ -59,6 +60,7 @@ fluent-bundle = { version = "=0.16.0", optional = true }
 unic-langid = { version = "0.9", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "stream"] }
 regex = "1"
+rodio = { version = "=0.21.1", optional = true, default-features = false, features = ["playback", "flac", "mp3", "mp4", "vorbis", "wav", "tracing"] }
 sha2 = "0.10"
 tar = "0.4"
 flate2 = "1"

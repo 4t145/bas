@@ -26,6 +26,7 @@ pub(crate) fn initial_size(compact: bool) -> Size<Pixels> {
 
 impl Workspace {
     pub(super) fn prepare_to_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.audio.update(cx, |player, cx| player.reset(cx));
         self.save_title(cx);
         self.remember_thread();
         self.close_reply_preview(window, cx);
@@ -237,6 +238,7 @@ impl Workspace {
                 self.render_window(window, cx)
                 }),
                 ..$self.inline_context_menu(),
+                ..$self.inline_preview(),
             ]
         }
         .on_action(cx.listener(Self::on_conversation_top))

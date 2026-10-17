@@ -195,6 +195,7 @@ async fn reloading_specs_preserves_existing_acp_sessions_and_shutdown_is_bounded
         session: bas::model::SessionId::new(),
         spec: Arc::new(spec.clone()),
         cwd: directory.path().to_owned(),
+        additional_directories: Vec::new(),
         host: Arc::new(LocalHost::default()),
         updates,
     };

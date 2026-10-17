@@ -1,3 +1,4 @@
+mod activity;
 mod agent;
 mod application;
 mod archive;
@@ -136,6 +137,7 @@ pub(super) struct Workspace {
     selected: state::SelectedThread,
     composer: state::ComposerState,
     renaming: state::RenameState,
+    audio: Entity<crate::audio::Player>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -191,12 +193,14 @@ impl Workspace {
         let composer_state = state::ComposerState::new(window, cx, compact);
         let composer = composer_state.input.clone();
         let renaming = state::RenameState::new(window, cx);
+        let audio = cx.new(|_| crate::audio::Player::new());
         if cx.try_global::<crate::agents::Changes>().is_none() {
             cx.set_global(crate::agents::Changes::default());
         }
         crate::agents::metadata::ensure(server, cx);
         let agent_metadata = crate::agents::metadata::entity(cx);
         let mut subscriptions = vec![
+            cx.observe(&audio, |_, _, cx| cx.notify()),
             cx.on_app_quit(|this, _| {
                 this.persist_read_state();
                 std::future::ready(())
@@ -344,6 +348,7 @@ impl Workspace {
             selected: state::SelectedThread::new(list),
             composer: composer_state,
             renaming,
+            audio,
             _subscriptions: subscriptions,
         }
     }
@@ -460,6 +465,7 @@ impl Workspace {
         if self.selected.id == Some(id) || self.sessions.removed.contains(&id) {
             return;
         }
+        self.audio.update(cx, |player, cx| player.reset(cx));
         self.save_title(cx);
         self.save_draft(cx);
         self.close_reply_preview(window, cx);
@@ -508,7 +514,28 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let agent = self.new_thread_agent(cx);
+        self.new_thread_with_agent(directory, agent, window, cx);
+    }
+
+    fn new_thread_with_agent(
+        &mut self,
+        directory: Option<PathBuf>,
+        agent: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.navigation.removing.contains_key(&directory) {
+            return;
+        }
+        if self.navigation.hidden.contains(&directory)
+            && !self.set_workspace_hidden(directory.clone(), false, cx)
+        {
+            return;
+        }
         self.detach_thread(directory, window, cx);
+        self.selected.agent = agent;
+        self.selected.waiting_for_agent_selection = self.selected.agent.is_empty();
         self.navigation
             .drafts
             .metadata
@@ -524,6 +551,7 @@ impl Workspace {
         self.composer.expanded = !self.window.compact;
         self.sync_composer_mode(cx);
         self.composer.replace(draft, window, cx);
+        self.prepare_session(cx);
         self.focus_input(window, cx);
         cx.notify();
     }
@@ -534,6 +562,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.audio.update(cx, |player, cx| player.reset(cx));
         self.save_title(cx);
         self.navigation.archived = false;
         self.save_draft(cx);
@@ -729,10 +758,12 @@ impl Workspace {
     }
 
     fn start_agent_chat(&mut self, agent: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.selected.agent = agent;
-        self.new_thread(self.navigation.selected_directory.clone(), window, cx);
-        self.selected.waiting_for_agent_selection = false;
-        self.prepare_session(cx);
+        self.new_thread_with_agent(
+            self.navigation.selected_directory.clone(),
+            agent,
+            window,
+            cx,
+        );
     }
 
     fn select_agent(&mut self, agent: String, window: &mut Window, cx: &mut Context<Self>) {

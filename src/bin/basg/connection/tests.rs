@@ -95,6 +95,12 @@ struct Service {
 
 #[tonic::async_trait]
 impl Bas for Service {
+    async fn logout_agent(
+        &self,
+        _: Request<pb::LogoutAgentRequest>,
+    ) -> Result<Response<pb::LogoutAgentResponse>, Status> {
+        Err(Status::unimplemented("unrelated logout"))
+    }
     async fn list_agent_sessions(
         &self,
         _: Request<pb::ListAgentSessionsRequest>,
@@ -124,6 +130,12 @@ impl Bas for Service {
         _: Request<pb::GetSessionRequest>,
     ) -> Result<Response<pb::GetSessionResponse>, Status> {
         Err(Status::unimplemented("unrelated history"))
+    }
+    async fn set_session_directories(
+        &self,
+        _: Request<pb::SetSessionDirectoriesRequest>,
+    ) -> Result<Response<pb::GetSessionResponse>, Status> {
+        Err(Status::unimplemented("unrelated workspace"))
     }
     type AuthenticateAgentInteractiveStream =
         Pin<Box<dyn Stream<Item = Result<pb::AuthenticationEvent, Status>> + Send>>;

@@ -273,6 +273,37 @@ impl Bas for Service {
         Ok(Response::new(pb::RemoveAgentResponse {}))
     }
 
+    async fn logout_agent(
+        &self,
+        request: Request<pb::LogoutAgentRequest>,
+    ) -> Result<Response<pb::LogoutAgentResponse>, Status> {
+        local_management(&request)?;
+        let request = request.into_inner();
+        let expected: AgentSpec =
+            serde_json::from_slice(&request.expected_spec_json).map_err(|_| {
+                Status::invalid_argument("expected_spec_json must contain a saved AgentSpec")
+            })?;
+        let catalog = self.registry.catalog();
+        let spec = catalog
+            .spec(&request.agent.into())
+            .filter(|spec| spec.as_ref() == &expected)
+            .ok_or_else(|| Status::failed_precondition("Agent configuration changed; retry"))?;
+        if spec.kind != crate::agent::Kind::Acp {
+            return Err(Status::invalid_argument("Only ACP agents support logout"));
+        }
+        catalog
+            .validate(spec)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        tokio::select! {
+            result = tokio::time::timeout(self.registry.startup_timeout(), crate::agent::acp::logout(spec)) => {
+                result.map_err(|_| Status::deadline_exceeded("Logout timed out; check authentication state before retrying"))?
+                    .map_err(CreateError::Agent)?;
+            }
+            () = self.registry.stopped() => return Err(Status::unavailable("Daemon is stopping")),
+        }
+        Ok(Response::new(pb::LogoutAgentResponse {}))
+    }
+
     async fn authenticate_agent(
         &self,
         request: Request<pb::AuthenticateAgentRequest>,
@@ -908,6 +939,46 @@ impl Bas for Service {
         self.registry.ensure_restored(&session).await?;
         let response = session.set_config_option(request).await?;
         Ok(Response::new((&response).into()))
+    }
+
+    async fn set_session_directories(
+        &self,
+        request: Request<pb::SetSessionDirectoriesRequest>,
+    ) -> Result<Response<pb::GetSessionResponse>, Status> {
+        let request = request.into_inner();
+        let session = self.session(&request.session).await?;
+        let mut directories = Vec::new();
+        for path in request.additional_directories {
+            let path = PathBuf::from(path);
+            if !path.is_absolute() {
+                return Err(Status::invalid_argument(
+                    "additional directories must be absolute",
+                ));
+            }
+            let path = tokio::fs::canonicalize(path)
+                .await
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+            bas::service::utf8_cwd(&path).map_err(|e| Status::invalid_argument(e.to_string()))?;
+            if !tokio::fs::metadata(&path)
+                .await
+                .map_err(|e| Status::invalid_argument(e.to_string()))?
+                .is_dir()
+            {
+                return Err(Status::invalid_argument(
+                    "additional workspace must be a directory",
+                ));
+            }
+            if session.meta().cwd.as_ref() != Some(&path) && !directories.contains(&path) {
+                directories.push(path);
+            }
+        }
+        self.registry.ensure_restored(&session).await?;
+        let snapshot = session
+            .set_directories(directories, self.registry.startup_timeout())
+            .await?;
+        Ok(Response::new(pb::GetSessionResponse {
+            session: Some(pb::Session::try_from(&snapshot).map_err(metadata_error)?),
+        }))
     }
 
     async fn set_mode(

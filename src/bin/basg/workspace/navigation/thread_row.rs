@@ -207,6 +207,7 @@ impl Workspace {
                         crate::i18n::tr!("session-rename"),
                         Some(Box::new(shortcuts::RenameThread)),
                     )
+                    .icon(IconName::Pencil)
                     .disabled(disabled)
                     .on_click(move |_, window, cx| {
                         menus::in_parent(parent, window, cx, |window, cx| {

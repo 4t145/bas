@@ -4,8 +4,8 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 use bas::model::Message;
 use gpui_kit::{
-    AnyWindowHandle, Bounds, WeakEntity, WindowBackgroundAppearance, WindowBounds, WindowKind,
-    WindowOptions, canvas, point,
+    AnyView, AnyWindowHandle, Bounds, WeakEntity, WindowBackgroundAppearance, WindowBounds,
+    WindowKind, WindowOptions, canvas, point,
     popup::{PopupAnchor, PopupConstraintAdjustment, PopupGravity, PopupOptions},
 };
 
@@ -15,15 +15,16 @@ const PREVIEW_WIDTH: f32 = 600.;
 const PREVIEW_HEIGHT: f32 = 360.;
 const IMAGE_PREVIEW_WIDTH: f32 = 360.;
 const IMAGE_PREVIEW_HEIGHT: f32 = 240.;
-const HOVER_DELAY: Duration = Duration::from_millis(350);
-const CLOSE_DELAY: Duration = Duration::from_millis(200);
+pub(super) const HOVER_DELAY: Duration = Duration::from_millis(350);
+pub(super) const CLOSE_DELAY: Duration = Duration::from_millis(200);
 const SUMMARY_CHARACTERS: usize = 120;
 
 pub(super) struct Preview {
     pub window: Option<AnyWindowHandle>,
-    pub content: Entity<ReplyPreview>,
+    pub content: AnyView,
     pub size: Size<Pixels>,
-    key: PreviewKey,
+    pub(super) key: PreviewKey,
+    trigger: Bounds<Pixels>,
     _closed: Subscription,
 }
 
@@ -34,6 +35,7 @@ pub(super) struct ReplyPreview {
     key: PreviewKey,
     documents: Vec<Option<Entity<gpui_kit::component::text::TextViewState>>>,
     images: Vec<Entity<images::Cache>>,
+    audio: Entity<crate::audio::Player>,
     _changed: Vec<Subscription>,
 }
 
@@ -41,6 +43,7 @@ pub(super) struct ReplyPreview {
 pub(super) enum PreviewKey {
     Reply(u64),
     Attachment(uuid::Uuid),
+    Activity,
 }
 
 impl Workspace {
@@ -89,6 +92,7 @@ impl Workspace {
                 )
                 .iter()
                 .any(|mention| mention.attachment.id == id),
+                PreviewKey::Activity => false,
             })
         {
             self.close_reply_preview(window, cx);
@@ -293,18 +297,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let screen = window
-            .display(cx)
-            .map(|display| display.bounds().size)
-            .unwrap_or(window.bounds().size);
-        let (width, height) = match key {
-            PreviewKey::Reply(_) => (PREVIEW_WIDTH, PREVIEW_HEIGHT),
-            PreviewKey::Attachment(_) => (IMAGE_PREVIEW_WIDTH, IMAGE_PREVIEW_HEIGHT),
-        };
-        let preview_size = size(
-            px(width).min(screen.width * 0.8),
-            px(height).min(screen.height * 0.6),
-        );
         let owner = cx.entity();
         let parent = window.window_handle();
         let directory = self
@@ -336,16 +328,44 @@ impl Workspace {
                     .iter()
                     .map(|cache| cx.observe(cache, ReplyPreview::on_content_changed)),
             );
+            changed.push(cx.observe(&self.audio, ReplyPreview::on_content_changed));
             ReplyPreview {
                 owner: owner.downgrade(),
                 parent,
                 message,
                 key,
+                audio: self.audio.clone(),
                 documents,
                 images,
                 _changed: changed,
             }
         });
+        self.open_preview(content.into(), key, trigger, window, cx);
+    }
+
+    pub(super) fn open_preview(
+        &mut self,
+        content: AnyView,
+        key: PreviewKey,
+        trigger: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let screen = window
+            .display(cx)
+            .map(|display| display.bounds().size)
+            .unwrap_or(window.bounds().size);
+        let (width, height) = match key {
+            PreviewKey::Reply(_) => (PREVIEW_WIDTH, PREVIEW_HEIGHT),
+            PreviewKey::Attachment(_) => (IMAGE_PREVIEW_WIDTH, IMAGE_PREVIEW_HEIGHT),
+            PreviewKey::Activity => (activity::PANEL_WIDTH, activity::PANEL_HEIGHT),
+        };
+        let preview_size = size(
+            px(width).min(screen.width * 0.8),
+            px(height).min(screen.height * 0.6),
+        );
+        let owner = cx.entity();
+        let parent = window.window_handle();
         let preview = content.clone();
         let native = match cx.open_window(
             popup_options(parent, trigger, preview_size),
@@ -384,6 +404,7 @@ impl Workspace {
             content,
             size: preview_size,
             key,
+            trigger,
             _closed: closed,
         });
         if native.is_none() {
@@ -392,8 +413,25 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(super) fn inline_preview(&self) -> Option<AnyElement> {
+        let preview = self
+            .window
+            .reply_preview
+            .as_ref()
+            .filter(|preview| preview.window.is_none() && !self.window.compact)?;
+        Some(gpui_kit::deferred(gds_uim::el! {
+            #gpui_kit::anchored {
+                position: $preview.trigger.bottom_left();
+                snap_to_window_with_margin: 8.0.px;
+            } [
+                #div { w: $preview.size.width; h: $preview.size.height; } [$preview.content.clone()],
+            ]
+        }).with_priority(gpui_kit::base::POPUP_PRIORITY).into_any_element())
+    }
+
     pub(super) fn close_reply_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.window.reply_hover = None;
+        self.window.activity_hover = None;
         let Some(preview) = self.window.reply_preview.take() else {
             return;
         };
@@ -420,6 +458,9 @@ impl ReplyPreview {
                 PreviewKey::Reply(_) => this.hover_reply(*hovered, Bounds::default(), window, cx),
                 PreviewKey::Attachment(id) => {
                     this.hover_attachment(id, *hovered, Bounds::default(), window, cx)
+                }
+                PreviewKey::Activity => {
+                    this.hover_activity(*hovered, Bounds::default(), window, cx)
                 }
             });
         });
@@ -458,6 +499,7 @@ impl Render for ReplyPreview {
                         )
                     }),
                     images,
+                    &self.audio,
                     cx,
                 )
             })

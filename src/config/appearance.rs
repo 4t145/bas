@@ -15,6 +15,8 @@ pub struct Appearance {
     pub content_line_height: Option<f32>,
     pub content_opacity: Option<f32>,
     pub composer_enter_behavior: ComposerEnterBehavior,
+    /// None starts new conversations with the most recently used Agent.
+    pub default_agent: Option<String>,
     /// None inherits the safe default: ask before deleting a conversation.
     pub confirm_session_delete: Option<bool>,
     pub background: Background,

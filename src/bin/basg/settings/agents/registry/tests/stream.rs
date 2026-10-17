@@ -21,6 +21,8 @@ use tonic::{Request, Response, Status as RpcStatus, transport::Server};
 
 use super::*;
 
+mod logout;
+
 type ProgressStream = Pin<Box<dyn Stream<Item = Result<pb::AgentOperation, RpcStatus>> + Send>>;
 
 struct FixtureService {
@@ -36,6 +38,8 @@ struct Probes {
     response: Option<pb::CheckAgentResponse>,
     checks: Vec<pb::CheckAgentRequest>,
     logins: Vec<pb::AuthenticateAgentRequest>,
+    logouts: Vec<pb::LogoutAgentRequest>,
+    logout_error: Option<RpcStatus>,
     answers: Vec<pb::ElicitationAnswer>,
     unrelated: Vec<&'static str>,
 }
@@ -147,6 +151,15 @@ macro_rules! fixture_service {
                 }))
             }
 
+            async fn logout_agent(
+                &self, request: Request<pb::LogoutAgentRequest>,
+            ) -> Result<Response<pb::LogoutAgentResponse>, RpcStatus> {
+                let mut probes = self.probes.lock().expect("fixture probes");
+                probes.logouts.push(request.into_inner());
+                if let Some(error) = &probes.logout_error { return Err(error.clone()); }
+                Ok(Response::new(pb::LogoutAgentResponse {}))
+            }
+
             $(async fn $method(
                 &self,
                 _: Request<$request>,
@@ -164,6 +177,7 @@ fixture_service! {
     delete_agent_session(pb::DeleteAgentSessionRequest) -> pb::DeleteSessionResponse;
     close_session(pb::GetSessionRequest) -> pb::GetSessionResponse;
     restart_session(pb::GetSessionRequest) -> pb::GetSessionResponse;
+    set_session_directories(pb::SetSessionDirectoriesRequest) -> pb::GetSessionResponse;
     list_agents(pb::ListAgentsRequest) -> pb::ListAgentsResponse;
     remove_agent(pb::RemoveAgentRequest) -> pb::RemoveAgentResponse;
     create_session(pb::CreateSessionRequest) -> pb::CreateSessionResponse;

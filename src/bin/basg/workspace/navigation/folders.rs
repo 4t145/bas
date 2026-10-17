@@ -111,6 +111,7 @@ impl Workspace {
             return;
         }
         self.navigation.picker.pending = true;
+        self.navigation.picker.session = None;
         self.navigation.picker.waiting_activation = true;
         cx.defer_in(window, |this, window, cx| {
             this.close_menu(window, cx);
@@ -140,11 +141,19 @@ impl Workspace {
     }
 
     fn prompt_local_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.navigation.picker.session.take();
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
-            multiple: false,
-            prompt: Some(crate::i18n::tr!("workspace-choose-folder").into()),
+            multiple: target.is_some(),
+            prompt: Some(
+                if target.is_some() {
+                    crate::i18n::tr!("session-directory-add")
+                } else {
+                    crate::i18n::tr!("workspace-choose-folder")
+                }
+                .into(),
+            ),
         });
         cx.spawn_in(window, async move |view, cx| {
             let result = async { paths.await? }.await;
@@ -152,6 +161,11 @@ impl Workspace {
                 this.navigation.picker.pending = false;
                 match result {
                     Ok(Some(paths)) => {
+                        if let Some((session, epoch)) = target {
+                            this.attach_directories(session, epoch, paths, cx);
+                            cx.notify();
+                            return;
+                        }
                         if let Some(path) = paths.into_iter().next() {
                             if this.window.compact {
                                 this.toggle_mode(window, cx);

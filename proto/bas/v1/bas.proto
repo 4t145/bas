@@ -21,6 +21,8 @@ service Bas {
   rpc RemoveAgent(RemoveAgentRequest) returns (RemoveAgentResponse);
   // Standard agent-driven ACP authentication on a daemon-owned connection.
   rpc AuthenticateAgent(AuthenticateAgentRequest) returns (AuthenticateAgentResponse);
+  // Capability-checked ACP logout; never deletes local configuration or sessions.
+  rpc LogoutAgent(LogoutAgentRequest) returns (LogoutAgentResponse);
   // Interactive ACP authentication; dropping the stream cancels the owned flow.
   rpc AuthenticateAgentInteractive(stream AuthenticationInput) returns (stream AuthenticationEvent);
   // Starts a session on a backend.
@@ -35,6 +37,8 @@ service Bas {
   rpc CloseSession(GetSessionRequest) returns (GetSessionResponse);
   // Explicitly reloads a stopped, non-archived session, preserving its ID and history.
   rpc RestartSession(GetSessionRequest) returns (GetSessionResponse);
+  // Reloads the same idle session with the complete additional-root list.
+  rpc SetSessionDirectories(SetSessionDirectoriesRequest) returns (GetSessionResponse);
   // Lists non-archived sessions by default.
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   // Reads one session's metadata.
@@ -132,6 +136,13 @@ message AuthenticateAgentRequest {
   bytes expected_method_json = 4;
 }
 message AuthenticateAgentResponse { CheckAgentResponse check = 1; }
+
+message LogoutAgentRequest {
+  string agent = 1;
+  // Must match the daemon's configured AgentSpec.
+  bytes expected_spec_json = 2;
+}
+message LogoutAgentResponse {}
 
 message ElicitationAnswer {
   string request_id = 1;
@@ -267,6 +278,20 @@ message Session {
   // Latest valid Agent-reported RFC3339 updatedAt, converted to epoch milliseconds.
   optional uint64 agent_updated_at = 16;
   SessionRuntime runtime = 17;
+  repeated string additional_directories = 18;
+  // Bas Subagents snapshot with native ACP states and per-child capabilities.
+  AcpPayload subagents = 19;
+}
+
+message SetSessionDirectoriesRequest {
+  string session = 1;
+  repeated string additional_directories = 2;
+}
+
+message WorkspaceChanged {
+  repeated string additional_directories = 1;
+  AcpPayload acp = 2;
+  AcpPayload subagents = 3;
 }
 
 message CreateSessionRequest {
@@ -383,6 +408,9 @@ message Event {
     StatusChanged status_changed = 16;
     Failed failed = 17;
     ArchiveChanged archive_changed = 19;
+    WorkspaceChanged workspace_changed = 21;
+    // Original ACP SessionNotification for an announced child.
+    AcpPayload subagent_update = 22;
     TurnInterrupted turn_interrupted = 20;
   }
 }

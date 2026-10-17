@@ -65,6 +65,7 @@ async fn catalog_reports_unknown_backends() {
             session: SessionId::new(),
             spec: Arc::new(AgentSpec::acp("missing", Command::new("nope", Vec::new()))),
             cwd: std::env::current_dir().expect("working directory exists"),
+            additional_directories: Vec::new(),
             host: Arc::new(LocalHost::default()),
             updates: tokio::sync::mpsc::channel(16).0,
         })
@@ -88,6 +89,7 @@ async fn embedded_restore_reuses_public_identity_and_can_prompt() {
                 session: id,
                 spec: Arc::new(AgentSpec::embedded()),
                 cwd: cwd.clone(),
+                additional_directories: Vec::new(),
                 host: Arc::new(LocalHost::default()),
                 updates,
             },

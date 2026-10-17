@@ -1,10 +1,10 @@
 //! Agent-owned history discovery and deletion, without creating a session.
 
-use std::{collections::HashSet, future::Future, path::PathBuf};
+use std::{collections::HashSet, path::PathBuf};
 
-use agent_client_protocol::{Agent, Client, ConnectionTo, schema::v1};
-use tokio::sync::oneshot;
+use agent_client_protocol::schema::v1;
 
+use super::management::with_agent;
 use crate::agent::{AgentSpec, Error};
 
 const MAX_DISCOVERED_SESSIONS: usize = 10_000;
@@ -89,39 +89,4 @@ pub async fn delete(spec: &AgentSpec, id: String) -> Result<(), Error> {
         Ok(())
     })
     .await
-}
-
-async fn with_agent<T, F, Fut>(spec: &AgentSpec, operation: F) -> Result<T, Error>
-where
-    T: Send + 'static,
-    F: FnOnce(ConnectionTo<Agent>, v1::InitializeResponse) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<T, Error>> + Send + 'static,
-{
-    let transport = super::convert::agent(spec)?;
-    let (send, receive) = oneshot::channel();
-    // No filesystem, terminal or interactive capabilities are advertised here.
-    // History browsing must not create a session or authorize tool execution.
-    let connection =
-        Client
-            .builder()
-            .name("bas-history")
-            .connect_with(transport, async move |cx| {
-                let result = async {
-                    let initialization = v1::InitializeRequest::new(
-                        agent_client_protocol::schema::ProtocolVersion::V1,
-                    );
-                    let initialized = cx.send_request(initialization).block_task().await?;
-                    operation(cx, initialized).await
-                }
-                .await;
-                let _ = send.send(result);
-                std::future::pending::<()>().await;
-                Ok(())
-            });
-    tokio::pin!(connection);
-    tokio::select! {
-        biased;
-        result = receive => result.map_err(|_| Error::backend(spec.id.clone(), "Agent history connection closed"))?,
-        result = &mut connection => Err(Error::backend(spec.id.clone(), format!("Agent history connection failed: {result:?}"))),
-    }
 }

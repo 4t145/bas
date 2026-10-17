@@ -306,6 +306,7 @@ impl Workspace {
                 $self.attachment_button(cx) {
                     w: $px(layout::ICON_BUTTON_SIZE); h: $px(layout::ICON_BUTTON_SIZE); p_0;
                 },
+                $self.directories_button(cx),
                 #div { flex_1; min_w_0; } [$self.render_config_options(cx)],
                 ..$self.render_queue(cx),
                 ..$((self.working() && !self.composer.input.read(cx).value().trim().is_empty())

@@ -23,6 +23,8 @@ mod fixture;
 mod history;
 #[cfg(unix)]
 mod permissions;
+#[cfg(unix)]
+mod subagents;
 
 #[cfg(unix)]
 struct RejectPromptStore {
@@ -388,6 +390,7 @@ async fn restore_loads_raw_id_without_creating_a_new_session() {
             session: public_id,
             spec: Arc::new(fixture_spec(mode, &directory)),
             cwd: std::env::current_dir().expect("working directory"),
+            additional_directories: Vec::new(),
             host: Arc::new(LocalHost::default()),
             updates,
         };
@@ -1071,6 +1074,7 @@ async fn cancellation_before_worker_dispatch_has_no_native_result() {
             session: public_id,
             spec: Arc::new(fixture_spec("wait_cancel", &directory)),
             cwd: std::env::current_dir().expect("cwd"),
+            additional_directories: Vec::new(),
             host: Arc::new(LocalHost::default()),
             updates,
         })
@@ -1429,6 +1433,8 @@ async fn metadata_notifications_outside_a_turn_are_preserved_and_foreign_session
     let mut state = State {
         session: Some("fixture".into()),
         active: None,
+        reloading: false,
+        subagents: Default::default(),
     };
     let update = update(
         json!({"sessionUpdate":"config_option_update","configOptions":[{"id":"enabled","name":"Enabled","type":"boolean","currentValue":true}],"_meta":{"revision":4}}),

@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn audio_files_use_audio_content_and_require_the_audio_capability() {
+    let directory = tempfile::tempdir().expect("directory");
+    let path = directory.path().join("voice.wav");
+    fs::write(&path, b"RIFF-fixture").expect("audio");
+    let attachment = Attachment::load(&path).expect("attachment");
+    let acp::ContentBlock::Audio(audio) = attachment.content.as_ref() else {
+        panic!("native AudioContent")
+    };
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&audio.data)
+            .expect("base64"),
+        b"RIFF-fixture"
+    );
+    assert!(audio.mime_type.starts_with("audio/"));
+    assert!(
+        !attachment.supported(
+            &acp::PromptCapabilities::new()
+                .embedded_context(true)
+                .image(true)
+        )
+    );
+    let capabilities = acp::PromptCapabilities::new().audio(true);
+    assert!(attachment.supported(&capabilities));
+    let content = prompt_content(
+        &attachment.mention,
+        std::slice::from_ref(&attachment),
+        &capabilities,
+    );
+    assert_eq!(content, vec![attachment.content.as_ref().clone()]);
+}
+
+#[test]
 fn files_and_images_become_native_acp_content_with_escaped_uris() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let text = directory.path().join("中文 example.rs");

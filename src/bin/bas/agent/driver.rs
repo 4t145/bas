@@ -90,9 +90,17 @@ pub enum Update {
         update: TurnUpdate,
     },
     Acp(acp::SessionUpdate),
+    /// Original child-scoped traffic from an announced subagent.
+    Subagent(acp::SessionNotification),
     /// Ordered state mutation acknowledged after the session commits it.
     Commit {
         update: acp::SessionUpdate,
+        committed: tokio::sync::oneshot::Sender<()>,
+    },
+    Workspace {
+        directories: Vec<PathBuf>,
+        config: acp::NewSessionResponse,
+        subagents: bas::model::Subagents,
         committed: tokio::sync::oneshot::Sender<()>,
     },
     /// Marks that all earlier updates from this backend have been consumed.
@@ -136,6 +144,21 @@ pub trait Agent: Send {
     /// This is distinct from the public [`SessionId`] assigned by the daemon.
     fn acp_session_id(&self) -> Option<String> {
         None
+    }
+
+    fn subagents(&self) -> bas::model::Subagents {
+        bas::model::Subagents::default()
+    }
+
+    /// # Errors
+    /// Returns Unsupported unless the backend can reload an existing session with extra roots.
+    fn set_directories(&self, _directories: Vec<PathBuf>) -> BoxFuture<'static, Result<(), Error>> {
+        Box::pin(async {
+            Err(Error::Unsupported {
+                agent: "backend".into(),
+                operation: "additionalDirectories",
+            })
+        })
     }
 
     /// # Errors
@@ -191,6 +214,7 @@ pub struct LaunchRequest {
     pub session: SessionId,
     pub spec: Arc<AgentSpec>,
     pub cwd: PathBuf,
+    pub additional_directories: Vec<PathBuf>,
     pub host: Arc<dyn Host>,
     pub updates: mpsc::Sender<Update>,
 }

@@ -8,7 +8,7 @@ pub(super) fn label(status: &Status) -> &'static str {
         Status::Checking => crate::i18n::tr!("agent-checking-program"),
         Status::Connecting => crate::i18n::tr!("agent-checking"),
         Status::Authenticating => crate::i18n::tr!("auth-progress"),
-        Status::Installed(_) => crate::i18n::tr!("agent-installed-unchecked"),
+        Status::Installed(_) => crate::i18n::tr!("agent-unchecked"),
         Status::Connected(_) => crate::i18n::tr!("agent-check-passed"),
         Status::AuthenticationRequired { .. } => crate::i18n::tr!("auth-required"),
         Status::Missing(_) => crate::i18n::tr!("agent-program-missing"),

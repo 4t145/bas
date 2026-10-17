@@ -174,6 +174,45 @@ impl Service {
                 .unwrap_or_else(|_| Err(crate::i18n::tr!("agent-remove-ended").into()))
         }
     }
+
+    pub(crate) fn logout(
+        &self,
+        spec: AgentSpec,
+        settings_path: std::path::PathBuf,
+    ) -> impl Future<Output = Result<(), String>> + use<> {
+        let server = self.server;
+        let (send, receive) = oneshot::channel();
+        let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
+            let result = tokio::time::timeout(CATALOG_TIMEOUT, async {
+                let mut client = super::check::verified_client(server, &settings_path).await?;
+                let expected_spec_json =
+                    serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
+                client
+                    .logout_agent(pb::LogoutAgentRequest {
+                        agent: spec.id.to_string(),
+                        expected_spec_json,
+                    })
+                    .await
+                    .map_err(|error| {
+                        if error.code() == tonic::Code::Unimplemented {
+                            crate::i18n::tr!("agent-check-upgrade").into()
+                        } else {
+                            crate::connection::Failure::from(error).presentation()
+                        }
+                    })?;
+                Ok(())
+            })
+            .await
+            .unwrap_or_else(|_| Err(crate::i18n::tr!("agent-logout-unknown").into()));
+            let _ = send.send(result);
+        }));
+        async move {
+            let _task = task;
+            receive
+                .await
+                .unwrap_or_else(|_| Err(crate::i18n::tr!("agent-logout-unknown").into()))
+        }
+    }
 }
 
 /// Both sides must name the same file before the GUI writes local configuration.

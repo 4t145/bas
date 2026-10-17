@@ -5,6 +5,33 @@ mod permissions;
 mod submission;
 
 #[test]
+fn additional_workspace_metadata_and_events_round_trip() {
+    let mut meta = SessionMeta::new(SessionId::new(), "agent".into(), Owner::current());
+    let update = Event::new(
+        meta.id,
+        Cursor::from_raw(1),
+        EventKind::WorkspaceChanged {
+            directories: vec!["/shared".into()],
+            config: acp::NewSessionResponse::new(meta.id.to_string()),
+            subagents: Default::default(),
+        },
+    );
+    assert!(meta.apply_event(&update));
+    assert_eq!(
+        meta.additional_directories,
+        [std::path::PathBuf::from("/shared")]
+    );
+    let wire = pb::Event::from(&update);
+    assert_eq!(Event::try_from(wire).expect("event"), update);
+    let snapshot = SessionSnapshot::from(meta);
+    assert_eq!(
+        SessionSnapshot::try_from(pb::Session::try_from(&snapshot).expect("wire"))
+            .expect("snapshot"),
+        snapshot
+    );
+}
+
+#[test]
 fn agent_reported_timestamp_survives_session_snapshot_transport() {
     let mut meta = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
     meta.agent_updated_at = Some(Timestamp::from_millis(1234));

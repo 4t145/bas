@@ -4,9 +4,11 @@ use tokio::sync::mpsc;
 
 use super::{navigation as workspace_navigation, *};
 
+mod activity;
 mod application;
 mod approval;
 mod archive;
+mod audio;
 mod authentication;
 mod chrome;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -15,6 +17,7 @@ mod composer_expansion;
 mod composer_geometry;
 mod composer_queue;
 mod config;
+mod directories;
 mod elicitation;
 mod history;
 mod interruption;
@@ -36,6 +39,7 @@ mod tool_content;
 mod tooltips;
 mod turn_navigation;
 mod usage;
+mod workspace_removal;
 mod workspaces;
 
 struct Fixture {
@@ -686,7 +690,7 @@ fn late_initialization_cannot_steal_another_agent_or_workspace(cx: &mut TestAppC
             view.select_agent("other-agent".into(), window, cx);
             assert_eq!(view.composer.input.read(cx).value(), "保留草稿");
             view.new_thread(Some(PathBuf::from("/other")), window, cx);
-            view.select_agent("other-agent".into(), window, cx);
+            assert_eq!(view.selected.agent, "other-agent");
         });
         window.input("另一工作区草稿", cx);
         fixture.view.update(cx, |view, cx| {
@@ -712,7 +716,6 @@ fn late_initialization_cannot_steal_another_agent_or_workspace(cx: &mut TestAppC
     assert!(
         matches!(fixture.commands.try_recv(), Ok(Command::Create(form)) if form.agent == "other-agent" && form.cwd == "/tmp")
     );
-    assert!(matches!(fixture.commands.try_recv(), Ok(Command::Detach)));
     assert!(matches!(fixture.commands.try_recv(), Ok(Command::Detach)));
     let Command::Create(form) = fixture
         .commands

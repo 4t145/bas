@@ -35,6 +35,7 @@ impl Workspace {
             | Command::Delete(session)
             | Command::CloseSession(session)
             | Command::RestartSession(session)
+            | Command::SetDirectories { session, .. }
             | Command::Prompt { session, .. }
             | Command::Cancel(session)
             | Command::ResolvePrompt { session, .. }
@@ -54,6 +55,7 @@ impl Workspace {
                     | Command::Prompt { .. }
                     | Command::Cancel(_)
                     | Command::SetConfig(_)
+                    | Command::SetDirectories { .. }
             )
         {
             self.sessions.errors.remove(&session);
@@ -109,10 +111,20 @@ impl Workspace {
                     .expect("GUI session ID"),
                 Err(message),
             ),
+            Command::SetDirectories { session, .. } => {
+                self.sessions.pending.configuring.remove(&session);
+                self.session_operation_error(
+                    session,
+                    crate::i18n::tr!("session-directories-title"),
+                    message,
+                    cx,
+                );
+            }
             Command::Cancel(session) => self.cancelled(session, Err(message)),
             Command::Rename { session, .. } => self.rename_completed(session, Err(message)),
             Command::Archive { session, .. } => {
                 self.sessions.pending.archiving.remove(&session);
+                self.workspace_archive_completed(session, false);
                 self.session_operation_error(
                     session,
                     crate::i18n::tr!("session-archive-update-failed"),

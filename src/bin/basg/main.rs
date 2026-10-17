@@ -4,6 +4,7 @@ mod agents;
 mod application;
 mod assets;
 mod attachment;
+mod audio;
 mod authentication;
 mod branding;
 mod clipboard;

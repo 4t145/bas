@@ -57,6 +57,10 @@ pub(super) enum Command {
     },
     CloseSession(SessionId),
     RestartSession(SessionId),
+    SetDirectories {
+        session: SessionId,
+        directories: Vec<std::path::PathBuf>,
+    },
     Create(CreateSession),
     Rename {
         session: SessionId,
@@ -127,6 +131,10 @@ pub(super) enum Update {
         result: Result<SessionSnapshot, Failure>,
     },
     RestartedSession {
+        session: SessionId,
+        result: Result<SessionSnapshot, Failure>,
+    },
+    DirectoriesUpdated {
         session: SessionId,
         result: Result<SessionSnapshot, Failure>,
     },
@@ -513,6 +521,30 @@ async fn execute(mut client: Client, command: Command) -> Update {
             })
             .await;
             Update::DeletedAgentHistory { epoch, id, result }
+        }
+        Command::SetDirectories {
+            session,
+            directories,
+        } => {
+            let result = request(async {
+                let response = client
+                    .set_session_directories(pb::SetSessionDirectoriesRequest {
+                        session: session.to_string(),
+                        additional_directories: directories
+                            .iter()
+                            .map(|path| bas::service::utf8_cwd(path).map(str::to_owned))
+                            .collect::<Result<_, _>>()?,
+                    })
+                    .await?
+                    .into_inner();
+                response
+                    .session
+                    .ok_or_else(|| anyhow::anyhow!("Missing workspace update"))?
+                    .try_into()
+                    .map_err(Into::into)
+            })
+            .await;
+            Update::DirectoriesUpdated { session, result }
         }
         Command::RestartSession(session) => {
             let result = request(async {

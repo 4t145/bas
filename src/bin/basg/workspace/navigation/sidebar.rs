@@ -2,7 +2,7 @@ use super::groups;
 use crate::workspace::*;
 use gpui_kit::component::menu::PopupMenuItem;
 
-const WORKSPACE_MENU_ROWS: usize = 4;
+const WORKSPACE_MENU_ROWS: usize = 5;
 
 impl Workspace {
     pub(in crate::workspace) fn render_sidebar(
@@ -236,12 +236,15 @@ impl Workspace {
     ) -> menus::Builder {
         let owner = cx.entity().downgrade();
         let parent = self.window.handle;
+        let removable = self.can_remove_workspace(&directory);
         std::rc::Rc::new(move |menu, _, _| {
             let new_owner = owner.clone();
             let new_directory = directory.clone();
             let collapse_owner = owner.clone();
             let collapse_directory = directory.clone();
             let add_owner = owner.clone();
+            let remove_owner = owner.clone();
+            let remove_directory = directory.clone();
             let path = directory
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned());
@@ -295,6 +298,18 @@ impl Workspace {
                             .update(cx, |this, cx| this.open_workspace_add_menu(window, cx));
                     });
                 }),
+            )
+            .item(
+                PopupMenuItem::new(crate::i18n::tr!("workspace-remove"))
+                    .icon(IconName::Archive)
+                    .disabled(!removable)
+                    .on_click(move |_, window, cx| {
+                        menus::in_parent(parent, window, cx, |_, cx| {
+                            let _ = remove_owner.update(cx, |this, cx| {
+                                this.request_remove_workspace(remove_directory.clone(), cx);
+                            });
+                        });
+                    }),
             )
         })
     }

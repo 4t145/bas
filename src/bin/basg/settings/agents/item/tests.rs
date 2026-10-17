@@ -140,8 +140,22 @@ fn configuration_and_installation_share_agent_identity_and_geometry(cx: &mut Tes
                 );
                 assert_eq!(
                     window.find("agents-item-status-codex").label(),
-                    Some("已安装 · 可用")
+                    Some("已安装")
                 );
+                assert!(window.find("agent-logout-codex").visible());
+                assert!(window.find("agents-registry-start-chat-codex").visible());
+                let check = if surface == configuration {
+                    "agents-check-0"
+                } else {
+                    "agents-registry-check-codex"
+                };
+                window.hover("agents-item-name-codex", cx);
+                assert_eq!(window.find(format!("{check}-result")).label(), Some("可用"));
+                assert!(window.find(format!("{check}-result")).visible());
+                assert!(!window.find(format!("{check}-retry")).visible());
+                window.hover(check, cx);
+                assert!(!window.find(format!("{check}-result")).visible());
+                assert!(window.find(format!("{check}-retry")).visible());
                 [
                     "agents-item-name-codex",
                     "agents-item-version-codex",

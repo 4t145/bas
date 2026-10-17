@@ -109,6 +109,7 @@ impl Registry {
                     session: meta.id,
                     spec,
                     cwd,
+                    additional_directories: meta.additional_directories,
                     host: Arc::clone(&self.host),
                     updates: updates.clone(),
                 },

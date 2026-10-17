@@ -24,8 +24,8 @@ ACP 的可选能力不是所有客户端都必须实现。本文是功能差距�
 
 - **已落地**：按 `messageId` 聚合消息，发现／导入 Agent 历史会话，标准关闭与删除。
 - **明确不做**：旧式 `modes` 的 GUI 回退；面向未来，以 `configOptions` 为统一入口。
-- **通用客户端能力**：仍缺少退出登录、客户端 MCP 配置和单会话多工作目录。
-- **执行与多模态**：未实现客户端托管终端；音频没有完整输入／播放体验。
+- **通用客户端能力**：标准退出登录与已有会话的副工作目录已接入；客户端 MCP 配置、skills 管理、委托编排仍待接入。
+- **执行与多模态**：客户端托管终端单独分一期；本轮支持音频文件输入和返回音频的按需播放，不含录音／实时语音。
 - **实验能力**：Subagent、会话分支、原生 ACP v2 和远程 ACP transport 尚未端到端接入。
 
 ## 已有能力，不应列为缺失
@@ -37,6 +37,8 @@ ACP 的可选能力不是所有客户端都必须实现。本文是功能差距�
 | Agent 历史互通 | 独立窗口按 ACP Agent ID 分组、按主工作区 `cwd` 筛选；显式发现历史，在同一 ACP 连接读完分页。导入时加载原会话并保留回放；重复导入返回同一 Bas 记录，映射与历史可持久化恢复。仅支持 resume 时明确提示没有旧消息回放。 |
 | 标准关闭／删除 | 检查 Agent 能力后发送 `session/close`／`session/delete`。关闭保留 Bas 记录为已停止状态；删除 Agent 历史与删除 Bas 本地记录分别确认，互不冒充。 |
 | 用户交互 | 标准工具权限审批；Elicitation 表单和 URL 交互；请求取消与等待状态。 |
+| 退出登录 | GUI 确认后由 daemon 校验配置与标准 logout 能力；不创建会话、不自动重试、不自行删除配置或凭据。 |
+| 文件音频 | 以 AudioContent 发送 `audio/*` 文件，仅向声明音频输入的 Agent 开放；返回 AudioContent 可播放、暂停和停止，回放不自动播放。 |
 | 会话设置 | `configOptions` 的 Select／Bool 控件、更新与错误；Slash commands 目录及补全。 |
 | 展示元素 | 计划、使用量与累计费用、即时通知、上下文压缩、图片、嵌入文本文件、资源链接和 v1 diff。部分展示使用实验扩展或兼容路径，不等于支持原生 v2。 |
 | 文件服务 | daemon 已实现 ACP 文本文件读写回调；不是 GUI 编辑器缓冲区，也不是文件访问沙箱。 |
@@ -57,10 +59,8 @@ ACP 的可选能力不是所有客户端都必须实现。本文是功能差距�
 | 功能 | 当前状态与影响 | 代码依据 |
 | --- | --- | --- |
 | 客户端配置 MCP servers | **未接入**：创建、加载、恢复请求未设置 MCP 配置，使用默认空列表。BasG 不能统一配置工具服务器并交给不同 Agent；Agent 自己原生配置的 MCP 不在此限制之内。 | [会话请求构造](../src/bin/bas/agent/acp.rs#L312-L340) |
-| 单会话多工作目录 | **未接入**：只有一个 `cwd`，没有 `additionalDirectories` 的配置、传输和恢复。不能通过标准 ACP 为同一会话指定主项目、共享库等多个工作根。 | [创建参数](../src/bin/bas/service/server.rs#L437-L459)、[ACP 请求](../src/bin/bas/agent/acp.rs#L312-L340) |
-| 标准退出登录 `logout` | **未接入**：已有登录与交互认证，但没有标准退出登录的 RPC／GUI 流程。移除托管 Agent 保留凭据，不等于退出账号。 | [管理／认证接口](../proto/bas/v1/bas.proto#L20-L25) |
 | 客户端托管终端 | **未实现且未声明**：`terminal: false`，没有 `terminal/create`、`output`、`wait_for_exit`、`kill`、`release` 的执行回调。已有终端输出展示不等于由 Bas 托管进程。 | [能力声明](../src/bin/bas/agent/acp.rs#L367-L383)、[当前终端边界](gui.md#前台交互与后台任务) |
-| 音频输入／输出 | **部分支持**：RPC 能承载 ACP Audio，但 GUI 收到音频只显示 MIME 类型文字，没有播放器；选择音频文件也走普通资源附件路径，没有专门构造 `AudioContent` 或录音入口。 | [音频展示](../src/bin/basg/workspace/chat/content.rs#L705-L707)、[附件构造](../src/bin/basg/attachment.rs#L75-L108) |
+| 录音与实时语音 | **未接入**：已有完整文件的音频输入／播放，尚不提供麦克风采集、实时语音会话或 TTS 服务。 | [音频范围与 Agent 核对](acp-tools-and-audio.md#basg-本轮音频范围) |
 
 ### 消息身份与历史恢复
 
@@ -91,12 +91,17 @@ Bas 自己的列表与 Agent 的历史列表仍是两个目录，浏览不隐式
 
 ### MCP 与多工作目录
 
+MCP 不涵盖所有客户端扩展：skills 的分发／启用由 Agent 或其扩展决定，
+委托工具涉及 Bas 的会话编排，Subagent 展示也不等于客户端委托接口。
+这三项需要分别规划，具体边界见 [工具、skills 与委托](acp-tools-and-audio.md#不只有-mcp工具skills委托是不同层次)。
+
 客户端注入 MCP 配置不要求 Bas 自己成为这些服务器的 MCP 客户端：
 标准流程是通过会话生命周期请求把配置交给 Agent，由 Agent 建立连接。
 HTTP／SSE 等可选 transport 需检查对应 Agent 能力，不能仅因配置能保存就判为可用。
 
 `additionalDirectories` 是单个会话的多个工作根，不是 BasG 已有的多个 workspace 分组。
-新增后应持久化完整配置，并在 load／resume 时重新发送预期根列表；
+BasG 现可在空闲会话中管理副目录，能力协商后以原 ID 和 cwd 重新加载，持久化完整配置，
+并在后续 load／resume 时重新发送预期根列表。含副目录的外部历史会话导入仍暂时拒绝；
 工作根提示本身也不等于对 Agent 进程实施了操作系统级文件隔离。
 
 ## 实验、草案与新版本能力
@@ -105,14 +110,14 @@ HTTP／SSE 等可选 transport 需检查对应 Agent 能力，不能仅因配置
 
 | 功能 | 当前差距 | 依据 |
 | --- | --- | --- |
-| Subagent 子会话 | 未声明 v1 subagent 能力，没有父子会话路由、子会话独立消息／计划／状态与单独取消。当前只能展示适配器折叠进普通工具调用的进度。 | [官方提案](https://agentclientprotocol.com/rfds/subagents)、[当前后台任务边界](gui.md#前台交互与后台任务)、[当前单会话通知校验](../src/bin/bas/agent/acp.rs#L629-L642) |
+| Subagent 子会话 | 已声明 v1 subagents，接入父子关联、嵌套路由、事件持久化与工作状态浮层。仍缺独立子会话全文界面、单独取消和真实 Agent 互操作验收；不会把普通工具调用冒充子 Agent。 | [官方提案](https://agentclientprotocol.com/rfds/subagents)、[当前后台任务边界](gui.md#前台交互与后台任务) |
 | 会话分支 `session/fork` | 没有将现有上下文复制为新会话的 RPC 或 GUI 入口。提案用于不污染原对话地尝试其他路线；不能把它解释成已经提供“从任意历史消息位置分叉”。 | [官方提案](https://agentclientprotocol.com/rfds/session-fork)、[当前会话 RPC](../proto/bas/v1/bas.proto#L26-L65) |
 | 原生 ACP v2 | 握手固定 v1；部分 v2 状态和终端展示处理已实现，但 prompt 插入确认／前台状态生命周期、整条消息 upsert、工具内容 chunk、结构化多文件 diff 和原生终端事件尚未端到端接入。 | [官方迁移说明](https://agentclientprotocol.com/protocol/v2/migration)、[握手](../src/bin/bas/agent/acp.rs#L293-L295)、[已有展示处理](../src/bin/basg/conversation/protocol.rs#L57-L130) |
 | 远程 ACP transport | 当前通过本地子进程 stdio 连接，没有 ACP-over-HTTP／WebSocket。BasG 的 `--server` 是 Bas 的 gRPC 地址，不是远程 ACP Agent 地址。 | [官方提案](https://agentclientprotocol.com/rfds/streamable-http-websocket-transport)、[子进程传输构造](../src/bin/bas/agent/acp/convert.rs#L6-L16) |
 
 后台任务接入还需要把前台状态与任务状态分开：主会话空闲或 prompt 完成，
 不代表所有子任务都结束；断线后的最后一次“运行中”也不能继续当作实时状态。
-这些语义需要落到 daemon、RPC、持久化与 GUI，而不只是增加一个任务面板。
+当前子会话接收链路已在 daemon、RPC、持久化与 GUI 中保持这些区别；完整任务控制仍待接入。
 
 ## 产品增强与适配器限制
 
@@ -133,9 +138,10 @@ HTTP／SSE 等可选 transport 需检查对应 Agent 能力，不能仅因配置
 | --- | --- | --- |
 | 已落地：消息身份 | 消费 `messageId` | 不同 ID 的同角色消息不合并，同一 ID 的交错 chunk 正确归属；无 ID 时保留聚合；直播与回放一致。旧式 modes GUI 回退不在计划内。 |
 | 已落地：会话互通 | Agent 历史发现／导入；标准关闭／删除 | 能力检查、同连接分页、Agent ID 到 Bas ID 的映射、原会话恢复、重启与重复导入、超时及原生错误、GUI 草稿与迟到响应隔离。 |
-| 3：配置与账号 | MCP、多工作目录、退出登录 | 配置能穿过 GUI→RPC→daemon→ACP，并在恢复时保留；能力不足时明确提示。凭据不进入诊断日志；退出登录不静默删除会话。 |
+| 3：工具与上下文 | MCP、skills、委托、多工作目录 | 分别明确标准能力、Agent 扩展和 Bas 编排责任；配置穿过完整链路并在恢复时保留，能力不足时明确提示。标准退出登录已落地。 |
 | 4：并行工作与新协议 | Subagent 与任务视图；v1／v2 并存 | 子会话事件与交互归属正确，单独取消遵循能力声明；重连不把历史状态当成当前状态；v2 接收确认与前台完成分离，v1 不回归。 |
-| 按场景决定 | 音频、diff 审阅、远程连接、客户端托管终端 | 根据真实 Agent 与使用场景验证，不为能力表打勾而实现未使用的执行面。 |
+| 按场景决定 | 实时语音、diff 审阅、远程连接 | 文件音频已落地；进一步能力依据真实 Agent 与使用场景推进。 |
+| 单独一期 | 客户端托管终端 | 本轮不实现、不声明；单独设计进程所有权、生命周期及与后续协议的关系。 |
 
 不建议仅为补全 v1 优先实现客户端托管终端。
 [v2 移除了客户端文件与终端执行接口](https://agentclientprotocol.com/protocol/v2/migration)，

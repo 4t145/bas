@@ -2,9 +2,11 @@
 
 use crate::workspace::*;
 
+mod directories;
 pub(super) mod draft_row;
 mod folders;
 pub(super) mod groups;
+pub(super) mod removal;
 pub(super) mod restore;
 mod sidebar;
 pub(super) mod thread_row;
@@ -16,6 +18,9 @@ impl Workspace {
         query: &str,
     ) -> Vec<groups::Group<'a>> {
         let mut groups = groups::group_threads(sessions, &self.navigation.directories, query);
+        groups.retain(|group| {
+            !group.threads.is_empty() || !self.navigation.hidden.contains(&group.directory)
+        });
         for group in &mut groups {
             group
                 .threads

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn availability_probe_login_and_previous_results_have_separate_labels() {
-    assert_eq!(label(&Status::Installed("/tool".into())), "已安装 · 未验证");
+    assert_eq!(label(&Status::Installed("/tool".into())), "未验证");
     assert_eq!(
         check_label(&Status::Installed("/tool".into())),
         "验证可用性"

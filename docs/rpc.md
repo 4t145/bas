@@ -19,14 +19,19 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | ImportAgentSession | 接收 Agent 原生 `SessionInfo`，加载／恢复指定会话，保存 Bas UUID 与 Agent ID 映射；不调用 `session/new` |
 | CloseSession | 停止运行实例；支持时先调用 `session/close`，否则释放本地实例，保留 Bas 历史 |
 | RestartSession | 显式重新启动已停止且未归档的会话，保留本地 ID 和历史，不发送 prompt |
+| SetSessionDirectories | 替换已有空闲会话的完整副目录列表；原 ID、原 cwd 加载／恢复，不创建替代会话 |
+| Session.additional_directories、WorkspaceChanged | 持久化的副目录与重新加载后配置；按事件游标传播，不改变主目录分组 |
 | DeleteAgentSession | 能力协商后调用 `session/delete`，只删除 Agent 历史；已导入活跃会话须先关闭 |
 | ListAgentCatalog | `bas::management::Catalog` JSON，包含 Registry 和已配置后端 |
 | InstallAgent | 可取消的安装进度流，最终返回已保存的 `AgentSpec` |
 | RemoveAgent | 移除托管注册，保留原生凭据与版本目录 |
 | AuthenticateAgent | daemon 持有 ACP 连接执行标准 agent 认证，再检查 session/new |
+| LogoutAgent | 校验 AgentSpec 后握手，仅在声明 `agentCapabilities.auth.logout` 时调用标准 `logout`；不创建或删除会话 |
 | Session.initialization | `InitializeResponse`，包含 Agent 能力、实现信息与认证方法 |
 | Session.acp | `NewSessionResponse`，包含当前 modes、configOptions 和初始扩展元数据 |
 | Session.available_commands | 最新 `AvailableCommandsUpdate`，不受事件历史裁剪影响 |
+| Session.subagents | 当前已公告子会话的父子关系、名称、描述、ACP 状态与能力快照，包含嵌套子会话 |
+| Event.subagent_update | 原 ACP 子会话 `SessionNotification`；外层 session 仍为 Bas 主会话 UUID，内层保留子会话原 ID |
 | Session.revision、active_turn | 快照包含的最后事件游标，以及当前正在执行的回合 |
 | Session.last_reply | 最近一条 Agent 回复块的游标；用于未读判断，改名/归档等元数据操作不会推进 |
 | Session.agent_updated_at | Agent 的 `session_info_update.updatedAt`，与 daemon 的事件更新时间分别保存 |
@@ -43,6 +48,12 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | SetForeground | 双向流报告前台会话，逐条确认；流断开自动释放状态 |
 | SetTitle | Bas 本地会话标题 |
 
+`SetSessionDirectories` 接收绝对目录列表，在 daemon 主机验证、规范化并去重；
+检查 Agent 的 additionalDirectories 和 load／resume 能力。修改期间拒绝新的 prompt，
+并与关闭、恢复、删除互斥。成功响应的有序回调等待目录与配置原子持久化后才结束，
+即使 RPC 调用方断开也不留下半次修改。Agent 拒绝时保留旧目录；超时等未知结果使运行实例失败，
+不自动重试。已保存目录在重启／恢复路径中重发。此接口不改变 Agent 的操作系统沙箱策略。
+
 客户端始终使用 Bas 的公开 session UUID。后端驱动负责在发给 Agent 的请求中
 换成 Agent 的 sessionId，返回的 `Session.acp.sessionId` 也使用公开 UUID。
 权限与文件回调在 daemon 内使用 ACP 请求及权限结果类型；文件操作和固定权限策略
@@ -53,6 +64,10 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 GUI 按终端 ID 累积输出并渲染，`rawOutput` 作为没有可展示内容时的兜底。
 终端目录与退出信息也保留，空输出的退出事件仍可展示。
 初始化还声明 `plan`、`session.compaction` 和 `session.notices`；
+普通会话连接还声明 `subagents: {}`。子会话必须先由已知父会话公告，不能变更所有权或形成循环；
+子事件不随主回合结束而丢弃，也不进入主回答。子 Notice 仍为实时事件而非历史。
+恢复后旧活动状态先失效，只有 Agent 重新报告的状态才用于工作计数；
+load／resume 重放恢复子会话快照，但不会把已有子消息再次追加进历史。
 这些 v1 实验事件经 RPC 到达 GUI 后转为 v2 展示类型。
 这些能力在初始化时协商，更新 daemon 后应新建 session。这不是一个代理全部 ACP 方法的通用网关。
 
@@ -164,6 +179,12 @@ Form 支持平面字符串、数值、整数、布尔、枚举与多选，校验
 URL 由用户确认后打开，接受请求后仍等待该连接的 `elicitation/complete`。
 认证过程中关闭输入流、窗口或取消会释放 ACP 连接和待处理交互。
 交互内容不进入会话历史；凭据的输入与保存由 Agent 的终端或网站管理。
+
+`LogoutAgent { agent, expected_spec_json }` 仅接受 loopback 调用，沿用本地配置核对，
+并在同一条短连接里先 initialize、再检查标准 logout 能力。不支持时不发送该方法。
+请求受 daemon 启动超时约束，不自动重试，也不通过 `session/new` 验证退出结果。
+原生错误经 status details 保留；GUI 清除旧检测状态，后续由用户显式检测或登录。
+Bas 不改变本地会话、Agent 配置和环境变量；Agent 对已有运行会话及凭据的处理由其实现决定。
 
 ### 快照与回合确认
 

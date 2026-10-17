@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn completed_write_releases_lock_while_a_duplicate_descriptor_remains_open() {
+    let directory = tempfile::tempdir().expect("state directory");
+    let mut store = Store::open(directory.path().join("window.json"));
+    let lock = store.lock().expect("first transaction");
+    let inherited = lock.0.try_clone().expect("duplicate descriptor");
+    assert!(matches!(store.save(None), Err(Error::Busy)));
+    drop(lock);
+    store
+        .save(None)
+        .expect("completed transaction releases its lock");
+    drop(inherited);
+}
+
+#[test]
+fn hidden_workspaces_persist_without_overwriting_other_window_state() {
+    let dir = tempfile::tempdir().expect("state directory");
+    let path = dir.path().join("window.json");
+    let mut a = Store::open(path.clone());
+    let mut b = Store::open(path.clone());
+    let thread = SessionId::new();
+    a.set_workspace_hidden(Some("/workspace".into()), true)
+        .expect("hide");
+    b.set_pinned(thread, true).expect("pin from stale reader");
+    b.save(Some(thread)).expect("selection");
+    let restored = Store::open(path.clone());
+    assert!(
+        restored
+            .hidden_workspaces()
+            .contains(&Some("/workspace".into()))
+    );
+    assert!(restored.pinned().contains(&thread));
+    a.set_workspace_hidden(Some("/workspace".into()), false)
+        .expect("show");
+    assert!(Store::open(path).hidden_workspaces().is_empty());
+}
+
+#[test]
 fn concurrent_writers_are_rejected_before_read_modify_write() {
     let dir = tempfile::tempdir().expect("state directory");
     let path = dir.path().join("state.json");

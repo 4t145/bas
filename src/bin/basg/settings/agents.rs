@@ -2,8 +2,10 @@
 
 use super::action_button as button;
 use crate::ui::Button;
+mod actions;
 mod authentication;
 mod item;
+mod logout;
 mod registry;
 mod status;
 pub(super) mod window;
@@ -167,6 +169,7 @@ pub(super) struct Agents {
     registry: registry::Registry,
     pending_reveal: Option<String>,
     operations: HashMap<String, registry::Operation>,
+    logouts: HashMap<bas::model::AgentId, logout::State>,
     registry_search: Entity<InputState>,
     registry_filter: registry::Filter,
     pub(super) query: String,
@@ -274,6 +277,7 @@ impl Agents {
             registry: registry::Registry::new(cx.try_global::<catalog::Service>().is_some()),
             pending_reveal: None,
             operations: HashMap::new(),
+            logouts: HashMap::new(),
             registry_search,
             registry_filter: registry::Filter::All,
             query: String::new(),
@@ -316,7 +320,7 @@ impl Agents {
         self.document = Some(document);
     }
 
-    fn display_catalog(&self) -> Vec<AgentSpec> {
+    pub(super) fn display_catalog(&self) -> Vec<AgentSpec> {
         if !self.registry.editable() {
             return self
                 .registry
@@ -441,6 +445,10 @@ impl Agents {
     }
 
     fn start_check(&mut self, spec: AgentSpec, connect: bool, cx: &mut Context<Self>) {
+        if self.logging_out(&spec) {
+            return;
+        }
+        self.logouts.remove(&spec.id);
         if spec.kind == Kind::Embedded {
             self.checks.insert(
                 spec.id.clone(),
@@ -836,18 +844,10 @@ impl Agents {
     ) -> gpui_kit::AnyElement {
         let edit = spec.clone();
         let custom = self.catalog().iter().any(|saved| saved.id == spec.id);
-        let probe = spec.clone();
-        let status = self.status(spec);
-        let busy = status.is_some_and(Status::busy);
         gds_uim::el! {
             #div { flex; items_center; gap_1; } [
-                ..$bool::then(spec.kind == Kind::Acp, || gds_uim::el! {
-                    #item::action($format!("agents-check-{index}"), $gpui_kit::assets::IconName::RefreshCw, $status.map_or(crate::i18n::tr!("agent-check"), status::check_label)) {
-                        loading: $busy;
-                        disabled: $(busy || self.dirty(cx) || !self.registry.editable());
-                        on_click: $cx.listener(move |this, _, _, cx| this.start_check(probe.clone(), true, cx));
-                    }
-                }),
+                ..$bool::then(spec.kind == Kind::Acp, || self.check_button(format!("agents-check-{index}"), spec, cx)),
+                $self.account_actions(spec, cx),
                 ..$custom.then(|| gds_uim::el! { #item::action($format!("agents-edit-{index}"), $gpui_kit::assets::IconName::Settings, $crate::i18n::tr!("agent-edit-config")) {
                     disabled: $(!self.registry.editable() || !custom);
                     on_click: $cx.listener(move |this, _, window, cx| {
@@ -875,7 +875,7 @@ impl Agents {
         };
         let card = item::Item {
             status: self.item_status(&entry),
-            status_hint: self.check_detail(spec),
+            status_hint: self.item_status(&entry).unwrap_or_default(),
             feedback: self.item_feedback(&entry),
             actions: self.configuration_actions(index, spec, cx),
             entry,
@@ -1087,6 +1087,7 @@ impl Agents {
                         #div { flex; justify_end; } [
                             Button("agents-add-custom") {
                                 ghost; small; label: $crate::i18n::tr!("agent-add-custom");
+                                icon: gpui_kit::assets::IconName::Plus;
                                 disabled: $(self.document.is_none() || !self.registry.editable());
                                 on_click: $cx.listener(Self::on_add_custom);
                             },

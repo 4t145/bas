@@ -23,6 +23,7 @@ pub(super) struct Effective {
     pub content_line_height: f32,
     pub content_opacity: f32,
     pub composer_enter_behavior: ComposerEnterBehavior,
+    pub default_agent: Option<String>,
     pub confirm_session_delete: bool,
 }
 
@@ -71,6 +72,7 @@ pub(super) fn resolve(
             .content_opacity
             .unwrap_or(DEFAULT_CONTENT_OPACITY),
         composer_enter_behavior: preferences.composer_enter_behavior,
+        default_agent: preferences.default_agent.clone(),
         confirm_session_delete: preferences.confirm_session_delete.unwrap_or(true),
     })
 }

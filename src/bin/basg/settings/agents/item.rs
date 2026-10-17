@@ -153,32 +153,11 @@ impl RenderOnce for Item {
 
 impl Agents {
     pub(super) fn item_status(&self, entry: &Entry) -> Option<String> {
-        if entry
-            .spec
-            .as_ref()
-            .is_some_and(|spec| self.authentications.contains_key(&spec.id))
-        {
-            return None;
-        }
-        let status = entry.spec.as_ref().and_then(|spec| self.status(spec));
         Some(if entry.source == Source::Embedded {
-            crate::i18n::tr!("agent-builtin-ready").into()
-        } else if let Some(status) = status {
-            if status.connected() && entry.source == Source::Registry {
-                format!(
-                    "{} · {}",
-                    crate::i18n::tr!("agent-installed"),
-                    super::status::label(status)
-                )
-            } else {
-                super::status::label(status).into()
-            }
+            crate::i18n::tr!("agent-builtin").into()
         } else {
             match entry.status {
-                Status::Installed if entry.source == Source::Registry => {
-                    crate::i18n::tr!("agent-installed-unchecked").into()
-                }
-                Status::Installed => crate::i18n::tr!("agent-unchecked").into(),
+                Status::Installed => crate::i18n::tr!("agent-installed").into(),
                 Status::NotInstalled => crate::i18n::tr!("agent-not-installed").into(),
                 Status::Missing => crate::i18n::tr!("agent-program-unavailable").into(),
                 Status::Unsupported => crate::i18n::tr!("agent-platform-unsupported").into(),

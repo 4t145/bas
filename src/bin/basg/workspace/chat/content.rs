@@ -58,9 +58,8 @@ impl Workspace {
                                 absolute; top_1; right_1; invisible;
                                 group_hover: $group, $gds_uim::m! { visible; };
                             } [
-                                Button($SharedString::from(format!("copy-{id}"))) {
-                                    ghost; xsmall;
-                                    icon: $IconName::Copy;
+                                $message_actions::action_button(SharedString::from(format!("copy-{id}")), IconName::Copy, cx) {
+                                    accessibility_label: $crate::i18n::tr!("action-copy-message");
                                     tooltip: $crate::i18n::tr!("action-copy-message");
                                     on_click: $move |_, _, cx| copy_chat_text(&copy, cx);
                                 },
@@ -95,7 +94,7 @@ impl Workspace {
     ) -> AnyElement {
         let markdown = block_source(block).map(|text| self.markdown(id.clone(), text, index, cx));
         let images = self.content_images(&id, index, cx);
-        render_content(id, block, markdown, &images, cx)
+        render_content(id, block, markdown, &images, &self.audio, cx)
     }
 
     fn disclosure(
@@ -655,6 +654,7 @@ pub(in crate::workspace) fn render_content(
     block: &ContentBlock,
     markdown: Option<AnyElement>,
     images: &Entity<images::Cache>,
+    audio_player: &Entity<crate::audio::Player>,
     cx: &App,
 ) -> AnyElement {
     match block {
@@ -703,7 +703,7 @@ pub(in crate::workspace) fn render_content(
             _ => caption(crate::i18n::tr!("resource-embedded"), cx).into_any_element(),
         },
         ContentBlock::Audio(audio) => {
-            caption(crate::i18n::tr!("resource-audio", type = (audio.mime_type).to_string()), cx).into_any_element()
+            crate::audio::content(&id, audio, audio_player, cx)
         }
         _ => caption(crate::i18n::tr!("resource-preview-unavailable"), cx).into_any_element(),
     }

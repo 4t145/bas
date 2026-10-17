@@ -1,5 +1,33 @@
 use super::*;
 
+#[gpui_kit::test]
+fn composer_does_not_offer_new_workspace_as_an_attachment(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let existing = session();
+    attach(&fixture, existing.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.composer.input.update(cx, |input, cx| {
+                input.set_value("keep in original conversation", window, cx);
+            });
+        });
+        while fixture.commands.try_recv().is_ok() {}
+        window.render_frame(cx);
+        assert!(window.try_find("add-working-folder").is_none());
+        assert!(window.find("add-attachment").visible());
+    })
+    .expect("attachment toolbar");
+    cx.update(|cx| {
+        let view = fixture.view.read(cx);
+        assert_eq!(view.selected.id, Some(existing.id));
+        assert_eq!(
+            view.composer.input.read(cx).value(),
+            "keep in original conversation"
+        );
+    });
+    assert!(fixture.commands.try_recv().is_err());
+}
+
 fn open_workspace_choices(fixture: &Fixture, cx: &mut TestAppContext) -> gpui_kit::AnyWindowHandle {
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
@@ -45,16 +73,23 @@ fn assert_workspace_commands(
     expected_detaches: usize,
 ) {
     let mut detaches = 0;
+    let mut creates = 0;
     while let Ok(command) = commands.try_recv() {
         match command {
             Command::Foreground(_) => {}
             Command::Detach => detaches += 1,
-            _ => panic!(
-                "choosing a workspace must not create, send, archive, delete or stop a thread"
-            ),
+            Command::Create(request) => {
+                assert!(!request.agent.is_empty());
+                assert!(!request.cwd.is_empty());
+                creates += 1;
+            }
+            _ => {
+                panic!("choosing a working folder must not send, archive, delete or stop a thread")
+            }
         }
     }
     assert_eq!(detaches, expected_detaches);
+    assert_eq!(creates, expected_detaches);
 }
 
 #[gpui_kit::test]
@@ -107,7 +142,7 @@ fn local_folder_selection_preserves_threads_and_restores_workspace_drafts(cx: &m
         assert!(!options.files);
         assert!(options.directories);
         assert!(!options.multiple);
-        assert_eq!(options.prompt.as_deref(), Some("选择工作区文件夹"));
+        assert_eq!(options.prompt.as_deref(), Some("选择工作文件夹"));
         Some(vec![target.clone()])
     });
     cx.executor().run_until_parked();
