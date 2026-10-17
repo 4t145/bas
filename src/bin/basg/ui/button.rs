@@ -4,7 +4,7 @@ use gpui_kit::{
     AnyElement, App, ClickEvent, CursorStyle, ElementId, InteractiveElement, Interactivity,
     IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window,
     component::{
-        Disableable, Icon, RoleOverride, Selectable, Sizable, Size,
+        Disableable, Icon, Selectable, Sizable, Size,
         button::{Button as ComponentButton, ButtonVariant, ButtonVariants},
     },
 };
@@ -40,11 +40,6 @@ impl Button {
         self
     }
 
-    pub(crate) fn role(mut self, role: impl Into<RoleOverride>) -> Self {
-        self.inner = self.inner.role(role);
-        self
-    }
-
     pub(crate) fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.inner = self.inner.tooltip(tooltip);
         self
@@ -55,11 +50,6 @@ impl Button {
         tooltip: impl Fn(&mut Window, &mut App) -> gpui_kit::AnyView + 'static,
     ) -> Self {
         self.inner.interactivity().hoverable_tooltip(tooltip);
-        self
-    }
-
-    pub(crate) fn tab_stop(mut self, tab_stop: bool) -> Self {
-        self.inner = self.inner.tab_stop(tab_stop);
         self
     }
 

@@ -282,16 +282,14 @@ impl Workspace {
             .timeline
             .conversation
             .as_ref()
-            .is_some_and(|conversation| {
-                !conversation.plans.is_empty() || !conversation.notices.is_empty()
-            })
+            .is_some_and(|conversation| !conversation.notices.is_empty())
             .then(|| {
                 gds_uim::el! { #div {
                     id: "compact-feedback"; test_support; flex_shrink_0;
                     max_h: $px(OUTPUT_HEIGHT / 2.); overflow_y_scroll;
                     pl: chat::THREAD_BODY_PADDING.px;
                     pr: $px(turn_navigation::RAIL_WIDTH + chat::THREAD_BODY_PADDING);
-                } [..$self.render_notices(cx), ..$self.render_plan(cx)] }
+                } [..$self.render_notices(cx)] }
             });
         gds_uim::el! { #div {
             id: "agent-output"; test_support; flex; flex_col; flex_1; min_h_0;
@@ -349,6 +347,7 @@ impl Workspace {
                 on_click: $cx.listener(Self::on_layout_toggle_output);
             },
             $self.agent_button(cx),
+            ..$self.render_plan_indicator(cx),
             $self.render_layout_compact_status(cx),
             ..navigation, ..restore, ..authentication,
             $self.application_button(cx),

@@ -327,7 +327,7 @@ fn initialized_agent_waits_for_complete_history_and_no_pending_drafts(cx: &mut T
                 .outboxes
                 .get_mut(&meta.id)
                 .expect("outbox")
-                .withdraw(0);
+                .withdraw(0, Draft::default());
             assert!(view.can_select_agent());
             view.sessions.pending.archiving.insert(meta.id);
             assert!(!view.can_select_agent());

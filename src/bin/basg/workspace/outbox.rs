@@ -54,12 +54,17 @@ pub(super) enum Settlement {
 }
 
 struct Editing {
-    index: usize,
+    /// Queue slot occupied by the edited draft; cleared once it is withdrawn into the editor.
+    slot: Option<usize>,
+    /// Queue position the draft returns to when a withdrawn edit is submitted again.
+    position: usize,
+    /// Composition displaced when the edit began, restored when the edit ends.
     composition: Draft,
 }
 
 pub(super) struct Withdrawal {
-    pub composition: Option<Draft>,
+    /// Message removed from the queue and handed back to the editor.
+    pub retrieved: Option<Draft>,
 }
 
 /// Owns drafts from enqueue until acceptance. Metadata and replay progress are
@@ -170,7 +175,11 @@ impl SessionOutbox {
     }
 
     pub fn editing(&self) -> Option<usize> {
-        self.editing.as_ref().map(|editing| editing.index)
+        self.editing.as_ref().and_then(|editing| editing.slot)
+    }
+
+    pub fn editing_active(&self) -> bool {
+        self.editing.is_some()
     }
 
     pub fn paused(&self) -> bool {
@@ -194,15 +203,24 @@ impl SessionOutbox {
         }
     }
 
-    /// Submitting an edit replaces its reserved slot; the displaced composition
+    /// Submitting an edit replaces its reserved slot; a draft withdrawn into the
+    /// editor returns to its original queue position. The displaced composition
     /// returns to the composer, not to the send queue.
     pub fn enqueue(&mut self, draft: Draft) -> Option<Draft> {
         self.paused = false;
         if let Some(editing) = self.editing.take() {
-            *self
-                .queue
-                .get_mut(editing.index)
-                .expect("editing reserves a queue slot") = draft;
+            match editing.slot {
+                Some(index) => {
+                    *self
+                        .queue
+                        .get_mut(index)
+                        .expect("editing reserves a queue slot") = draft;
+                }
+                None => {
+                    let position = editing.position.min(self.queue.len());
+                    self.queue.insert(position, draft);
+                }
+            }
             Some(editing.composition)
         } else {
             self.queue.push_back(draft);
@@ -212,11 +230,21 @@ impl SessionOutbox {
 
     pub fn enqueue_immediate(&mut self, draft: Draft, interrupt: bool) -> Option<Draft> {
         let (index, composition) = if let Some(editing) = self.editing.take() {
-            *self
-                .queue
-                .get_mut(editing.index)
-                .expect("editing reserves a queue slot") = draft;
-            (editing.index, Some(editing.composition))
+            let index = match editing.slot {
+                Some(index) => {
+                    *self
+                        .queue
+                        .get_mut(index)
+                        .expect("editing reserves a queue slot") = draft;
+                    index
+                }
+                None => {
+                    let position = editing.position.min(self.queue.len());
+                    self.queue.insert(position, draft);
+                    position
+                }
+            };
+            (index, Some(editing.composition))
         } else {
             self.queue.push_back(draft);
             (self.queue.len() - 1, None)
@@ -235,7 +263,11 @@ impl SessionOutbox {
             return None;
         }
         let draft = self.queue.get(index)?.clone();
-        self.editing = Some(Editing { index, composition });
+        self.editing = Some(Editing {
+            slot: Some(index),
+            position: index,
+            composition,
+        });
         self.paused = true;
         Some(draft)
     }
@@ -246,23 +278,38 @@ impl SessionOutbox {
         self.editing.take().map(|editing| editing.composition)
     }
 
-    pub fn withdraw(&mut self, index: usize) -> Option<Withdrawal> {
+    /// Removing a queued message returns it to the editor unless another edit
+    /// already owns the composer; its composition stays held until that edit ends.
+    pub fn withdraw(&mut self, index: usize, composition: Draft) -> Option<Withdrawal> {
         if self.sending() || self.interrupting {
             return None;
         }
-        self.queue.remove(index)?;
-        let composition = match self.editing.as_mut() {
-            Some(editing) if editing.index == index => self.cancel_edit(),
-            Some(editing) if editing.index > index => {
-                editing.index -= 1;
+        let draft = self.queue.remove(index)?;
+        let retrieved = match self.editing.as_mut() {
+            Some(editing) => {
+                match editing.slot {
+                    Some(slot) if slot == index => {
+                        editing.slot = None;
+                        editing.position = index;
+                    }
+                    Some(slot) if slot > index => editing.slot = Some(slot - 1),
+                    _ => {}
+                }
                 None
             }
-            _ => None,
+            None => {
+                self.editing = Some(Editing {
+                    slot: None,
+                    position: index,
+                    composition,
+                });
+                Some(draft)
+            }
         };
         if index == 0 {
             self.priority = false;
         }
-        Some(Withdrawal { composition })
+        Some(Withdrawal { retrieved })
     }
 
     /// One explicit send may bypass a paused queue without resuming its other drafts.

@@ -4,7 +4,7 @@ mod protocol;
 mod response;
 mod terminal;
 
-pub(super) use protocol::{Compaction, ProtocolNotice, plan_id};
+pub(super) use protocol::{Compaction, ProtocolNotice};
 
 pub(super) enum Item {
     Message { message: Message, streaming: bool },

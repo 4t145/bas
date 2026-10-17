@@ -3,7 +3,7 @@
 use gds_uim::el;
 use gpui_kit::base::StyledExt;
 use gpui_kit::{
-    AnyView, App, Div, FontWeight, IntoElement, ParentElement, SharedString, Stateful,
+    AnyElement, AnyView, App, Div, FontWeight, IntoElement, ParentElement, SharedString, Stateful,
     StatefulInteractiveElement, TestSupportExt, Window, component::ActiveTheme,
     component::tooltip::Tooltip, div, prelude::*, px,
 };
@@ -59,25 +59,43 @@ pub(crate) fn view_with_id(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyView {
+    let text = text.into();
+    let content = wrap_tokens(&text);
+    element(
+        id,
+        text,
+        move |_, _| el! { #div { whitespace_normal; } [$content.clone()] }.into_any_element(),
+        window,
+        cx,
+    )
+}
+
+/// Attach a custom hint whose rows are built whenever the tooltip is shown.
+pub(crate) fn element(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    content: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyView {
     let viewport = window.viewport_size();
     let width = (f32::from(viewport.width) - EDGE_SPACE).clamp(1., MAX_WIDTH);
     let height = (f32::from(viewport.height) - EDGE_SPACE).clamp(1., MAX_HEIGHT);
-    let text = text.into();
-    let content = wrap_tokens(&text);
+    let label = label.into();
     let style = crate::theme::font_style(cx);
-    Tooltip::element(move |_, _| {
+    Tooltip::element(move |window, cx| {
         el! {
             #div {
                 id: id;
                 test_support;
                 role: gpui_kit::Role::Label;
-                aria_label: $text.clone();
+                aria_label: $label.clone();
                 max_w: $px((width - 16.).max(1.));
                 max_h: $px((height - 12.).max(1.));
                 overflow_y_scroll;
                 text_size: crate::ui::SMALL;
                 whitespace_normal;
-            } [$content.clone()]
+            } [$content(window, cx)]
         }
     })
     .refine_style(&style)

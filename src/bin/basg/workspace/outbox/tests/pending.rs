@@ -15,9 +15,9 @@ fn withdrawing_an_earlier_message_keeps_the_edit_reserved_for_its_original_slot(
     );
     assert!(
         outbox
-            .withdraw(0)
+            .withdraw(0, draft("composition"))
             .expect("withdraw A")
-            .composition
+            .retrieved
             .is_none()
     );
     assert_eq!(outbox.editing(), Some(1));
@@ -38,25 +38,94 @@ fn withdrawing_an_earlier_message_keeps_the_edit_reserved_for_its_original_slot(
 }
 
 #[test]
-fn withdrawing_the_edited_message_restores_the_displaced_composition() {
+fn withdrawing_a_message_returns_it_to_the_editor_and_holds_the_composition() {
+    let mut outbox = SessionOutbox::default();
+    outbox.enqueue(draft("A"));
+    outbox.enqueue(draft("B"));
+    assert_eq!(
+        outbox
+            .withdraw(0, draft("composition"))
+            .expect("withdraw A")
+            .retrieved
+            .expect("return A to the editor")
+            .text,
+        "A"
+    );
+    assert!(outbox.editing_active());
+    assert_eq!(outbox.editing(), None);
+    assert!(
+        outbox.advance(&idle(1), true).is_none(),
+        "the detached edit pauses the queue"
+    );
+    assert_eq!(
+        outbox.cancel_edit().expect("restore composition").text,
+        "composition"
+    );
+    assert_eq!(outbox.front().expect("B remains queued").text, "B");
+}
+
+#[test]
+fn sending_a_withdrawn_message_returns_it_to_its_queue_position() {
+    let mut outbox = SessionOutbox::default();
+    for text in ["A", "B", "C"] {
+        outbox.enqueue(draft(text));
+    }
+    assert_eq!(
+        outbox
+            .withdraw(1, draft("composition"))
+            .expect("withdraw B")
+            .retrieved
+            .expect("return B to the editor")
+            .text,
+        "B"
+    );
+    assert_eq!(
+        outbox
+            .enqueue(draft("B'"))
+            .expect("restore composition")
+            .text,
+        "composition"
+    );
+    assert_eq!(
+        outbox
+            .iter()
+            .map(|draft| draft.text.as_str())
+            .collect::<Vec<_>>(),
+        ["A", "B'", "C"],
+        "submitting a withdrawn edit keeps its queue position"
+    );
+}
+
+#[test]
+fn withdrawing_the_edited_message_keeps_it_in_the_editor() {
     let mut outbox = SessionOutbox::default();
     outbox.enqueue(draft("A"));
     outbox.enqueue(draft("B"));
     outbox.begin_edit_at(1, draft("composition"));
+    assert!(
+        outbox
+            .withdraw(1, draft("composition"))
+            .expect("withdraw edited B")
+            .retrieved
+            .is_none(),
+        "the composer already holds the edited message"
+    );
+    assert!(outbox.editing_active());
+    assert_eq!(outbox.editing(), None);
     assert_eq!(
         outbox
-            .withdraw(1)
-            .expect("withdraw edited B")
-            .composition
-            .expect("restore")
+            .enqueue(draft("B'"))
+            .expect("restore composition")
             .text,
         "composition"
     );
-    assert!(outbox.editing().is_none());
-    assert_eq!(outbox.front().expect("A remains queued").text, "A");
-    assert!(outbox.advance(&idle(1), true).is_none());
-    outbox.resume();
-    assert_eq!(sent(outbox.advance(&idle(1), true)), "A");
+    assert_eq!(
+        outbox
+            .iter()
+            .map(|draft| draft.text.as_str())
+            .collect::<Vec<_>>(),
+        ["A", "B'"]
+    );
 }
 
 #[test]

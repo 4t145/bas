@@ -18,7 +18,7 @@ impl Workspace {
                 .sessions
                 .outboxes
                 .get(&session)
-                .is_some_and(outbox::SessionOutbox::pending)
+                .is_some_and(|outbox| outbox.pending() || outbox.editing_active())
         {
             self.enqueue_draft(session, draft.text, window, cx);
             return;

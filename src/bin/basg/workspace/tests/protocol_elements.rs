@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::*;
 use bas::acp;
 
@@ -85,12 +87,13 @@ fn plans_usage_compaction_and_dismissible_notices_are_visible(cx: &mut TestAppCo
         });
         window.render_frame(cx);
         assert_eq!(
-            window.find("plan-release-status-0").label(),
-            Some("已完成 · 高优先级")
-        );
-        assert_eq!(
-            window.find("plan-release-status-1").label(),
-            Some("待完成 · 低优先级")
+            crate::i18n::visible_text(
+                window
+                    .find("session-plan-indicator")
+                    .label()
+                    .expect("plan indicator")
+            ),
+            "计划 · 1 项待完成"
         );
         assert!(window.find("session-usage").bounds().size.height > px(0.));
         assert_eq!(
@@ -118,7 +121,7 @@ fn plans_usage_compaction_and_dismissible_notices_are_visible(cx: &mut TestAppCo
         window.bounds_changed(cx);
         window.render_frame(cx);
         assert!(window.find("protocol-notice-1").visible());
-        assert!(window.find("session-plans").visible());
+        assert!(window.find("session-plan-indicator").visible());
         assert!(window.find("conversation-timeline").bounds().size.height >= px(100.));
         window.click("dismiss-protocol-notice-1", cx);
         window.render_frame(cx);
@@ -139,6 +142,88 @@ fn plans_usage_compaction_and_dismissible_notices_are_visible(cx: &mut TestAppCo
         );
     })
     .expect("protocol elements render");
+}
+
+#[gpui_kit::test]
+fn plan_indicator_hover_lists_only_unfinished_entries(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.update(
+                Update::Event {
+                    epoch: view.selected.epoch,
+                    event: Event::new(
+                        meta.id,
+                        Cursor::from_raw(1),
+                        EventKind::Acp(acp::SessionUpdate::PlanUpdate(acp::PlanUpdate::new(
+                            acp::PlanUpdateContent::items(
+                                "release",
+                                vec![
+                                    acp::PlanEntry::new(
+                                        "setup",
+                                        acp::PlanEntryPriority::High,
+                                        acp::PlanEntryStatus::Completed,
+                                    ),
+                                    acp::PlanEntry::new(
+                                        "test",
+                                        acp::PlanEntryPriority::High,
+                                        acp::PlanEntryStatus::InProgress,
+                                    ),
+                                    acp::PlanEntry::new(
+                                        "publish",
+                                        acp::PlanEntryPriority::Low,
+                                        acp::PlanEntryStatus::Pending,
+                                    ),
+                                ],
+                            ),
+                        ))),
+                    ),
+                },
+                window,
+                cx,
+            );
+            view.composer.expanded = false;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            crate::i18n::visible_text(
+                window
+                    .find("session-plan-indicator")
+                    .label()
+                    .expect("plan indicator")
+            ),
+            "计划 · 2 项待完成"
+        );
+        window.hover("session-plan-indicator", cx);
+    })
+    .expect("plan indicator");
+    cx.executor().advance_clock(Duration::from_millis(600));
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            crate::i18n::visible_text(window.find("plan-hint").label().expect("plan hint")),
+            "计划 · 2 项待完成"
+        );
+        assert_eq!(
+            crate::i18n::visible_text(
+                window
+                    .find("plan-hint-row-0")
+                    .label()
+                    .expect("plan progress")
+            ),
+            "计划 · 1/3 已完成"
+        );
+        assert_eq!(window.find("plan-hint-row-1").label(), Some("test"));
+        assert_eq!(window.find("plan-hint-row-2").label(), Some("publish"));
+        assert!(
+            window.try_find("plan-hint-row-3").is_none(),
+            "completed entries stay out of the hover hint"
+        );
+    })
+    .expect("plan hint");
 }
 
 #[gpui_kit::test]

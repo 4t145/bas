@@ -158,16 +158,17 @@ impl Workspace {
         if self.selected.id != Some(session) {
             return;
         }
+        let composition = self.composer.draft(cx);
         let Some(withdrawal) = self
             .sessions
             .outboxes
             .get_mut(&session)
-            .and_then(|outbox| outbox.withdraw(index))
+            .and_then(|outbox| outbox.withdraw(index, composition))
         else {
             return;
         };
-        if let Some(composition) = withdrawal.composition {
-            self.restore_queue_composition(composition, window, cx);
+        if let Some(draft) = withdrawal.retrieved {
+            self.restore_queue_composition(draft, window, cx);
         }
         cx.notify();
     }
@@ -293,8 +294,9 @@ impl Workspace {
             return None;
         }
         let editing = outbox.editing();
+        let editing_active = outbox.editing_active();
         let busy = self.sending(session) || self.sessions.pending.cancelling.contains(&session);
-        let send_ready = self.queue_send_ready(session) && editing.is_none();
+        let send_ready = self.queue_send_ready(session) && !editing_active;
         let unknown = outbox.unknown().is_some().then(|| {
             el! {
                 #div { flex; flex_wrap; items_center; gap_2; px_3; py_1; } [
@@ -325,7 +327,7 @@ impl Workspace {
         } else {
             crate::i18n::tr!("queue-count", count = outbox.len())
         };
-        let resume = (outbox.paused() && editing.is_none()).then(|| {
+        let resume = (outbox.paused() && !editing_active).then(|| {
             el! {
                 Button("resume-pending-messages") {
                     ghost; xsmall;
@@ -343,44 +345,47 @@ impl Workspace {
             ]
         };
         let rows = outbox.iter().enumerate().map(|(index, draft)| {
-            let edit = el! {
-                Button($SharedString::from(format!("edit-pending-message-{index}"))) {
-                    ghost; xsmall;
-                    label: $if editing == Some(index) {
-                        crate::i18n::tr!("queue-editing")
-                    } else {
-                        crate::i18n::tr!("action-edit")
-                    };
-                    disabled: $busy || editing.is_some();
-                    on_click: $cx.listener(move |this, _, window, cx| {
-                        this.edit_queue_draft(session, index, window, cx)
-                    });
-                }
+            let edit_hint = if editing == Some(index) {
+                crate::i18n::tr!("queue-editing")
+            } else {
+                crate::i18n::tr!("action-edit")
             };
-            let withdraw = el! {
-                Button($SharedString::from(format!("withdraw-pending-message-{index}"))) {
-                    ghost; xsmall;
-                    label: $crate::i18n::tr!("queue-withdraw");
-                    disabled: busy;
-                    on_click: $cx.listener(move |this, _, window, cx| {
-                        this.withdraw_queue_draft(session, index, window, cx)
-                    });
-                }
+            let edit = crate::ui::icon_button(
+                SharedString::from(format!("edit-pending-message-{index}")),
+                IconName::Pencil,
+            )
+            .accessibility_label(edit_hint)
+            .tooltip(edit_hint)
+            .disabled(busy || editing_active)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.edit_queue_draft(session, index, window, cx)
+            }));
+            let withdraw_hint = crate::i18n::tr!("queue-withdraw");
+            let withdraw = crate::ui::icon_button(
+                SharedString::from(format!("withdraw-pending-message-{index}")),
+                IconName::ArrowLeft,
+            )
+            .accessibility_label(withdraw_hint)
+            .tooltip(withdraw_hint)
+            .disabled(busy)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.withdraw_queue_draft(session, index, window, cx)
+            }));
+            let send_hint = if self.working() {
+                crate::i18n::tr!("queue-interrupt")
+            } else {
+                crate::i18n::tr!("action-send")
             };
-            let send = el! {
-                Button($SharedString::from(format!("send-pending-message-{index}"))) {
-                    ghost; xsmall;
-                    label: $if self.working() {
-                        crate::i18n::tr!("queue-interrupt")
-                    } else {
-                        crate::i18n::tr!("action-send")
-                    };
-                    disabled: $!send_ready;
-                    on_click: $cx.listener(move |this, _, _, cx| {
-                        this.send_queue_draft_immediately(session, index, cx)
-                    });
-                }
-            };
+            let send = crate::ui::icon_button(
+                SharedString::from(format!("send-pending-message-{index}")),
+                IconName::Send,
+            )
+            .accessibility_label(send_hint)
+            .tooltip(send_hint)
+            .disabled(!send_ready)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.send_queue_draft_immediately(session, index, cx)
+            }));
             el! {
                 #div {
                     id: $SharedString::from(format!("pending-message-{index}"));

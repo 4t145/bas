@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn cancelled_plan_entries_are_not_remaining_work() {
+    let plans = [acp2::PlanUpdate::new(acp2::PlanUpdateContent::Items(
+        acp2::PlanItems::new(
+            "release",
+            vec![
+                acp2::PlanEntry::new(
+                    "done",
+                    acp2::PlanEntryPriority::High,
+                    acp2::PlanEntryStatus::Completed,
+                ),
+                acp2::PlanEntry::new(
+                    "cancelled",
+                    acp2::PlanEntryPriority::Low,
+                    acp2::PlanEntryStatus::Cancelled,
+                ),
+                acp2::PlanEntry::new(
+                    "pending",
+                    acp2::PlanEntryPriority::Medium,
+                    acp2::PlanEntryStatus::Pending,
+                ),
+            ],
+        ),
+    ))];
+    assert_eq!(plan_remaining(&plans), 1);
+}
+
+#[test]
 fn cancelled_plan_entries_are_not_counted_as_completed() {
     let entries = [
         acp2::PlanEntry::new(

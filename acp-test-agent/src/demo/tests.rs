@@ -9,6 +9,18 @@ fn help_lists_every_advertised_command() {
 }
 
 #[test]
+fn help_renders_as_a_markdown_list() {
+    let help = help_text();
+    assert!(help.starts_with("ACP test agent demos:\n\n- `/"), "{help}");
+    assert_eq!(
+        help.lines()
+            .filter(|line| line.starts_with("- `/") && line.contains(" — "))
+            .count(),
+        super::COMMANDS.len()
+    );
+}
+
+#[test]
 fn config_settings_update_values_and_reject_unknown_names() {
     let mut config = SessionConfig::default();
     apply_config_setting(&mut config, None).unwrap();

@@ -190,9 +190,13 @@ impl Default for SessionConfig {
 /// Human-readable list used by `/help`.
 #[must_use]
 pub fn help_text() -> String {
-    let mut text = String::from("ACP test agent demos:\n");
+    let mut text = String::from("ACP test agent demos:\n\n");
     for command in COMMANDS {
-        text.push_str(&format!("/{} - {}\n", command.name, command.description));
+        text.push_str(&format!(
+            "- `/{name}` — {description}\n",
+            name = command.name,
+            description = command.description
+        ));
     }
     text
 }

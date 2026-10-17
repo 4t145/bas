@@ -1,15 +1,14 @@
 //! First-party presentation for ACP plans, notices, and context compaction.
 
-use crate::conversation::{Compaction, ProtocolNotice, plan_id};
+use crate::conversation::{Compaction, ProtocolNotice};
 use bas::acp_v2 as acp2;
 use gds_uim::el;
+use gpui_kit::component::badge::Badge;
 
 use super::*;
 
-const PLAN_PANEL_HEIGHT: f32 = 220.;
 const NOTICE_PANEL_HEIGHT: f32 = 180.;
-// Plan documents live outside the virtual transcript and do not need row remeasurement.
-const PLAN_DOCUMENT_INDEX: usize = usize::MAX;
+const PLAN_PREVIEW_CHARACTERS: usize = 320;
 
 fn plan_progress(entries: &[acp2::PlanEntry]) -> String {
     let completed = entries
@@ -21,6 +20,173 @@ fn plan_progress(entries: &[acp2::PlanEntry]) -> String {
         completed = completed,
         total = entries.len()
     )
+}
+
+fn unfinished(entry: &acp2::PlanEntry) -> bool {
+    !matches!(
+        entry.status,
+        acp2::PlanEntryStatus::Completed | acp2::PlanEntryStatus::Cancelled
+    )
+}
+
+fn plan_remaining(plans: &[acp2::PlanUpdate]) -> usize {
+    plans
+        .iter()
+        .map(|plan| match &plan.plan {
+            acp2::PlanUpdateContent::Items(items) => items
+                .entries
+                .iter()
+                .filter(|entry| unfinished(entry))
+                .count(),
+            _ => 0,
+        })
+        .sum()
+}
+
+fn plan_has_entries(plans: &[acp2::PlanUpdate]) -> bool {
+    plans.iter().any(|plan| {
+        matches!(&plan.plan, acp2::PlanUpdateContent::Items(items) if !items.entries.is_empty())
+    })
+}
+
+fn truncated(text: &str, limit: usize) -> String {
+    let mut chars = text.chars();
+    let preview: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        format!("{preview}…")
+    } else {
+        preview
+    }
+}
+
+#[derive(Clone)]
+enum PlanHintRow {
+    Heading(String),
+    Preview(String),
+    Pending(String),
+    InProgress(String),
+    Other(String),
+}
+
+fn plan_hint_rows(plans: &[acp2::PlanUpdate]) -> Vec<PlanHintRow> {
+    let mut rows = Vec::new();
+    for plan in plans {
+        match &plan.plan {
+            acp2::PlanUpdateContent::Items(items) => {
+                rows.push(PlanHintRow::Heading(plan_progress(&items.entries)));
+                rows.extend(
+                    items
+                        .entries
+                        .iter()
+                        .filter(|entry| unfinished(entry))
+                        .map(|entry| match entry.status {
+                            acp2::PlanEntryStatus::InProgress => {
+                                PlanHintRow::InProgress(entry.content.clone())
+                            }
+                            acp2::PlanEntryStatus::Pending => {
+                                PlanHintRow::Pending(entry.content.clone())
+                            }
+                            _ => PlanHintRow::Other(entry.content.clone()),
+                        }),
+                );
+            }
+            acp2::PlanUpdateContent::Markdown(plan) => {
+                rows.push(PlanHintRow::Heading(
+                    crate::i18n::tr!("plan-title").to_string(),
+                ));
+                rows.push(PlanHintRow::Preview(truncated(
+                    &plan.content,
+                    PLAN_PREVIEW_CHARACTERS,
+                )));
+            }
+            acp2::PlanUpdateContent::File(plan) => {
+                rows.push(PlanHintRow::Heading(
+                    crate::i18n::tr!("plan-file").to_string(),
+                ));
+                rows.push(PlanHintRow::Preview(plan.uri.clone()));
+            }
+            acp2::PlanUpdateContent::Other(plan) => {
+                rows.push(PlanHintRow::Heading(crate::i18n::tr!(
+                    "plan-type",
+                    type = (plan.type_).to_string()
+                )));
+            }
+            _ => {
+                rows.push(PlanHintRow::Heading(
+                    crate::i18n::tr!("plan-preview-unavailable").to_string(),
+                ));
+            }
+        }
+    }
+    rows
+}
+
+struct PlanHint {
+    label: String,
+    content: AnyElement,
+}
+
+fn plan_hint_content(rows: &[PlanHintRow], cx: &App) -> AnyElement {
+    el! {
+        #div { flex; flex_col; gap_1; min_w_0; } [..$rows.iter().enumerate().map(|(index, row)| {
+            let PlanHint { label, content } = plan_hint_row(row, cx);
+            el! {
+                #div {
+                    id: $SharedString::from(format!("plan-hint-row-{index}"));
+                    test_support; role: gpui_kit::Role::Label;
+                    aria_label: $label;
+                    flex; items_start; gap_1p5; min_w_0;
+                } [$content]
+            }
+        })]
+    }
+    .into_any_element()
+}
+
+fn plan_hint_row(row: &PlanHintRow, cx: &App) -> PlanHint {
+    let (marker, text, heading) = match row {
+        PlanHintRow::Heading(text) => (None, text.as_str(), true),
+        PlanHintRow::Preview(text) => (None, text.as_str(), false),
+        PlanHintRow::Pending(text) => (
+            Some((IconName::Circle, cx.theme().muted_foreground)),
+            text.as_str(),
+            false,
+        ),
+        PlanHintRow::InProgress(text) => (
+            Some((IconName::Loader, cx.theme().primary)),
+            text.as_str(),
+            false,
+        ),
+        PlanHintRow::Other(text) => (
+            Some((IconName::CircleAlert, cx.theme().muted_foreground)),
+            text.as_str(),
+            false,
+        ),
+    };
+    let content = el! {
+        #div {
+            flex_1; min_w_0; whitespace_normal;
+            @$heading => {
+                font_weight: FontWeight::SEMIBOLD;
+                text_color: $cx.theme().muted_foreground;
+            };
+        } [$crate::ui::tooltip::wrap_tokens(text)]
+    }
+    .into_any_element();
+    let content = match marker {
+        Some((icon, color)) => el! {
+            #div { flex; items_start; gap_1p5; min_w_0; } [
+                Icon($icon) { size: crate::ui::SMALL_ICON.px; text_color: $color; },
+                $content,
+            ]
+        }
+        .into_any_element(),
+        None => content,
+    };
+    PlanHint {
+        label: text.to_owned(),
+        content,
+    }
 }
 
 fn compaction_summary_blocks(summary: &[acp2::ContentBlock]) -> Vec<acp2::ContentBlock> {
@@ -40,161 +206,57 @@ fn compaction_summary_blocks(summary: &[acp2::ContentBlock]) -> Vec<acp2::Conten
 }
 
 impl Workspace {
-    pub(super) fn render_plan(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_plan_indicator(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let plans = &self.selected.timeline.conversation.as_ref()?.plans;
         if plans.is_empty() {
             return None;
         }
-        let cards = plans.iter().map(|plan| self.render_plan_card(plan, cx));
+        let remaining = plan_remaining(plans);
+        let hint = if remaining > 0 {
+            crate::i18n::tr!("plan-indicator", count = remaining).to_string()
+        } else if plan_has_entries(plans) {
+            crate::i18n::tr!("plan-complete").to_string()
+        } else {
+            crate::i18n::tr!("plan-title").to_string()
+        };
+        let rows = plan_hint_rows(plans);
         Some(
             el! {
-                #chat::content_panel {
-                    id: "session-plans";
+                #div {
+                    id: "session-plan-indicator";
                     test_support;
-                    flex_shrink_0;
-                    max_h: PLAN_PANEL_HEIGHT.px;
-                    overflow_y_scroll; flex; flex_col; gap_2; py_2;
-                } [..cards]
+                    relative; flex; flex_shrink_0;
+                    role: gpui_kit::Role::Status;
+                    aria_label: $hint.clone();
+                    @$remaining > 0 => { pr_3; };
+                    hoverable_tooltip: $move |window, cx| {
+                        let rows = rows.clone();
+                        crate::ui::tooltip::element(
+                            "plan-hint",
+                            hint.clone(),
+                            move |_, cx| plan_hint_content(&rows, cx),
+                            window,
+                            cx,
+                        )
+                    };
+                } [
+                    Badge {
+                        count: remaining; small; max: 99;
+                        color: $cx.theme().primary;
+                    } [
+                        #div {
+                            id: "session-plan-icon"; test_support;
+                            size: layout::ICON_BUTTON_SIZE.px;
+                            flex; items_center; justify_center;
+                            text_color: $cx.theme().muted_foreground;
+                        } [
+                            Icon(IconName::ListTodo) { size: crate::ui::ICON.px; },
+                        ],
+                    ],
+                ]
             }
             .into_any_element(),
         )
-    }
-
-    fn render_plan_card(&self, plan: &acp2::PlanUpdate, cx: &mut Context<Self>) -> AnyElement {
-        let id = format!(
-            "plan-{}",
-            plan_id(plan).map(ToString::to_string).unwrap_or_default()
-        );
-        let mut panel = el! {
-            #div {
-                id: $SharedString::from(id.clone());
-                test_support;
-                rounded_md; border_1;
-                border_color: $cx.theme().border;
-                p_2; flex; flex_col; gap_1;
-            }
-        };
-        match &plan.plan {
-            acp2::PlanUpdateContent::Items(plan) => {
-                panel = panel.child(el! {
-                    #div { flex; items_center; gap_2; } [
-                        Icon(IconName::ListTodo) {
-                            size: crate::ui::ICON.px;
-                            text_color: $cx.theme().muted_foreground;
-                        },
-                        #caption($plan_progress(&plan.entries), cx),
-                    ]
-                });
-                for (index, entry) in plan.entries.iter().enumerate() {
-                    let (label, icon, color) = match &entry.status {
-                        acp2::PlanEntryStatus::Pending => (
-                            crate::i18n::tr!("plan-pending").to_owned(),
-                            IconName::Circle,
-                            cx.theme().muted_foreground,
-                        ),
-                        acp2::PlanEntryStatus::InProgress => (
-                            crate::i18n::tr!("status-running").to_owned(),
-                            IconName::Loader,
-                            cx.theme().primary,
-                        ),
-                        acp2::PlanEntryStatus::Completed => (
-                            crate::i18n::tr!("status-completed").to_owned(),
-                            IconName::Check,
-                            cx.theme().success,
-                        ),
-                        acp2::PlanEntryStatus::Cancelled => (
-                            crate::i18n::tr!("status-cancelled").to_owned(),
-                            IconName::X,
-                            cx.theme().muted_foreground,
-                        ),
-                        acp2::PlanEntryStatus::Other(status) => (
-                            status.clone(),
-                            IconName::CircleAlert,
-                            cx.theme().muted_foreground,
-                        ),
-                        _ => (
-                            crate::i18n::tr!("status-unknown").to_owned(),
-                            IconName::CircleAlert,
-                            cx.theme().muted_foreground,
-                        ),
-                    };
-                    let priority = match &entry.priority {
-                        acp2::PlanEntryPriority::High => {
-                            crate::i18n::tr!("priority-high").to_owned()
-                        }
-                        acp2::PlanEntryPriority::Medium => {
-                            crate::i18n::tr!("priority-medium").to_owned()
-                        }
-                        acp2::PlanEntryPriority::Low => crate::i18n::tr!("priority-low").to_owned(),
-                        acp2::PlanEntryPriority::Other(priority) => priority.clone(),
-                        _ => crate::i18n::tr!("priority-unknown").to_owned(),
-                    };
-                    panel = panel.child(el! {
-                        #div {
-                            id: $SharedString::from(format!("{id}-entry-{index}"));
-                            test_support;
-                            flex; items_start; gap_2;
-                        } [
-                            Button($SharedString::from(format!("{id}-status-{index}"))) {
-                                ghost; xsmall;
-                                tab_stop: false;
-                                role: gpui_kit::Role::Status;
-                                accessibility_label: $format!("{label} · {priority}");
-                                tooltip: $format!("{label} · {priority}");
-                            } [
-                                $status::activity_icon(
-                                    format!("{id}-status-icon-{index}"),
-                                    icon,
-                                    color,
-                                    matches!(
-                                        entry.status,
-                                        acp2::PlanEntryStatus::InProgress
-                                    ),
-                                ),
-                            ],
-                            #div {
-                                flex_1; min_w_0;
-                                text_size: crate::ui::SMALL;
-                            } [$entry.content.clone()],
-                        ]
-                    });
-                }
-            }
-            acp2::PlanUpdateContent::Markdown(plan) => {
-                panel = panel
-                    .child(caption(crate::i18n::tr!("plan-title"), cx))
-                    .child(self.markdown(
-                        format!("{id}-markdown"),
-                        plan.content.clone(),
-                        PLAN_DOCUMENT_INDEX,
-                        cx,
-                    ));
-            }
-            acp2::PlanUpdateContent::File(plan) => {
-                let uri = plan.uri.clone();
-                panel = panel
-                    .child(caption(crate::i18n::tr!("plan-file"), cx))
-                    .child(el! {
-                        Button($SharedString::from(format!("{id}-file"))) {
-                            ghost; small; min_w_0; max_w_full;
-                            icon: IconName::File;
-                            label: $uri.clone();
-                            tooltip: $crate::i18n::tr!("plan-open");
-                            on_click: $move |_, _, cx| cx.open_url(&uri);
-                        }
-                    });
-            }
-            acp2::PlanUpdateContent::Other(plan) => {
-                panel = panel.child(caption(
-                    crate::i18n::tr!("plan-type", type = (plan.type_).to_string()),
-                    cx,
-                ));
-            }
-            _ => {
-                panel = panel.child(caption(crate::i18n::tr!("plan-preview-unavailable"), cx));
-            }
-        }
-        panel.into_any_element()
     }
 
     pub(super) fn render_notices(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

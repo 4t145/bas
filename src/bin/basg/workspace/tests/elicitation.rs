@@ -144,6 +144,46 @@ fn compact_choices_show_waiting_status_and_submit_native_values(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn wide_elicitation_panel_stays_within_the_content_column(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.composer.expanded = false;
+            view.update(
+                Update::Elicitations {
+                    epoch: view.selected.epoch,
+                    pending: vec![pending(meta.id, "form", false)],
+                    completed_ids: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        window.resize(size(px(2000.), px(1000.)));
+        window.bounds_changed(cx);
+        window.render_frame(cx);
+        let panel = window.find("elicitation-request-1").bounds();
+        let content = window.find("thread-body").bounds();
+        assert!(
+            content.size.width > px(chat::CONTENT_WIDTH),
+            "wide viewport leaves room around the content column"
+        );
+        assert_eq!(
+            panel.size.width,
+            px(chat::CONTENT_WIDTH),
+            "elicitation panel matches the content column"
+        );
+        assert!(
+            panel.left() - content.left() > px(0.) && content.right() - panel.right() > px(0.),
+            "elicitation panel {panel:?} keeps side margins"
+        );
+    })
+    .expect("wide elicitation width");
+}
+
+#[gpui_kit::test]
 fn session_form_preserves_composition_and_targets_only_the_current_request(
     cx: &mut TestAppContext,
 ) {

@@ -69,7 +69,6 @@ impl Workspace {
                 };
             } [
                 ..$self.render_notices(cx),
-                ..$self.render_plan(cx),
                 ..$((!self.composer_fills_thread()).then(|| self.render_timeline(cx))),
                 ..$self.composer_fills_thread().then(|| self.render_initialization_messages(cx)).flatten(),
                 #content_panel() {
@@ -89,6 +88,7 @@ impl Workspace {
                         py_1;
                     } [
                         $self.agent_button(cx),
+                        ..$self.render_plan_indicator(cx),
                         $self.session_indicator("conversation-connection", cx),
                         ..$self.activity_label().map(|label| gds_uim::el! {
                             $caption(label, cx) { flex_1; min_w_0; truncate; }
@@ -208,7 +208,11 @@ impl Workspace {
                             py_2;
                             max_h: $px(360.);
                             overflow_y_scroll;
-                        } [..$self.selected.elicitations.values().map(|panel| panel.entity.clone())]
+                        } [
+                            $content_panel() [
+                                ..$self.selected.elicitations.values().map(|panel| panel.entity.clone())
+                            ],
+                        ]
                     }
                 })),
             ]

@@ -268,7 +268,7 @@ fn multiline_composer_keeps_enter_local_and_sends_with_control_enter(cx: &mut Te
 }
 
 #[gpui_kit::test]
-fn pending_panel_edits_arbitrary_messages_and_withdrawing_restores_the_composition(
+fn pending_panel_edits_messages_and_withdrawing_returns_them_to_the_editor(
     cx: &mut TestAppContext,
 ) {
     let fixture = fixture(cx);
@@ -294,7 +294,7 @@ fn pending_panel_edits_arbitrary_messages_and_withdrawing_restores_the_compositi
         window.render_frame(cx);
         window.click("withdraw-pending-message-0", cx);
         let view = fixture.view.read(cx);
-        assert_eq!(view.composer.input.read(cx).value(), "composition");
+        assert_eq!(view.composer.input.read(cx).value(), "B");
         assert_eq!(
             view.sessions.outboxes[&meta.id]
                 .front()
@@ -305,6 +305,85 @@ fn pending_panel_edits_arbitrary_messages_and_withdrawing_restores_the_compositi
         assert_eq!(view.sessions.outboxes[&meta.id].len(), 1);
     })
     .expect("pending panel window");
+}
+
+#[gpui_kit::test]
+fn withdrawing_a_queued_message_loads_it_into_the_editor_and_escape_restores_the_composition(
+    cx: &mut TestAppContext,
+) {
+    let fixture = fixture(cx);
+    let mut meta = session();
+    meta.status = SessionStatus::Working;
+    attach(&fixture, meta.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            for text in ["A", "B"] {
+                view.enqueue_draft(meta.id, text.into(), window, cx);
+            }
+            view.composer
+                .input
+                .update(cx, |input, cx| input.set_value("composition", window, cx));
+        });
+        window.render_frame(cx);
+        window.click("withdraw-pending-message-0", cx);
+        let view = fixture.view.read(cx);
+        assert_eq!(view.composer.input.read(cx).value(), "A");
+        assert_eq!(
+            view.sessions.outboxes[&meta.id]
+                .front()
+                .expect("remaining queued message")
+                .text,
+            "B"
+        );
+        window.press("escape", cx);
+        let view = fixture.view.read(cx);
+        assert_eq!(view.composer.input.read(cx).value(), "composition");
+        assert_eq!(view.sessions.outboxes[&meta.id].len(), 1);
+    })
+    .expect("withdraw to editor");
+}
+
+#[gpui_kit::test]
+fn sending_the_last_withdrawn_message_restores_the_composition_and_clears_the_edit(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.sessions
+                .outboxes
+                .entry(meta.id)
+                .or_default()
+                .enqueue(Draft {
+                    text: "A".into(),
+                    attachments: Vec::new(),
+                });
+            view.composer
+                .input
+                .update(cx, |input, cx| input.set_value("composition", window, cx));
+        });
+        window.render_frame(cx);
+        window.click("withdraw-pending-message-0", cx);
+        let view = fixture.view.read(cx);
+        assert_eq!(view.composer.input.read(cx).value(), "A");
+        assert_eq!(view.sessions.outboxes[&meta.id].len(), 0);
+        window.click("send-message", cx);
+    })
+    .expect("send a withdrawn message");
+    let Command::Prompt { submission, .. } = fixture.commands.try_recv().expect("prompt") else {
+        panic!("expected prompt");
+    };
+    assert_eq!(submission::text(&submission), "A");
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        let view = fixture.view.read(cx);
+        assert_eq!(view.composer.input.read(cx).value(), "composition");
+        assert!(!view.sessions.outboxes[&meta.id].editing_active());
+        window.render_frame(cx);
+    })
+    .expect("restored composition");
 }
 
 #[gpui_kit::test]
