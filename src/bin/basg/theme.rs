@@ -109,6 +109,7 @@ pub(super) struct Appearance {
     pub content_line_height: f32,
     pub content_opacity: f32,
     pub composer_enter_behavior: preferences::ComposerEnterBehavior,
+    pub confirm_session_delete: bool,
     pub font_fallbacks: gpui_kit::FontFallbacks,
 }
 impl Global for Appearance {}
@@ -238,6 +239,7 @@ fn apply(effective: Effective, window: Option<&mut Window>, cx: &mut App) {
         content_line_height: effective.content_line_height,
         content_opacity: effective.content_opacity,
         composer_enter_behavior: effective.composer_enter_behavior,
+        confirm_session_delete: effective.confirm_session_delete,
         font_fallbacks: gpui_kit::FontFallbacks::from_fonts(resolved.font_fallbacks),
     });
     if let Some(window) = window {

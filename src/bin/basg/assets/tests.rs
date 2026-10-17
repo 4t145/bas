@@ -17,6 +17,10 @@ fn registry_icons_are_embedded_and_render_visible_svg_pixels() {
         IconName::Search,
         IconName::RefreshCw,
         IconName::MessageCircle,
+        IconName::MessageSquare,
+        IconName::MessagesSquare,
+        IconName::Play,
+        IconName::Square,
         IconName::Settings,
         IconName::Trash,
         IconName::CircleAlert,
@@ -30,6 +34,7 @@ fn registry_icons_are_embedded_and_render_visible_svg_pixels() {
         IconName::Circle,
         IconName::Clock,
         IconName::RotateCcw,
+        IconName::RotateCw,
         IconName::Minus,
         IconName::X,
     ] {

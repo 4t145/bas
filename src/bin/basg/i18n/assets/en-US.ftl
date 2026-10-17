@@ -4,6 +4,11 @@
 
 ## Shared actions
 
+delete-dont-ask = Don't ask again when deleting conversations
+settings-sessions = Conversations
+settings-sessions-help = Conversation actions and confirmations.
+settings-confirm-delete = Don't ask again when deleting conversations
+settings-confirm-delete-help = Applies to local conversations and Agent session history.
 appearance-font-default = Default
 appearance-value-decrease = Decrease { $field }
 appearance-value-increase = Increase { $field }
@@ -45,7 +50,7 @@ action-user-message = Go to your message
 
 ## Agent history
 
-agent-history-title = Agent session history
+agent-history-title = Session management
 agent-history-agent-filter = Agent
 agent-history-all-agents = All
 agent-history-workspace-filter = Primary workspace
@@ -59,19 +64,21 @@ agent-history-refresh = Refresh
 agent-history-search = Search title, workspace or session ID
 agent-history-empty = No matching Agent sessions.
 agent-history-help = Read the Agent’s own history without importing or sending messages automatically. Resume-only Agents can restore context, but cannot replay old messages.
-agent-history-open = Open
+agent-history-open = Open conversation
 agent-history-untitled = Untitled conversation
-agent-session-restart = Restart
-agent-session-restart-help = Reload this session's context without sending a message.
-agent-history-restore-help = Unarchive and open; stopped sessions are not restarted.
-agent-history-import = Import and open
+agent-session-restart = Restart and open conversation
+agent-session-restart-help = { agent-session-restart }
+agent-history-restore = Restore conversation
+agent-history-restore-help = Restore and start conversation
+agent-history-import = Load and open conversation
 agent-history-resume = Resume without replay
 agent-history-cannot-import = This Agent lists sessions but does not advertise loading or resuming.
 agent-history-roots-unsupported = This session has additional workspace roots and cannot yet be imported losslessly.
 agent-history-delete = Delete Agent history
 agent-history-delete-help = Deletes Agent history only. Close imported sessions first; local Bas records are retained.
 agent-history-delete-confirm = Delete “{ $title }” from the Agent’s history? Local Bas records will remain. This operation is not retried automatically.
-agent-session-close = Close Agent session
+agent-session-close = Stop session
+agent-session-start = Start session
 agent-session-close-confirm = Stop this session’s work and release Agent resources? Its Bas record and transcript will remain in the stopped state.
 
 ## Application
@@ -166,7 +173,7 @@ settings-saved = Saved
 settings-search = Search settings…
 settings-scope-frontend = BasG · Frontend
 settings-scope-backend = bas · Backend
-settings-frontend-description = Local interface and input settings · Saved automatically
+settings-frontend-description = Local preferences · Saved automatically
 settings-frontend-context = Local settings
 settings-backend-description = Backend agent registrations · Save after editing
 settings-backend-context = Backend: { $address }
@@ -472,8 +479,8 @@ composer-enter-send = Enter to send
 composer-expand = Expand editor · Alt+Shift+Esc
 composer-message = Message
 composer-placeholder = Describe your task…
-composer-queue-hint = Add to queue · { $shortcut }
-composer-send-hint = Send message · { $shortcut }
+composer-queue-hint = Add to queue
+composer-send-hint = Send message
 composer-shortcuts-custom = { $send } to send · { $newline } for new line
 feedback-details = View action details
 feedback-title = Action needed

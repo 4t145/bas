@@ -8,6 +8,79 @@ fn auth_required(fixture: &Fixture) -> Update {
 }
 
 #[gpui_kit::test]
+fn authentication_uses_the_conversation_column_and_wraps_methods(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            let methods = [
+                "Login with iOA",
+                "Login with Google/Github",
+                "Login with WeChat",
+                "Login with Enterprise Domain",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| bas::authentication::Method {
+                id: format!("method-{index}"),
+                name: name.into(),
+                description: None,
+                raw: serde_json::json!({"id": format!("method-{index}")}),
+                source: bas::authentication::Source::Initialize,
+                execution: bas::authentication::Execution::Terminal(
+                    bas::authentication::Terminal {
+                        args: vec!["login".into()],
+                        env: Default::default(),
+                        arguments: bas::authentication::Arguments::Append,
+                        command: None,
+                    },
+                ),
+            })
+            .collect();
+            view.selected.creating = false;
+            view.selected.authentication.panel = Some(state::ObservedPanel::new(
+                cx.new(|_| {
+                    crate::authentication::Authentication::new(
+                        bas::config::AgentSpec::embedded(),
+                        crate::agents::Status::AuthenticationRequired {
+                            program: String::new(),
+                            methods,
+                        },
+                        "/fixture/settings.json".into(),
+                        window.window_handle(),
+                    )
+                }),
+                Vec::new(),
+            ));
+            cx.notify();
+        });
+        for width in [1800., 600.] {
+            window.resize(size(px(width), px(800.)));
+            window.bounds_changed(cx);
+            window.render_frame(cx);
+            let card = window.find("thread-authentication").bounds();
+            let composer = window.find("composer-panel").bounds();
+            assert_eq!(card.left(), composer.left());
+            assert_eq!(card.right(), composer.right());
+            assert!(window.try_find("empty-conversation-message").is_none());
+            for index in 0..4 {
+                let button = window
+                    .find(format!("authentication-method-{index}"))
+                    .bounds();
+                assert!(button.left() >= card.left() && button.right() <= card.right());
+            }
+            let first = window.find("authentication-method-0").bounds();
+            let last = window.find("authentication-method-3").bounds();
+            if width > 1000. {
+                assert_eq!(first.top(), last.top());
+            } else {
+                assert!(last.top() > first.top());
+            }
+        }
+    })
+    .expect("responsive sign-in layout");
+}
+
+#[gpui_kit::test]
 fn authentication_preserves_draft_and_attachments_until_explicit_retry(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let file = fixture._appearance.path().join("context.txt");

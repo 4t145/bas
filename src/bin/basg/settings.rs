@@ -52,15 +52,17 @@ fn navigation_button(
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Category {
     Appearance,
+    Sessions,
     Agents,
 }
 
 impl Category {
-    const ALL: [Self; 2] = [Self::Appearance, Self::Agents];
+    const ALL: [Self; 3] = [Self::Appearance, Self::Sessions, Self::Agents];
 
     fn id(self) -> &'static str {
         match self {
             Self::Appearance => "settings-appearance",
+            Self::Sessions => "settings-sessions",
             Self::Agents => "settings-agents",
         }
     }
@@ -68,12 +70,16 @@ impl Category {
     fn title(self) -> &'static str {
         match self {
             Self::Appearance => crate::i18n::tr!("settings-appearance"),
+            Self::Sessions => crate::i18n::tr!("settings-sessions"),
             Self::Agents => crate::i18n::tr!("settings-agents"),
         }
     }
 
     fn for_query(query: &str) -> Self {
         let query = query.trim().to_lowercase();
+        if !query.is_empty() && appearance::AppearancePage::matches_session_query(&query) {
+            return Self::Sessions;
+        }
         let agents = query.split_whitespace().any(|word| {
             matches!(
                 word,
@@ -122,6 +128,7 @@ impl Settings {
         let appearance = cx.new(|cx| appearance::AppearancePage::new(editor, window, cx));
         let subscriptions = vec![
             cx.subscribe_in(&search, window, Self::on_search),
+            cx.observe(&appearance, |_, _, cx| cx.notify()),
             cx.observe(&agents, Self::on_agents_changed),
             cx.observe_global_in::<crate::theme::Appearance>(window, Self::on_appearance_changed),
         ];
@@ -148,8 +155,9 @@ impl Settings {
         if matches!(event, InputEvent::Change) {
             let query = self.search.read(cx).value().to_string();
             if !query.trim().is_empty() {
-                if self.category != Category::Agents {
-                    self.category = Category::for_query(&query);
+                let category = Category::for_query(&query);
+                if self.category != Category::Agents || category == Category::Sessions {
+                    self.category = category;
                 }
                 self.expanded.insert(self.category);
             }
@@ -187,6 +195,16 @@ impl Settings {
     fn select_category(&mut self, category: Category, window: &mut Window, cx: &mut Context<Self>) {
         match category {
             Category::Appearance => self.select_appearance(None, window, cx),
+            Category::Sessions => {
+                self.category = Category::Sessions;
+                self.search
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                self.appearance.update(cx, |page, cx| {
+                    page.query.clear();
+                    cx.notify();
+                });
+                cx.notify();
+            }
             Category::Agents => self.select_agents(None, window, cx),
         }
     }
@@ -204,7 +222,7 @@ impl Settings {
 
     fn settings_path(&self, cx: &App) -> Option<std::path::PathBuf> {
         match self.category {
-            Category::Appearance => Some(
+            Category::Appearance | Category::Sessions => Some(
                 crate::theme::Editor::current(cx)
                     .appearance_path()
                     .to_owned(),
@@ -218,7 +236,7 @@ impl Settings {
     }
 
     fn on_edit_file(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.category == Category::Appearance {
+        if self.category != Category::Agents {
             self.flush_pending(window, cx);
         }
         if let Some(path) = self.settings_path(cx) {
@@ -239,11 +257,13 @@ impl Settings {
             },
         );
         let context_id = match self.category {
-            Category::Appearance => "settings-frontend-context",
+            Category::Appearance | Category::Sessions => "settings-frontend-context",
             Category::Agents => "settings-backend-context",
         };
         let context = match self.category {
-            Category::Appearance => crate::i18n::tr!("settings-frontend-context").to_owned(),
+            Category::Appearance | Category::Sessions => {
+                crate::i18n::tr!("settings-frontend-context").to_owned()
+            }
             Category::Agents => {
                 let backend = cx
                     .try_global::<crate::agents::catalog::Service>()
@@ -290,7 +310,7 @@ impl Settings {
                     text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
                 } [
                     $(match self.category {
-                        Category::Appearance => crate::i18n::tr!("settings-frontend-description").to_owned(),
+                        Category::Appearance | Category::Sessions => crate::i18n::tr!("settings-frontend-description").to_owned(),
                         Category::Agents => crate::i18n::tr!("settings-backend-description").to_owned(),
                     }),
                 ],
@@ -346,6 +366,7 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Vec<gpui_kit::AnyElement> {
         match category {
+            Category::Sessions => Vec::new(),
             Category::Appearance => appearance::Group::ALL
                 .into_iter()
                 .map(|item| {
@@ -391,9 +412,21 @@ impl Settings {
         let selected = self.category == category;
         let pointing_at_section = match category {
             Category::Appearance => self.appearance_group.is_some(),
+            Category::Sessions => false,
             Category::Agents => self.agent_section.is_some(),
         };
         let sections = self.section_navigation(category, selected, searching, cx);
+        if category == Category::Sessions {
+            return el! { #div { pl: crate::ui::COMPACT_CONTROL.px; flex; } [
+                #navigation_button($category.id(), $category.title()) {
+                    flex_1; selected: selected;
+                    on_click: $cx.listener(move |this, _, window, cx| {
+                        this.select_category(category, window, cx)
+                    });
+                },
+            ] }
+            .into_any_element();
+        }
         el! {
             #div {
                 flex;
@@ -407,6 +440,9 @@ impl Settings {
                     Button($format!("{}-expand", category.id())) {
                         ghost;
                         xsmall;
+                        w: crate::ui::COMPACT_CONTROL.px;
+                        h: crate::ui::COMPACT_CONTROL.px;
+                        p_0;
                         icon: $if expanded {
                             IconName::ChevronDown
                         } else {
@@ -458,7 +494,7 @@ impl Focusable for Settings {
 }
 
 impl Render for Settings {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         el! {
             #div {
                 id: "settings";
@@ -482,7 +518,7 @@ impl Render for Settings {
                     #div {
                         id: "settings-search";
                         test_support;
-                    } [Input($&self.search) { small; }],
+                    } [$crate::ui::input::placeholder(&self.search, Input::new(&self.search).small())],
                     #div {
                         id: "settings-navigation";
                         test_support;
@@ -497,15 +533,15 @@ impl Render for Settings {
                             .into_iter()
                             .map(|category| el! {
                                 #div { flex; flex_col; gap_1; } [
-                                    #div {
+                                    ..$bool::then(category != Category::Sessions, || el! { #div {
                                         mt_2; text_size: $crate::ui::SMALL;
                                         text_color: $cx.theme().muted_foreground;
                                     } [
                                         $(match category {
-                                            Category::Appearance => crate::i18n::tr!("settings-scope-frontend"),
+                                            Category::Appearance | Category::Sessions => crate::i18n::tr!("settings-scope-frontend"),
                                             Category::Agents => crate::i18n::tr!("settings-scope-backend"),
                                         }),
-                                    ],
+                                    ] }),
                                     $self.category_navigation(category, cx),
                                 ]
                             }),
@@ -515,7 +551,7 @@ impl Render for Settings {
                         text_color: $cx.theme().muted_foreground;
                     } [
                         $(match self.category {
-                            Category::Appearance => crate::i18n::tr!("settings-appearance-footer"),
+                            Category::Appearance | Category::Sessions => crate::i18n::tr!("settings-appearance-footer"),
                             Category::Agents => crate::i18n::tr!("settings-agents-footer"),
                         }),
                     ],
@@ -530,6 +566,7 @@ impl Render for Settings {
                     #div { flex_1; min_h_0; } [
                         $(match self.category {
                             Category::Appearance => self.appearance.clone().into_any_element(),
+                            Category::Sessions => self.appearance.update(cx, |page, cx| page.render_sessions(window, cx)),
                             Category::Agents => self.agents.clone().into_any_element(),
                         }),
                     ],

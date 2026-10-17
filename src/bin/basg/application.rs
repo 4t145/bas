@@ -3,7 +3,7 @@
 use gds_uim::el;
 use gpui_kit::{
     App, AppContext, Bounds, ClickEvent, Context, Global, KeyBinding, Render, TestSupportExt,
-    Window, WindowBounds, WindowDecorations, WindowHandle, WindowOptions, actions,
+    Window, WindowBounds, WindowDecorations, WindowHandle, WindowKind, WindowOptions, actions,
     component::{ActiveTheme, Root},
     div,
     prelude::*,
@@ -79,8 +79,6 @@ pub(crate) struct Confirmation {
     pub confirm_label: String,
 }
 
-// [!todo] open confirmations and open messages doesn't actiually work on niri/wayland
-
 /// Shows an error independently of any pending confirmation.
 ///
 /// # Errors
@@ -104,6 +102,7 @@ pub(crate) fn open_message(
             message: message.into(),
             confirm_label: String::new(),
             on_confirm: None,
+            skip_delete_reminder: None,
         },
         cx,
     )
@@ -114,6 +113,7 @@ pub(crate) fn open_message(
 ///
 /// # Errors
 /// Returns a platform error if the confirmation window cannot be created.
+#[cfg(all(test, feature = "gui-tests"))]
 pub(crate) fn open_confirmation(
     request: Confirmation,
     on_confirm: impl FnOnce(&mut App) + 'static,
@@ -126,9 +126,35 @@ pub(crate) fn open_confirmation(
             message: request.message,
             confirm_label: request.confirm_label,
             on_confirm: Some(Box::new(on_confirm)),
+            skip_delete_reminder: None,
         },
         cx,
     )
+}
+
+/// # Errors
+/// Returns a native-window error. The preference is saved only when deletion is confirmed.
+pub(crate) fn open_delete_confirmation(
+    request: Confirmation,
+    on_confirm: impl FnOnce(&mut App) + 'static,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    if !cx.global::<theme::Appearance>().confirm_session_delete {
+        on_confirm(cx);
+        return Ok(());
+    }
+    open_host(
+        Host {
+            kind: InfoWindow::Confirmation,
+            title: request.title,
+            message: request.message,
+            confirm_label: request.confirm_label,
+            on_confirm: Some(Box::new(on_confirm)),
+            skip_delete_reminder: Some(false),
+        },
+        cx,
+    )
+    .map(|_| ())
 }
 
 /// Opens the release page for manual inspection; no version comparison is performed.
@@ -149,6 +175,14 @@ pub(crate) fn open_quit(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
 }
 
 impl InfoWindow {
+    fn window_kind(self) -> WindowKind {
+        if matches!(self, Self::Confirmation) {
+            WindowKind::Floating
+        } else {
+            WindowKind::Normal
+        }
+    }
+
     fn title(self) -> &'static str {
         match self {
             // [!todo] here we have product name `BasG`, witch should be a static value and easy to replace with
@@ -186,6 +220,7 @@ fn open_host(host: Host, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     }
     let handle = cx.open_window(
         WindowOptions {
+            kind: kind.window_kind(),
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
                 size(px(WIDTH), px(HEIGHT)),
@@ -216,6 +251,7 @@ struct Host {
     message: String,
     confirm_label: String,
     on_confirm: Option<ConfirmCallback>,
+    skip_delete_reminder: Option<bool>,
 }
 
 impl Host {
@@ -226,10 +262,24 @@ impl Host {
             message: String::new(),
             confirm_label: String::new(),
             on_confirm: None,
+            skip_delete_reminder: None,
         }
     }
 
     fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.skip_delete_reminder == Some(true) {
+            let editor = theme::Editor::current(cx);
+            let result = editor.load().and_then(|mut document| {
+                let mut candidate = document.preferences.clone();
+                candidate.confirm_session_delete = Some(false);
+                editor.save(&mut document, candidate, window, cx)
+            });
+            if let Err(error) = result {
+                self.message = crate::i18n::tr!("settings-apply-error", error = error.to_string());
+                cx.notify();
+                return;
+            }
+        }
         let callback = self.on_confirm.take();
         Self::close(window);
         if let Some(callback) = callback {
@@ -291,6 +341,15 @@ impl Host {
                     aria_label: $self.message.clone();
                     flex_1; min_h_0; overflow_y_scroll; whitespace_normal;
                 } [$crate::ui::tooltip::wrap_tokens(&self.message)],
+                ..$self.skip_delete_reminder.map(|checked| el! {
+                    #crate::ui::checkbox("delete-dont-ask") {
+                        checked: checked; label: $crate::i18n::tr!("delete-dont-ask");
+                        on_click: $cx.listener(|this, checked: &bool, _, cx| {
+                            this.skip_delete_reminder = Some(*checked);
+                            cx.notify();
+                        });
+                    }
+                }),
                 $actions,
             ]
         }

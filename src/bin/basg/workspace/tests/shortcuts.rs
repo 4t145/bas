@@ -1,6 +1,48 @@
 use super::*;
 
 #[gpui_kit::test]
+fn ctrl_s_stops_without_confirmation_and_archived_threads_only_restore(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let mut meta = session();
+    attach(&fixture, meta.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.composer.input.update(cx, |input, cx| input.set_value("unsent", window, cx));
+            view.focus_input(window, cx);
+        });
+        window.press("ctrl-s", cx);
+        assert!(matches!(fixture.commands.try_recv(), Ok(Command::CloseSession(id)) if id == meta.id));
+        assert_eq!(cx.windows().len(), 1, "stop does not ask for confirmation");
+        meta.status = SessionStatus::Stopped;
+        meta.revision = Cursor::from_raw(1);
+        fixture.view.update(cx, |view, cx| view.update(Update::ClosedSession { session: meta.id, result: Ok(meta.clone().into()) }, window, cx));
+        window.press("ctrl-s", cx);
+        assert!(matches!(fixture.commands.try_recv(), Ok(Command::RestartSession(id)) if id == meta.id));
+        meta.status = SessionStatus::Idle;
+        meta.revision = Cursor::from_raw(2);
+        fixture.view.update(cx, |view, cx| view.update(Update::RestartedSession { session: meta.id, result: Ok(meta.clone().into()) }, window, cx));
+        while fixture.commands.try_recv().is_ok() {}
+        meta.archived = true;
+        meta.status = SessionStatus::Stopped;
+        meta.revision = Cursor::from_raw(3);
+        fixture.view.update(cx, |view, cx| {
+            view.sessions.entries[0] = meta.clone();
+            view.selected.timeline.conversation.as_mut().expect("conversation").session = meta.clone();
+            cx.notify();
+        });
+        window.press("ctrl-s", cx);
+        assert!(fixture.commands.try_recv().is_err(), "archived session cannot be directly started");
+        window.press("ctrl-w", cx);
+        assert!(matches!(fixture.commands.try_recv(), Ok(Command::Archive { session, archived: false }) if session == meta.id));
+        assert_eq!(fixture.view.read(cx).composer.input.read(cx).value(), "unsent");
+        window.render_frame(cx);
+        assert!(window.find("server-status").label().expect("connection").contains("127.0.0.1:7337"));
+        assert_eq!(window.find("server-status").bounds().center().y, window.find("composer-toolbar").bounds().center().y);
+    }).expect("session lifecycle keyboard controls");
+}
+
+#[gpui_kit::test]
 fn thread_shortcuts_work_from_composer_without_editing_or_sending_the_draft(
     cx: &mut TestAppContext,
 ) {

@@ -11,6 +11,7 @@ use gpui_kit::{
 };
 
 pub(super) struct Form {
+    pub confirm_delete: Option<bool>,
     pub language: Entity<SelectState<Vec<Choice<Language>>>>,
     pub ui_font: Entity<SelectState<SearchableVec<FontChoice>>>,
     pub mono_font: Entity<SelectState<SearchableVec<FontChoice>>>,
@@ -145,6 +146,7 @@ impl Form {
             })
         };
         Self {
+            confirm_delete: p.confirm_session_delete,
             fallbacks: input(
                 p.font_fallbacks
                     .as_ref()
@@ -233,6 +235,7 @@ impl Form {
                 .transpose()
         };
         let p = Preferences {
+            confirm_session_delete: self.confirm_delete,
             language: self
                 .language
                 .read(cx)

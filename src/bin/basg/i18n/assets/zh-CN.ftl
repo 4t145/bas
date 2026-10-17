@@ -4,6 +4,11 @@
 
 ## Shared actions
 
+delete-dont-ask = 删除会话时不再提醒
+settings-sessions = 会话
+settings-sessions-help = 会话操作与确认。
+settings-confirm-delete = 删除会话时不再提醒
+settings-confirm-delete-help = 适用于本地会话和 Agent 历史会话。
 appearance-font-default = 默认
 appearance-value-decrease = 减小{ $field }
 appearance-value-increase = 增大{ $field }
@@ -45,7 +50,7 @@ action-user-message = 返回本轮消息
 
 ## Agent history
 
-agent-history-title = Agent 历史会话
+agent-history-title = 会话管理
 agent-history-agent-filter = Agent
 agent-history-all-agents = 全部
 agent-history-workspace-filter = 主工作区
@@ -59,19 +64,21 @@ agent-history-refresh = 刷新
 agent-history-search = 搜索标题、目录或会话 ID
 agent-history-empty = 没有匹配的 Agent 历史会话。
 agent-history-help = 读取 Agent 自己保存的历史，不会自动导入或发送消息。仅支持 resume 的 Agent 只能续接上下文，不能回放旧消息。
-agent-history-open = 打开
+agent-history-open = 打开会话
 agent-history-untitled = 未命名会话
-agent-session-restart = 重新启动
-agent-session-restart-help = 重新加载原会话上下文，不自动发送消息。
-agent-history-restore-help = 取消归档并打开；不会重新启动已停止的会话。
-agent-history-import = 导入并打开
+agent-session-restart = 重新启动并打开会话
+agent-session-restart-help = { agent-session-restart }
+agent-history-restore = 恢复会话
+agent-history-restore-help = 恢复并启动会话
+agent-history-import = 加载并打开会话
 agent-history-resume = 续接（无历史回放）
 agent-history-cannot-import = Agent 只支持列出会话，未声明加载或恢复能力。
 agent-history-roots-unsupported = 此会话包含额外工作根；当前不能无损导入。
 agent-history-delete = 删除 Agent 历史
 agent-history-delete-help = 仅删除 Agent 端历史；已导入的会话须先关闭，Bas 本地记录保留。
 agent-history-delete-confirm = 从 Agent 历史中删除“{ $title }”？此操作不删除 Bas 本地记录，不会自动重试。
-agent-session-close = 关闭 Agent 会话
+agent-session-close = 停止会话
+agent-session-start = 启动会话
 agent-session-close-confirm = 结束此会话的运行任务并释放 Agent 资源？Bas 中的会话和历史将保留为已停止状态。
 
 ## Application
@@ -166,7 +173,7 @@ settings-saved = 已保存
 settings-search = 搜索设置…
 settings-scope-frontend = BasG · 前端
 settings-scope-backend = bas · 后端
-settings-frontend-description = 本机界面与输入设置 · 自动保存
+settings-frontend-description = 本机偏好设置 · 自动保存
 settings-frontend-context = 本机设置
 settings-backend-description = 后端智能体注册 · 编辑后保存
 settings-backend-context = 后端：{ $address }
@@ -472,8 +479,8 @@ composer-enter-send = Enter 发送
 composer-expand = 展开编辑器 · Alt+Shift+Esc
 composer-message = 消息
 composer-placeholder = 描述你想完成的任务…
-composer-queue-hint = 加入待发送消息 · { $shortcut }
-composer-send-hint = 发送消息 · { $shortcut }
+composer-queue-hint = 加入待发送消息
+composer-send-hint = 发送消息
 composer-shortcuts-custom = { $send } 发送 · { $newline } 换行
 feedback-details = 查看操作详情
 feedback-title = 操作提示

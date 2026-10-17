@@ -72,50 +72,57 @@ impl Workspace {
         }
     }
 
-    pub(super) fn connection_indicator(&self, id: &'static str, cx: &App) -> Button {
-        let (label, color) = match self.connection_status() {
-            ConnectionStatus::Connecting => {
-                (crate::i18n::tr!("status-connecting"), cx.theme().warning)
+    pub(super) fn session_indicator(&self, id: &'static str, cx: &App) -> AnyElement {
+        use crate::ui::session_status::Status;
+        let state = if self.selected.creating {
+            Status::Starting
+        } else if let Some(meta) = self.current() {
+            if !self.sessions.healthy(meta.id) {
+                Status::Failed
+            } else {
+                Status::for_session(
+                    meta,
+                    self.sessions
+                        .seen_replies
+                        .get(&meta.id)
+                        .copied()
+                        .unwrap_or(0),
+                    self.has_unread_reply(),
+                )
             }
-            ConnectionStatus::Connected => {
-                (crate::i18n::tr!("status-connected"), cx.theme().success)
-            }
-            ConnectionStatus::Disconnected => {
-                (crate::i18n::tr!("status-disconnected"), cx.theme().danger)
-            }
-        };
-        let unread = self.has_unread_reply();
-        let label = if unread {
-            crate::i18n::tr!("status-with-unread", label = (label).to_string())
         } else {
-            label.to_owned()
+            Status::Idle
         };
-        let unread_indicator = unread.then(|| {
-            el! {
-                #div {
-                    id: "unread-reply";
-                    test_support;
-                    absolute; inset_0; rounded_full; border_2;
-                    border_color: $cx.theme().warning;
-                }
-            }
-        });
-        el! {
-            Button(id) {
-                ghost;
-                xsmall;
-                cursor_default;
-                accessibility_label: $label.clone();
-                tooltip: label;
-            } [
-                #div {
-                    relative; size_3; flex_shrink_0; flex; items_center; justify_center;
-                } [
-                    #div { size_2; rounded_full; bg: color; },
-                    ..unread_indicator,
-                ],
-            ]
-        }
+        let indicator = if state == Status::Unread {
+            "unread-reply".to_owned()
+        } else {
+            format!("{id}-indicator")
+        };
+        state.render(id, indicator, cx)
+    }
+
+    pub(super) fn server_status_footer(&self, cx: &App) -> AnyElement {
+        let (label, color) = if self.backend.error.is_some() {
+            (crate::i18n::tr!("status-disconnected"), cx.theme().danger)
+        } else if self.backend.connected {
+            (crate::i18n::tr!("status-connected"), cx.theme().success)
+        } else {
+            (crate::i18n::tr!("status-connecting"), cx.theme().warning)
+        };
+        let address = self.backend.server.to_string();
+        let hint = format!("{address} · {label}");
+        el! { #div {
+            id: "server-status"; test_support; role: gpui_kit::Role::Status;
+            aria_label: $hint.clone();
+            h: composer::COMPOSER_TOOLBAR_HEIGHT.px; mb: composer::COMPOSER_SIDE_PADDING.px;
+            flex_shrink_0; flex; items_center; gap_2; px_3; min_w_0;
+            text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+            hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(hint.clone(), window, cx);
+        } [
+            #div { size: 6.0.px; rounded_full; flex_shrink_0; bg: color; },
+            #div { flex_1; min_w_0; truncate; } [$address],
+            #div { flex_shrink_0; } [$label],
+        ] }.into_any_element()
     }
 
     pub(super) fn activity_label(&self) -> Option<String> {

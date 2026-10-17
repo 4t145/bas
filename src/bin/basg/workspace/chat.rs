@@ -89,7 +89,7 @@ impl Workspace {
                         py_1;
                     } [
                         $self.agent_button(cx),
-                        $self.connection_indicator("conversation-connection", cx),
+                        $self.session_indicator("conversation-connection", cx),
                         ..$self.activity_label().map(|label| gds_uim::el! {
                             $caption(label, cx) { flex_1; min_w_0; truncate; }
                         }),
@@ -162,6 +162,8 @@ impl Workspace {
     }
 
     pub(super) fn render_timeline(&self, cx: &mut Context<Self>) -> AnyElement {
+        let awaiting_snapshot =
+            self.selected.awaiting_snapshot() && self.selected.authentication.panel.is_none();
         let empty = self
             .selected
             .timeline
@@ -178,17 +180,20 @@ impl Workspace {
                 min_h_0;
                 size_full;
             } [
-                ..$empty.then(|| self.render_empty_timeline(cx)),
+                ..$awaiting_snapshot.then(|| self.render_history_transition(cx)),
+                ..$((empty && !awaiting_snapshot && self.selected.authentication.panel.is_none()).then(|| self.render_empty_timeline(cx))),
                 ..$((!empty).then(|| self.render_timeline_list(cx))),
                 ..$((!self.selected.approval.panel.is_empty()).then(|| self.render_timeline_approval(cx))),
                 ..$self.render_queue_panel(cx),
                 ..$self.selected.authentication.panel.as_ref().map(|panel| {
                     gds_uim::el! {
-                        #div {
+                        #content_panel() {
                             id: "thread-authentication";
                             test_support;
-                            @$self.window.compact => { px_3; };
-                            py_2;
+                            p_4; my_3; flex_shrink_0; min_w_0;
+                            @empty => { my_auto; };
+                            border_1; rounded_md; border_color: $cx.theme().border;
+                            bg: $cx.theme().muted.opacity(0.2);
                             max_h: $px(360.);
                             overflow_y_scroll;
                         } [$panel.entity.clone()]
@@ -210,6 +215,26 @@ impl Workspace {
         }.into_any_element()
     }
 
+    fn render_history_transition(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (label, loading) = match &self.selected.stream {
+            StreamState::Loading | StreamState::Live => (crate::i18n::tr!("status-loading"), true),
+            StreamState::Reconnecting(_) => (crate::i18n::tr!("status-reconnecting"), true),
+            StreamState::Unavailable(_) => (crate::i18n::tr!("status-session-unavailable"), false),
+            StreamState::Closed => (crate::i18n::tr!("status-session-ended"), false),
+        };
+        gds_uim::el! { #content_panel() {
+            id: "conversation-history-transition"; test_support;
+            role: gpui_kit::Role::Status; aria_label: label;
+            flex_1; min_h_0; flex; flex_col; items_center; justify_center; gap_3; p_5;
+            text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+        } [
+            ..$loading.then(|| status::activity_icon(
+                "conversation-history-loading", IconName::LoaderCircle, cx.theme().muted_foreground, true
+            )),
+            $label,
+        ] }.into_any_element()
+    }
+
     fn render_empty_timeline(&self, cx: &mut Context<Self>) -> AnyElement {
         let label = if self.selected.creating {
             crate::i18n::tr!("status-creating")
@@ -222,6 +247,7 @@ impl Workspace {
         };
         gds_uim::el! {
             #div {
+                id: "empty-conversation-message"; test_support;
                 w_full;
                 flex_1;
                 min_h_0;

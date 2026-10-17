@@ -39,6 +39,8 @@ impl Workspace {
         if !self.backend.connected
             || self.sessions.pending.archiving.contains(&session)
             || self.sessions.pending.deleting.contains(&session)
+            || self.sessions.pending.closing.contains(&session)
+            || self.sessions.pending.restarting.contains(&session)
         {
             return;
         }
@@ -71,11 +73,7 @@ impl Workspace {
             #layout::icon_button($SharedString::from(format!("{location}-{id}")), icon) {
                 accessibility_label: label;
                 hoverable_tooltip: $move |window, cx| {
-                    let hint = if archived {
-                        label.to_owned()
-                    } else {
-                        shortcuts::hint(label, &shortcuts::ArchiveThread, window)
-                    };
+                    let hint = shortcuts::hint(label, &shortcuts::ArchiveThread, window);
                     crate::ui::tooltip::view(hint, window, cx)
                 };
                 disabled: $!self.backend.connected

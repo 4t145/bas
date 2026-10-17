@@ -253,11 +253,9 @@ impl Workspace {
                 );
                 on_key_down: $cx.listener(Self::on_rename_key_down);
             } [
-                Input($&self.renaming.input) {
-                    id: "rename-title-input"; small; w_full;
-                    min_h: layout::ICON_BUTTON_SIZE.px;
-                    max_h: layout::ICON_BUTTON_SIZE.px;
-                }
+                $crate::ui::input::placeholder(&self.renaming.input,
+                    Input::new(&self.renaming.input).id("rename-title-input").small().w_full()
+                        .min_h(px(layout::ICON_BUTTON_SIZE)).max_h(px(layout::ICON_BUTTON_SIZE)))
             ]
         }
         .into_any_element()

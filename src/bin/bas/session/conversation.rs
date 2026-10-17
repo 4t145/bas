@@ -153,21 +153,35 @@ impl Session {
         self.owned(|session| async move {
             let _gate = session.transaction.lock().await;
             let mut meta = session.meta();
-            let events = match meta.status {
-                SessionStatus::Starting => vec![EventKind::Failed {
-                    message: "daemon stopped during session startup".to_owned(),
-                }],
-                SessionStatus::Working => match meta.active_turn {
-                    Some(turn) => vec![EventKind::TurnInterrupted {
+            let events = if meta.archived && meta.status != SessionStatus::Stopped {
+                let mut events = Vec::new();
+                if let Some(turn) = meta.active_turn {
+                    events.push(EventKind::TurnInterrupted {
                         turn,
-                        reason: InterruptionReason::DaemonRestarted,
+                        reason: InterruptionReason::SessionStopped,
+                    });
+                }
+                events.push(EventKind::StatusChanged {
+                    status: SessionStatus::Stopped,
+                });
+                events
+            } else {
+                match meta.status {
+                    SessionStatus::Starting => vec![EventKind::Failed {
+                        message: "daemon stopped during session startup".to_owned(),
                     }],
-                    None => {
-                        meta.set_status(SessionStatus::Idle);
-                        Vec::new()
-                    }
-                },
-                _ => return Ok(()),
+                    SessionStatus::Working => match meta.active_turn {
+                        Some(turn) => vec![EventKind::TurnInterrupted {
+                            turn,
+                            reason: InterruptionReason::DaemonRestarted,
+                        }],
+                        None => {
+                            meta.set_status(SessionStatus::Idle);
+                            Vec::new()
+                        }
+                    },
+                    _ => return Ok(()),
+                }
             };
             session.publish_with_meta_locked(events, &mut meta).await?;
             let mut state = session.lock();
@@ -258,7 +272,8 @@ impl Session {
         inbox: mpsc::Receiver<Update>,
         capacity: usize,
         restore_gate: tokio::sync::OwnedMutexGuard<()>,
-    ) -> Result<(), SessionError> {
+        unarchive: bool,
+    ) -> Result<SessionSnapshot, SessionError> {
         self.owned(move |session| async move {
             let _restore = restore_gate;
             let _transaction = session.transaction.lock().await;
@@ -276,14 +291,14 @@ impl Session {
                 info.session_id = meta.id.to_string().into();
                 info
             });
-            session
-                .publish_with_meta_locked(
-                    [EventKind::StatusChanged {
-                        status: SessionStatus::Idle,
-                    }],
-                    &mut meta,
-                )
-                .await?;
+            let mut events = Vec::new();
+            if unarchive {
+                events.push(EventKind::ArchiveChanged { archived: false });
+            }
+            events.push(EventKind::StatusChanged {
+                status: SessionStatus::Idle,
+            });
+            session.publish_with_meta_locked(events, &mut meta).await?;
             {
                 let mut state = session.lock();
                 state.agent = Some(agent);
@@ -292,7 +307,7 @@ impl Session {
                 state.events = Some(broadcast::channel(capacity).0);
             }
             session.listen(inbox);
-            Ok(())
+            Ok(session.snapshot())
         })
         .await
     }
@@ -393,6 +408,7 @@ impl Session {
     ///
     /// # Errors
     /// Rejects failed/deleted instances or a failed persistence commit.
+    #[cfg(test)]
     pub async fn try_set_archived(
         self: &Arc<Self>,
         archived: bool,
@@ -748,25 +764,47 @@ impl Session {
     }
 
     /// # Errors
-    /// Keeps the session intact if standard closure is unsupported or rejected.
+    /// Keeps the session intact if advertised standard closure is rejected.
     /// Transport failures release the uncertain runtime, without claiming remote success.
     /// Success preserves Bas history but stops this runtime.
     pub async fn close_backend(self: &Arc<Self>) -> Result<(), SessionError> {
-        self.owned(|session| async move {
+        self.stop(false).await.map(|_| ())
+    }
+
+    pub(super) async fn archive(self: &Arc<Self>) -> Result<SessionSnapshot, SessionError> {
+        self.stop(true).await
+    }
+
+    async fn stop(self: &Arc<Self>, archive: bool) -> Result<SessionSnapshot, SessionError> {
+        self.owned(move |session| async move {
             let _restore = session.restore_gate.lock().await;
             let close = {
                 let _transaction = session.transaction.lock().await;
                 let mut state = session.lock();
-                if state.meta.status == SessionStatus::Stopped {
-                    return Ok(());
+                state.check_health()?;
+                if state.deleted {
+                    return Err(SessionError::Inactive(state.meta.status));
                 }
-                state.require_ready()?;
+                let supports_close = state
+                    .agent
+                    .as_ref()
+                    .and_then(|agent| agent.initialization())
+                    .is_some_and(|init| {
+                        init.agent_capabilities.session_capabilities.close.is_some()
+                    });
                 state.closing = true;
-                state.agent.as_ref().expect("ready agent").close_session()
+                supports_close.then(|| {
+                    state
+                        .agent
+                        .as_ref()
+                        .expect("close-capable agent")
+                        .close_session()
+                })
             };
             // Do not hold the commit lock while the Agent flushes final updates.
-            let result = close.await;
-            if let Err(error) = result {
+            if let Some(close) = close
+                && let Err(error) = close.await
+            {
                 session.lock().closing = false;
                 if matches!(error, agent::Error::Backend { .. }) {
                     session.shutdown_owned().await;
@@ -774,7 +812,20 @@ impl Session {
                 return Err(error.into());
             }
             session.shutdown_owned().await;
-            Ok(())
+            let _transaction = session.transaction.lock().await;
+            session.check_health()?;
+            let meta = session.meta();
+            let mut events = Vec::new();
+            if meta.status != SessionStatus::Stopped {
+                events.push(EventKind::StatusChanged {
+                    status: SessionStatus::Stopped,
+                });
+            }
+            if archive && !meta.archived {
+                events.push(EventKind::ArchiveChanged { archived: true });
+            }
+            session.publish_locked(events).await?;
+            Ok(session.snapshot())
         })
         .await
     }

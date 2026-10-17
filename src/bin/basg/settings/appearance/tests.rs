@@ -285,6 +285,24 @@ fn text_overrides_have_contextual_reset_icons_without_changing_other_fields(
 }
 
 #[gpui_kit::test]
+fn appearance_reset_preserves_session_preferences(cx: &mut TestAppContext) {
+    let fixture = fixture(
+        cx,
+        Preferences {
+            confirm_session_delete: Some(false),
+            ..builtin()
+        },
+    );
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("settings-confirm-delete").is_none());
+        window.click("settings-reset", cx);
+        assert_eq!(read(&fixture).confirm_session_delete, Some(false));
+    })
+    .expect("appearance excludes session preferences");
+}
+
+#[gpui_kit::test]
 fn text_edits_debounce_flush_and_reject_invalid_values(cx: &mut TestAppContext) {
     let fixture = fixture(cx, builtin());
     cx.update_window(fixture.window.into(), |_, window, cx| {
@@ -468,6 +486,7 @@ fn all_fields_round_trip_and_default_is_applied_immediately(cx: &mut TestAppCont
         content_line_height: Some(1.8),
         content_opacity: Some(0.8),
         composer_enter_behavior: ComposerEnterBehavior::Newline,
+        confirm_session_delete: Some(true),
         theme_file: Some("theme.json".into()),
         theme_source: ThemeSource::Builtin,
         theme_mode: ThemeMode::Dark,
@@ -490,7 +509,13 @@ fn all_fields_round_trip_and_default_is_applied_immediately(cx: &mut TestAppCont
         window.click("settings-reset", cx);
     })
     .expect("reset control");
-    assert_eq!(read(&fixture), Preferences::default());
+    assert_eq!(
+        read(&fixture),
+        Preferences {
+            confirm_session_delete: expected.confirm_session_delete,
+            ..Preferences::default()
+        }
+    );
 }
 
 #[gpui_kit::test]

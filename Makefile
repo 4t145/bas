@@ -2,7 +2,7 @@
 
 NIX_PROFILE_OPTIONS ?=
 
-.PHONY: help install install-bas install-bas-service install-basg
+.PHONY: help install install-bas install-bas-service install-basg install-basg-dev
 
 # Installers update the same Nix profile, so keep them sequential even with -j.
 .NOTPARALLEL:
@@ -13,6 +13,7 @@ help:
 		'make install-bas          Install bas and bast' \
 		'make install-bas-service  Install bas and enable/restart its systemd user service' \
 		'make install-basg         Install basg with its desktop entry and graphics libraries' \
+		'make install-basg-dev     Incrementally build and install BasG (Development), without replacing basg' \
 		'' \
 		'Pass Nix options with NIX_PROFILE_OPTIONS, e.g. NIX_PROFILE_OPTIONS="--profile /path/to/profile -L"'
 
@@ -26,3 +27,6 @@ install-bas-service:
 
 install-basg:
 	./scripts/install-basg $(NIX_PROFILE_OPTIONS)
+
+install-basg-dev:
+	./scripts/install-basg-dev $(NIX_PROFILE_OPTIONS)

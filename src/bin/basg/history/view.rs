@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::{Button, time};
+use crate::ui::{Button, icon_action, session_status, time};
 use bas::model::Timestamp;
 use gpui_kit::{
     AnyElement, Render, TestSupportExt,
@@ -186,46 +186,61 @@ impl Browser {
         let importable =
             imported.is_some() || (resumable && info.additional_directories.is_empty());
         let busy = self.operation.is_some() || self.connection_error.is_some();
-        let stopped = imported.is_some_and(|session| session.meta.status == SessionStatus::Stopped);
-        let archived = imported.is_some_and(|session| session.meta.archived);
-        let label = if imported.is_some() {
+        let primary = self.primary_action(agent, info);
+        let open_label = if imported.is_some() {
             crate::i18n::tr!("agent-history-open")
         } else if capabilities.load_session {
             crate::i18n::tr!("agent-history-import")
         } else {
             crate::i18n::tr!("agent-history-resume")
         };
-        let import_target = target.clone();
+        let primary_target = target.clone();
         let close_target = target.clone();
-        let restart_target = target.clone();
-        let restore_target = target.clone();
-        let restart = stopped.then(|| gds_uim::el! {
-            Button($format!("agent-history-restart-{key}")) {
-                small; label: $crate::i18n::tr!("agent-session-restart");
-                tooltip: $(if resumable { crate::i18n::tr!("agent-session-restart-help") } else { crate::i18n::tr!("agent-history-cannot-import") });
-                disabled: $busy || !resumable;
-                on_click: $cx.listener(move |this, _, _, cx| this.restart(restart_target.clone(), cx));
+        let (suffix, icon, label, hint, allowed) = match primary {
+            PrimaryAction::Open => (
+                "import",
+                IconName::MessageSquare,
+                open_label,
+                open_label,
+                importable,
+            ),
+            PrimaryAction::Restart => (
+                "restart",
+                IconName::Play,
+                crate::i18n::tr!("agent-session-restart"),
+                if resumable {
+                    crate::i18n::tr!("agent-session-restart-help")
+                } else {
+                    crate::i18n::tr!("agent-history-cannot-import")
+                },
+                resumable,
+            ),
+            PrimaryAction::Restore => (
+                "restore",
+                IconName::ArchiveRestore,
+                crate::i18n::tr!("agent-history-restore"),
+                crate::i18n::tr!("agent-history-restore-help"),
+                true,
+            ),
+        };
+        let loading = match &self.operation {
+            Some(Operation::Import { target, .. }) => {
+                target.agent == agent && target.info.session_id == info.session_id
             }
-        });
-        let restore = archived.then(|| gds_uim::el! {
-            Button($format!("agent-history-restore-{key}")) {
-                small; label: $crate::i18n::tr!("session-restore"); disabled: busy;
-                tooltip: $crate::i18n::tr!("agent-history-restore-help");
-                on_click: $cx.listener(move |this, _, _, cx| this.restore(restore_target.clone(), cx));
+            Some(Operation::Restart { session, .. } | Operation::Restore { session, .. }) => {
+                imported.is_some_and(|snapshot| snapshot.meta.id == *session)
             }
-        });
-        let importing = matches!(&self.operation, Some(Operation::Import { target, .. })
-            if target.agent == agent && target.info.session_id == info.session_id);
-        let close = (active && capabilities.session_capabilities.close.is_some()).then(|| gds_uim::el! {
-            #crate::ui::icon_button($format!("agent-history-close-{key}"), IconName::CircleStop) {
-                accessibility_label: $crate::i18n::tr!("agent-session-close");
-                tooltip: $crate::i18n::tr!("agent-session-close"); disabled: busy;
+            _ => false,
+        };
+        let close = active.then(|| gds_uim::el! {
+            #icon_action($format!("agent-history-close-{key}"), IconName::Square, $crate::i18n::tr!("agent-session-close")) {
+                disabled: busy;
                 on_click: $cx.listener(move |this, _, _, cx| this.close(close_target.clone(), cx));
             }
         });
         let delete = capabilities.session_capabilities.delete.is_some().then(|| gds_uim::el! {
-            #crate::ui::icon_button($format!("agent-history-delete-{key}"), IconName::Trash) {
-                accessibility_label: $crate::i18n::tr!("agent-history-delete"); disabled: $busy || active;
+            #icon_action($format!("agent-history-delete-{key}"), IconName::Trash, $crate::i18n::tr!("agent-history-delete")) {
+                disabled: $busy || active;
                 tooltip: $crate::i18n::tr!("agent-history-delete-help");
                 on_click: $cx.listener(move |this, _, _, cx| this.delete(target.clone(), cx));
             }
@@ -233,33 +248,30 @@ impl Browser {
         gds_uim::el! { #div {
             id: $format!("agent-history-actions-{key}"); test_support; flex; items_center; gap_2; flex_shrink_0;
         } [
-            Button($format!("agent-history-import-{key}")) {
-                small; icon: $(if imported.is_some() { IconName::ExternalLink } else { IconName::Download });
-                label: label; disabled: $busy || !importable; loading: importing;
-                on_click: $cx.listener(move |this, _, _, cx| this.import(import_target.clone(), cx));
+            #icon_action($format!("agent-history-{suffix}-{key}"), icon, label) {
+                tooltip: hint;
+                disabled: $busy || !allowed; loading: loading;
+                on_click: $cx.listener(move |this, _, _, cx| this.activate(primary_target.clone(), primary, cx));
             },
-            ..restore, ..restart, ..close, ..delete,
+            ..close, ..delete,
         ] }.into_any_element()
     }
 
-    fn record_status(&self, agent: &str, info: &acp::SessionInfo) -> Option<String> {
+    fn record_status(
+        &self,
+        key: &str,
+        agent: &str,
+        info: &acp::SessionInfo,
+        cx: &App,
+    ) -> Option<AnyElement> {
         self.imported(agent, info).map(|session| {
-            let label = if session.runtime.failure.is_some() {
-                crate::i18n::tr!("status-failed")
-            } else {
-                match session.meta.status {
-                    SessionStatus::Starting => crate::i18n::tr!("status-starting"),
-                    SessionStatus::Working => crate::i18n::tr!("status-running"),
-                    SessionStatus::Idle => crate::i18n::tr!("status-ready"),
-                    SessionStatus::Stopped => crate::i18n::tr!("status-stopped"),
-                    SessionStatus::Failed => crate::i18n::tr!("status-failed"),
-                }
-            };
-            if session.meta.archived {
-                format!("{label} · {}", crate::i18n::tr!("session-archived"))
-            } else {
-                label.to_owned()
-            }
+            gds_uim::el! { #div { flex; items_center; flex_shrink_0; } [
+                $session_status::Status::for_snapshot(session).render(
+                    format!("agent-history-status-{key}"),
+                    format!("agent-history-indicator-{key}"), cx,
+                ),
+                ..$session.meta.archived.then(|| session_status::archived(format!("agent-history-archived-{key}"))),
+            ] }.into_any_element()
         })
     }
 
@@ -271,7 +283,7 @@ impl Browser {
         page: &connection::AgentHistory,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let status = self.record_status(agent, info);
+        let status = self.record_status(&key, agent, info, cx);
         let capabilities = &page.initialization.agent_capabilities;
         let resumable =
             capabilities.load_session || capabilities.session_capabilities.resume.is_some();
@@ -300,9 +312,7 @@ impl Browser {
         } [
             #div { flex; items_center; gap_3; } [
                 #div { id: $format!("agent-history-title-{key}"); test_support; role: gpui_kit::Role::Label; aria_label: $title.clone(); flex_1; min_w_0; truncate; } [$title],
-                ..$status.map(|label| gds_uim::el! {
-                    #div { id: $format!("agent-history-status-{key}"); test_support; role: gpui_kit::Role::Status; aria_label: $label.clone(); text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground; } [$label]
-                }),
+                ..status,
                 #div {
                     id: $format!("agent-history-time-{key}"); test_support;
                     text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
@@ -347,14 +357,12 @@ impl Render for Browser {
                 #div { flex; items_center; gap_2; } [
                     #div { flex_shrink_0; } [$crate::i18n::tr!("agent-history-workspace-filter")],
                     #div { flex_1; min_w_0; } [$self.workspace_filter(cx)],
-                    Button("agent-history-refresh") {
-                        small; ghost; icon: IconName::RefreshCw;
-                        label: $crate::i18n::tr!("agent-history-refresh");
+                    #icon_action("agent-history-refresh", IconName::RefreshCw, $crate::i18n::tr!("agent-history-refresh")) {
                         disabled: $self.operation.is_some(); loading: $self.loading();
                         on_click: $cx.listener(|this, _, _, cx| this.reload(cx));
                     },
                 ],
-                Input($&self.search) { small; cleanable: true; },
+                $crate::ui::input::placeholder(&self.search, Input::new(&self.search).small().cleanable(true)),
                 #div { text_color: $cx.theme().muted_foreground; } [$crate::i18n::tr!("agent-history-help")],
                 ..$pending,
                 ..$self.connection_error.as_ref().map(|error| gds_uim::el! {

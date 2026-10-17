@@ -126,6 +126,10 @@ impl Session {
             }
             let receipt = {
                 let state = session.lock();
+                state.check_health().map_err(SubmissionError::Unknown)?;
+                if state.meta.archived {
+                    return Err(rejected(Kind::Archived, "session is archived"));
+                }
                 state
                     .require_ready()
                     .map_err(|error| match error {
@@ -134,9 +138,6 @@ impl Session {
                         }
                         error => SubmissionError::Unknown(error),
                     })?;
-                if state.meta.archived {
-                    return Err(rejected(Kind::Archived, "session is archived"));
-                }
                 if state.active.is_some() {
                     return Err(rejected(Kind::Busy, "a turn is already running"));
                 }

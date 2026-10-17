@@ -375,6 +375,14 @@ impl Registry {
 
     async fn restore(&self, session: &Arc<Session>) -> Result<(), CreateError> {
         session.check_health()?;
+        if matches!(
+            session.meta().status,
+            SessionStatus::Stopped | SessionStatus::Failed
+        ) {
+            return Err(CreateError::NotResumable(
+                "start or restore this stopped session explicitly",
+            ));
+        }
         if session.is_restored() {
             return Ok(());
         }

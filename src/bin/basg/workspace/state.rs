@@ -227,6 +227,7 @@ pub(super) struct PendingOperations {
     pub(super) archiving: HashSet<SessionId>,
     pub(super) deleting: HashSet<SessionId>,
     pub(super) closing: HashSet<SessionId>,
+    pub(super) restarting: HashSet<SessionId>,
     pub(super) loading_attachments: HashSet<SessionId>,
 }
 
@@ -237,6 +238,7 @@ impl PendingOperations {
         self.archiving.remove(&id);
         self.deleting.remove(&id);
         self.closing.remove(&id);
+        self.restarting.remove(&id);
         self.loading_attachments.remove(&id);
     }
 }
@@ -291,6 +293,10 @@ impl SelectedThread {
     pub(super) fn reload(&mut self) {
         self.epoch += 1;
         self.stream = StreamState::Loading;
+    }
+
+    pub(super) fn awaiting_snapshot(&self) -> bool {
+        self.id.is_some() && self.timeline.conversation.is_none()
     }
 
     fn clear_transients(&mut self) {

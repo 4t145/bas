@@ -121,7 +121,7 @@ async fn archival_is_metadata_for_starting_stopped_and_failed_sessions() {
         assert!(matches!(
             session.prompt(vec!["blocked".into()]).await,
             Err(SubmissionError::Rejected(PromptRejection {
-                kind: PromptRejectionKind::Unavailable,
+                kind: PromptRejectionKind::Archived,
                 ..
             }))
         ));

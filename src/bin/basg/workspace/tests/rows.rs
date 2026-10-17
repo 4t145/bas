@@ -228,7 +228,7 @@ fn rows_status_changes_preserve_title_time_and_hover_actions(cx: &mut TestAppCon
             (SessionStatus::Idle, true, (6., 6.)),
             (SessionStatus::Idle, false, (0., 0.)),
             (SessionStatus::Failed, false, (12., 12.)),
-            (SessionStatus::Stopped, false, (8., 1.)),
+            (SessionStatus::Stopped, false, (6., 6.)),
         ] {
             fixture.view.update(cx, |view, cx| {
                 let session = view
@@ -1009,6 +1009,72 @@ fn draft_context_menu_has_only_one_destructive_action(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn stopped_thread_menu_starts_its_target_without_switching_the_current_thread(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = fixture(cx);
+    let mut target = session();
+    target.status = SessionStatus::Stopped;
+    target.initialization = Some(
+        bas::acp::InitializeResponse::new(agent_client_protocol::schema::ProtocolVersion::V1)
+            .agent_capabilities(bas::acp::AgentCapabilities::new().load_session(true)),
+    );
+    let active = session();
+    attach(&fixture, target.clone(), cx);
+    attach(&fixture, active.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    let menu = open_row_menu(&fixture, target.id, cx);
+    cx.update_window(menu, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("启动会话").visible());
+        window.click("启动会话", cx);
+    })
+    .expect("start from the actual context menu");
+    assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::RestartSession(id)) if id == target.id)
+    );
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.request_restart_agent_session(target.id, cx);
+            assert!(
+                fixture.commands.try_recv().is_err(),
+                "pending restart is deduplicated"
+            );
+            target.status = SessionStatus::Idle;
+            target.revision = Cursor::from_raw(1);
+            view.update(
+                Update::RestartedSession {
+                    session: target.id,
+                    result: Ok(target.clone().into()),
+                },
+                window,
+                cx,
+            );
+            assert!(!view.sessions.pending.restarting.contains(&target.id));
+            assert_eq!(
+                view.selected.id,
+                Some(active.id),
+                "background restart must not steal selection"
+            );
+            assert_eq!(
+                view.sessions
+                    .entries
+                    .iter()
+                    .find(|meta| meta.id == target.id)
+                    .expect("target")
+                    .status,
+                SessionStatus::Idle
+            );
+        });
+    })
+    .expect("background restart receipt");
+    assert!(
+        fixture.commands.try_recv().is_err(),
+        "no prompt or selection command"
+    );
+}
+
+#[gpui_kit::test]
 fn rows_context_pin_and_rename_target_without_selecting_on_open(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let target = session();
@@ -1082,10 +1148,7 @@ fn rows_context_delete_opens_confirmation_without_rpc(cx: &mut TestAppContext) {
     while fixture.commands.try_recv().is_ok() {}
     let menu = open_row_menu(&fixture, target.id, cx);
     cx.update_window(menu, |_, window, cx| {
-        for _ in 0..4 {
-            window.press("down", cx);
-        }
-        window.press("enter", cx);
+        window.click(crate::i18n::tr!("session-delete"), cx);
         assert_eq!(fixture.view.read(cx).selected.id, Some(active.id));
         assert!(
             fixture.commands.try_recv().is_err(),

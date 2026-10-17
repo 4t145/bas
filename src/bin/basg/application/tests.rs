@@ -10,6 +10,56 @@ fn init(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn delete_confirmation_is_floating_and_remembered_only_after_confirmation(cx: &mut TestAppContext) {
+    use std::{cell::Cell, rc::Rc};
+    let directory = tempfile::tempdir().expect("settings");
+    let path = directory.path().join("settings.json");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::configuration::init(Some(path.clone()), cx);
+        theme::init(None, cx);
+    });
+    assert_eq!(InfoWindow::Confirmation.window_kind(), WindowKind::Floating);
+    let calls = Rc::new(Cell::new(0));
+    for confirm in [false, true] {
+        let called = calls.clone();
+        let handle = cx.update(|cx| {
+            open_delete_confirmation(request(), move |_| called.set(called.get() + 1), cx)
+                .expect("dialog");
+            cx.global::<OpenWindows>()
+                .confirmation
+                .expect("confirmation")
+        });
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.click("delete-dont-ask", cx);
+            window.click(
+                if confirm {
+                    "message-confirm"
+                } else {
+                    "message-close"
+                },
+                cx,
+            );
+        })
+        .expect("remember deletion preference");
+        let stored = bas::config::Store::at(path.clone())
+            .load()
+            .expect("settings")
+            .settings
+            .appearance;
+        assert_eq!(stored.confirm_session_delete, confirm.then_some(false));
+    }
+    assert_eq!(calls.get(), 1);
+    let called = calls.clone();
+    cx.update(|cx| {
+        open_delete_confirmation(request(), move |_| called.set(called.get() + 1), cx)
+            .expect("skip dialog")
+    });
+    assert_eq!(calls.get(), 2);
+}
+
+#[gpui_kit::test]
 fn about_reuses_a_window_and_opens_homepage(cx: &mut TestAppContext) {
     init(cx);
     let handle = cx.update(|cx| open_about(cx).expect("about window"));

@@ -186,11 +186,11 @@ impl Workspace {
                 IconName::Minimize2
             }),
         ) {
-        tooltip: $(if self.window.compact {
+        hoverable_tooltip: $shortcuts::tooltip(if self.window.compact {
             crate::i18n::tr!("window-expand")
         } else {
             crate::i18n::tr!("window-compact")
-        });
+        }, ToggleMode);
         on_click: $cx.listener(Self::on_layout_toggle_mode);
         } }
     }
@@ -244,6 +244,8 @@ impl Workspace {
         .on_action(cx.listener(Self::on_conversation_page_down))
         .on_action(cx.listener(Self::on_conversation_previous_turn))
         .on_action(cx.listener(Self::on_conversation_next_turn))
+        .on_action(cx.listener(Self::on_toggle_session))
+        .on_action(cx.listener(Self::on_open_session_manager))
         .into_any_element()
     }
 
@@ -314,7 +316,7 @@ impl Workspace {
             flex; items_center; gap_1; text_size: $crate::ui::SMALL;
             on_mouse_down: gpui_kit::MouseButton::Left, Self::on_layout_window_move;
         } [
-            $self.connection_indicator("compact-connection", cx),
+            $self.session_indicator("compact-connection", cx),
             ..archived, ..activity, ..summary,
         ] }
         .into_any_element()
@@ -341,7 +343,7 @@ impl Workspace {
             h: COMPACT_HEADER_HEIGHT.px; flex_shrink_0;
         } [
             #icon_button("toggle-output", $(if self.window.output_open { IconName::ChevronDown } else { IconName::ChevronRight })) {
-                tooltip: $crate::i18n::tr!("conversation-toggle");
+                hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("conversation-toggle"), ToggleOutput);
                 on_click: $cx.listener(Self::on_layout_toggle_output);
             },
             $self.agent_button(cx),
@@ -350,7 +352,7 @@ impl Workspace {
             $self.application_button(cx),
             $self.workspace_button(cx),
             #icon_button("new-session", IconName::Plus) {
-                tooltip: $crate::i18n::tr!("session-new-shortcut");
+                hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("session-new"), NewSession);
                 on_click: $cx.listener(Self::on_layout_new_session);
             },
             $self.mode_button(cx),

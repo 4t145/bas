@@ -153,23 +153,50 @@ async fn imports_replay_once_and_continues_using_the_original_agent_id() {
 }
 
 #[tokio::test]
-async fn restart_reuses_identity_preserves_archive_and_does_not_duplicate_replay() {
+async fn restore_starts_the_archived_session_without_duplicating_history() {
     let directory = tempfile::tempdir().expect("directory");
     let registry = registry("history", &directory);
     let session = registry
         .import_agent_session(import_request(&directory), "fixture".into())
         .await
         .expect("import");
-    session.close_backend().await.expect("close");
-    session.set_archived(true).await;
+    let archived = registry
+        .set_archived(&session, true)
+        .await
+        .expect("archive");
+    assert_eq!(archived.meta.status, SessionStatus::Stopped);
+    assert!(archived.meta.archived);
+    assert_eq!(recorded(&directory, "close").len(), 1);
     let previous = events(&session).await;
     let service = Service::new(Arc::clone(&registry));
+    assert!(
+        service
+            .restart_session(Request::new(pb::GetSessionRequest {
+                session: session.id().to_string(),
+            }))
+            .await
+            .is_err(),
+        "archived sessions must be restored, not directly started"
+    );
+    for mode in ["reject_load", "unsupported"] {
+        registry.replace_catalog(Arc::new(
+            Catalog::from_specs([spec(mode, &directory)]).expect("catalog"),
+        ));
+        assert!(registry.set_archived(&session, false).await.is_err());
+        assert_eq!(session.snapshot(), archived);
+        assert_eq!(events(&session).await.len(), previous.len());
+    }
+    registry.replace_catalog(Arc::new(
+        Catalog::from_specs([spec("history", &directory)]).expect("catalog"),
+    ));
+    let loads = recorded(&directory, "load").len();
     let response = service
-        .restart_session(Request::new(pb::GetSessionRequest {
+        .set_archived(Request::new(pb::SetArchivedRequest {
             session: session.id().to_string(),
+            archived: false,
         }))
         .await
-        .expect("restart RPC")
+        .expect("restore RPC")
         .into_inner()
         .session
         .expect("snapshot");
@@ -177,19 +204,18 @@ async fn restart_reuses_identity_preserves_archive_and_does_not_duplicate_replay
     assert_eq!(snapshot.meta.id, session.id());
     assert_eq!(snapshot.meta.status, SessionStatus::Idle);
     assert!(
-        snapshot.meta.archived,
-        "restart does not silently unarchive"
+        !snapshot.meta.archived,
+        "restore unarchives and starts together"
     );
     assert_eq!(registry.list().await.len(), 1);
     let after = events(&session).await;
     assert_eq!(
         after.len(),
-        previous.len() + 1,
-        "only the ready transition is added"
+        previous.len() + 2,
+        "only restore and ready transitions are added"
     );
-    assert_eq!(recorded(&directory, "load").len(), 2);
+    assert_eq!(recorded(&directory, "load").len(), loads + 1);
     assert!(recorded(&directory, "new").is_empty());
-    session.set_archived(false).await;
     let mut attachment = session
         .try_attach(AttachOptions {
             replay: 0,
@@ -530,13 +556,13 @@ async fn imported_identity_and_transcript_survive_daemon_restart() {
     let session = reopened.get(id).await.expect("same stopped ID");
     assert_eq!(session.meta().status, SessionStatus::Stopped);
     reopened
-        .restart_session(&session)
+        .set_archived(&session, false)
         .await
         .expect("restart after daemon reboot");
     assert_eq!(session.meta().status, SessionStatus::Idle);
-    assert!(session.meta().archived);
+    assert!(!session.meta().archived);
     assert_eq!(recorded(&directory, "load").len(), 3);
-    assert_eq!(events(&session).await.len(), stopped_history.len() + 1);
+    assert_eq!(events(&session).await.len(), stopped_history.len() + 2);
     reopened.shutdown().await;
 }
 

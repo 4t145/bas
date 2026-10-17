@@ -19,11 +19,11 @@ impl Workspace {
             }),
             cx,
         ) {
-            tooltip: $(if self.composer.expanded {
+            hoverable_tooltip: $shortcuts::tooltip(if self.composer.expanded {
                 crate::i18n::tr!("composer-collapse")
             } else {
                 crate::i18n::tr!("composer-expand")
-            });
+            }, ExpandMessageEditor);
             on_click: $cx.listener(Self::on_composer_toggle_expansion);
         } }
     }
@@ -40,6 +40,7 @@ impl Workspace {
     pub(in crate::workspace) fn composer_fills_thread(&self) -> bool {
         !self.window.compact
             && self.composer.expanded
+            && !self.selected.awaiting_snapshot()
             && !self.thread_has_user_prompt()
             && !self.working()
             && self.selected.approval.panel.is_empty()
@@ -246,6 +247,7 @@ impl Workspace {
                 @$(!fills_thread) => { h: $px(self.composer_height(cx)); };
             }
         };
+        let editor = crate::ui::input::placeholder(&self.composer.input, editor);
         gds_uim::el! {
             #div {
                 id: "composer-editor";

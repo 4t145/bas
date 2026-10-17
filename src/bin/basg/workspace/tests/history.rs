@@ -82,6 +82,77 @@ fn reopening_restarted_current_session_reattaches_without_clearing_the_draft(
 }
 
 #[gpui_kit::test]
+fn workspace_restart_retries_failure_and_preserves_the_current_draft(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let mut meta = session();
+    meta.agent = "unsupported-acp".into();
+    meta.status = SessionStatus::Stopped;
+    attach(&fixture, meta.clone(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.request_restart_agent_session(meta.id, cx);
+            assert!(fixture.commands.try_recv().is_err(), "unsupported Agent cannot restart");
+            meta.initialization = Some(listing().initialization);
+            *view.sessions.entries.iter_mut().find(|entry| entry.id == meta.id).expect("session") = meta.clone();
+            view.composer.input.update(cx, |input, cx| input.set_value("unsent draft", window, cx));
+            view.request_restart_agent_session(meta.id, cx);
+            assert!(matches!(fixture.commands.try_recv(), Ok(Command::RestartSession(id)) if id == meta.id));
+            view.update(Update::RestartedSession { session: meta.id, result: Err("restart rejected".into()) }, window, cx);
+            assert!(!view.sessions.pending.restarting.contains(&meta.id));
+            assert_eq!(view.composer.input.read(cx).value(), "unsent draft");
+            view.request_restart_agent_session(meta.id, cx);
+            assert!(matches!(fixture.commands.try_recv(), Ok(Command::RestartSession(id)) if id == meta.id));
+            meta.status = SessionStatus::Idle;
+            meta.revision = Cursor::from_raw(1);
+            view.update(Update::RestartedSession { session: meta.id, result: Ok(meta.clone().into()) }, window, cx);
+            assert!(matches!(fixture.commands.try_recv(), Ok(Command::Watch { session, .. }) if session == meta.id));
+            assert_eq!(view.composer.input.read(cx).value(), "unsent draft");
+            assert_eq!(view.selected.stream, StreamState::Loading);
+        });
+    }).expect("retry and reattach");
+    assert!(fixture.commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
+fn restart_send_failure_releases_pending_state(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let mut meta = session();
+    meta.status = SessionStatus::Stopped;
+    meta.initialization = Some(listing().initialization);
+    attach(&fixture, meta.clone(), cx);
+    fixture.commands.close();
+    cx.update(|cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.request_restart_agent_session(meta.id, cx);
+            assert!(!view.sessions.pending.restarting.contains(&meta.id));
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn ctrl_m_reopens_session_management_from_the_composer(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let history = open_history(&fixture, cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.activate_window();
+        fixture
+            .view
+            .update(cx, |view, cx| view.focus_input(window, cx));
+        window.render_frame(cx);
+        window.press("ctrl-m", cx);
+    })
+    .expect("management shortcut");
+    cx.run_until_parked();
+    cx.update_window(history.window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("agent-history-window").visible());
+        assert!(window.is_window_active());
+    })
+    .expect("existing management window activated");
+}
+
+#[gpui_kit::test]
 fn import_window_is_independent_and_import_keeps_the_outgoing_composer(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let mut previous = session();

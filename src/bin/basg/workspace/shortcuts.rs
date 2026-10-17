@@ -1,10 +1,7 @@
 //! Thread shortcuts route through the same guarded operations as the visible controls.
 
 use super::*;
-use gpui_kit::{
-    Action, AnyView, AsKeystroke, KeyContext,
-    component::{kbd::Kbd, menu::PopupMenuItem},
-};
+use gpui_kit::{Action, AnyView, component::menu::PopupMenuItem};
 
 actions!(
     bas,
@@ -14,6 +11,8 @@ actions!(
         ToggleThreadPin,
         DeleteThread,
         AddWorkspace,
+        ToggleSession,
+        OpenSessionManager,
         ScrollConversationToTop,
         PageConversationUp,
         PageConversationDown,
@@ -34,6 +33,8 @@ pub(super) fn bind_keys(cx: &mut App) {
             KeyBinding::new("ctrl-alt-p", ToggleThreadPin, Some(context)),
             KeyBinding::new("ctrl-alt-w", DeleteThread, Some(context)),
             KeyBinding::new("ctrl-alt-n", AddWorkspace, Some(context)),
+            KeyBinding::new("ctrl-s", ToggleSession, Some(context)),
+            KeyBinding::new("ctrl-m", OpenSessionManager, Some(context)),
             KeyBinding::new("ctrl-home", ScrollConversationToTop, Some(context)),
             KeyBinding::new("pageup", PageConversationUp, Some(context)),
             KeyBinding::new("pagedown", PageConversationDown, Some(context)),
@@ -48,19 +49,7 @@ pub(super) fn menu_item(label: &'static str, action: Option<Box<dyn Action>>) ->
 }
 
 pub(super) fn hint(label: &str, action: &dyn Action, window: &Window) -> String {
-    let context = KeyContext::parse("BasWorkspace").expect("workspace key context");
-    match window.highest_precedence_binding_for_action_in_context(action, context) {
-        Some(binding) => {
-            let keys = binding
-                .keystrokes()
-                .iter()
-                .map(|key| Kbd::format(key.as_keystroke()))
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("{label} ({keys})")
-        }
-        None => label.to_owned(),
-    }
+    crate::ui::shortcut::hint(label, action, "BasWorkspace", window)
 }
 
 pub(super) fn tooltip(
@@ -71,6 +60,36 @@ pub(super) fn tooltip(
 }
 
 impl Workspace {
+    pub(super) fn on_toggle_session(
+        &mut self,
+        _: &ToggleSession,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(meta) = self.current().filter(|meta| !meta.archived) else {
+            return;
+        };
+        let id = meta.id;
+        if meta.status == SessionStatus::Stopped {
+            self.request_restart_agent_session(id, cx);
+        } else {
+            self.request_close_agent_session(id, cx);
+        }
+    }
+
+    pub(super) fn on_open_session_manager(
+        &mut self,
+        _: &OpenSessionManager,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let agent = self
+            .current()
+            .map(|meta| meta.agent.to_string())
+            .unwrap_or_else(|| self.selected.agent.clone());
+        self.open_agent_history(agent, window, cx);
+    }
+
     pub(super) fn on_conversation_top(
         &mut self,
         _: &ScrollConversationToTop,
@@ -135,11 +154,8 @@ impl Workspace {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(id) = self.selected.id
-            && !self.archive_blocked(id)
-            && self.sessions.entries.iter().any(|session| session.id == id)
-        {
-            self.set_archived(id, true, cx);
+        if let Some(meta) = self.current() {
+            self.set_archived(meta.id, !meta.archived, cx);
         }
     }
 

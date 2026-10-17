@@ -34,6 +34,7 @@ impl Workspace {
             | Command::Archive { session, .. }
             | Command::Delete(session)
             | Command::CloseSession(session)
+            | Command::RestartSession(session)
             | Command::Prompt { session, .. }
             | Command::Cancel(session)
             | Command::ResolvePrompt { session, .. }
@@ -49,6 +50,7 @@ impl Workspace {
                 Command::Rename { .. }
                     | Command::Archive { .. }
                     | Command::Delete(_)
+                    | Command::RestartSession(_)
                     | Command::Prompt { .. }
                     | Command::Cancel(_)
                     | Command::SetConfig(_)
@@ -78,7 +80,6 @@ impl Workspace {
         match *command {
             Command::AgentHistory { .. }
             | Command::ImportHistory { .. }
-            | Command::RestartSession(_)
             | Command::DeleteAgentHistory { .. } => {
                 self.selected.error = Some(message);
             }
@@ -87,6 +88,15 @@ impl Workspace {
                 self.session_operation_error(
                     session,
                     crate::i18n::tr!("agent-session-close"),
+                    message,
+                    cx,
+                );
+            }
+            Command::RestartSession(session) => {
+                self.sessions.pending.restarting.remove(&session);
+                self.session_operation_error(
+                    session,
+                    crate::i18n::tr!("agent-session-start"),
                     message,
                     cx,
                 );

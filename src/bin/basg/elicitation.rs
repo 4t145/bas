@@ -271,9 +271,10 @@ impl Panel {
         let id = format!("elicitation-input-{name}");
         match &field.kind {
             Kind::String | Kind::Number | Kind::Integer => {
-                row = gds_uim::el! { $row [ Input($(&self.inputs[&name])) {
-                    id: $id; small; disabled: $self.submitting;
-                } ] };
+                let input = &self.inputs[&name];
+                row = gds_uim::el! { $row [
+                    $crate::ui::input::placeholder(input, Input::new(input).id(id).small().disabled(self.submitting))
+                ] };
             }
             Kind::Boolean => {
                 let checked = self

@@ -42,10 +42,12 @@ impl Workspace {
             // History discovery and mutations belong to the independent history window.
             Update::AgentHistory { .. }
             | Update::ImportedHistory { .. }
-            | Update::RestartedSession { .. }
             | Update::DeletedAgentHistory { .. } => {}
             Update::ClosedSession { session, result } => {
                 self.agent_session_closed(session, result, cx)
+            }
+            Update::RestartedSession { session, result } => {
+                self.agent_session_restarted(session, result, cx)
             }
             Update::Elicitations {
                 epoch,
@@ -234,18 +236,33 @@ impl Workspace {
                             outbox.pause();
                         }
                         // A late receipt must not resurrect a deleted catalog entry.
+                        let mut reattach = false;
                         if let Some(meta) = self
                             .sessions
                             .entries
                             .iter_mut()
                             .find(|meta| meta.id == session)
                         {
+                            reattach = self.selected.id == Some(session)
+                                && meta.archived
+                                && !incoming.archived
+                                && incoming.revision >= meta.revision;
                             crate::conversation::merge_meta(meta, &incoming);
                             if let Some(conversation) = &mut self.selected.timeline.conversation
                                 && conversation.session.id == session
                             {
                                 conversation.merge_meta(meta);
                             }
+                        }
+                        if reattach {
+                            self.selected.reload();
+                            self.command(
+                                Command::Watch {
+                                    session,
+                                    epoch: self.selected.epoch,
+                                },
+                                cx,
+                            );
                         }
                     }
                     Err(error) => {

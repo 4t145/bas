@@ -17,8 +17,8 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | ListAgents、CreateSession、ListSessions、GetSession、DeleteSession | 后端选择、进程与会话生命周期 |
 | ListAgentSessions | 在单条 ACP 连接上调用 `session/list` 并读完分页；返回原生 `ListSessionsResponse`、初始化能力和已导入 ID 映射，不创建会话 |
 | ImportAgentSession | 接收 Agent 原生 `SessionInfo`，加载／恢复指定会话，保存 Bas UUID 与 Agent ID 映射；不调用 `session/new` |
-| CloseSession | 能力协商后调用 `session/close`，保留 Bas 历史为已停止记录 |
-| RestartSession | 显式重新加载已停止会话的原 ACP 身份，保留本地 ID、历史与归档标记，不发送 prompt |
+| CloseSession | 停止运行实例；支持时先调用 `session/close`，否则释放本地实例，保留 Bas 历史 |
+| RestartSession | 显式重新启动已停止且未归档的会话，保留本地 ID 和历史，不发送 prompt |
 | DeleteAgentSession | 能力协商后调用 `session/delete`，只删除 Agent 历史；已导入活跃会话须先关闭 |
 | ListAgentCatalog | `bas::management::Catalog` JSON，包含 Registry 和已配置后端 |
 | InstallAgent | 可取消的安装进度流，最终返回已保存的 `AgentSpec` |
@@ -30,7 +30,7 @@ SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段�
 | Session.revision、active_turn | 快照包含的最后事件游标，以及当前正在执行的回合 |
 | Session.last_reply | 最近一条 Agent 回复块的游标；用于未读判断，改名/归档等元数据操作不会推进 |
 | Session.agent_updated_at | Agent 的 `session_info_update.updatedAt`，与 daemon 的事件更新时间分别保存 |
-| Session.archived、SetArchived、ArchiveChanged | 可恢复的列表可见性，不改变 Agent 生命周期 |
+| Session.archived、SetArchived、ArchiveChanged | 归档先停止，恢复先启动；保留原会话身份和历史 |
 | Prompt 请求 | `PromptRequest`，完整 prompt 内容与 `_meta` |
 | Prompt 返回 | `TurnAccepted`，包含 turn ID 和对应 `TurnStarted` 的 cursor |
 | TurnFinished.response | 完整 `PromptResponse`，包括 stopReason 和 `_meta` |
@@ -97,7 +97,8 @@ let options = client.set_config_option_acp(
 当前拒绝包含额外工作根的 `SessionInfo`，以免无声改变执行上下文。
 
 `CloseSession` 保留本地记录并将运行实例置为 Stopped。
-`RestartSession` 仅接受健康的已停止 ACP 记录；启动与回放在提交新运行实例前隔离，
+`RestartSession` 仅接受健康、已停止且未归档的记录；ACP 使用原后端 ID，且必须支持 load/resume。
+已归档记录须通过 `SetArchived(false)` 恢复。启动与回放在提交新运行实例前隔离，
 回放不会再次追加到本地历史。加载被拒绝、能力不支持或提交前取消时仍保留停止记录。
 关闭、删除、启动及 daemon 退出通过同一会话恢复锁互斥；持久化提交一旦开始，
 与其他会话操作一样独立于 RPC 调用者完成，因此超时后应查询实际状态，不自动重试。
@@ -212,21 +213,24 @@ daemon 生成的唯一 `request_id` 和完整 `RequestPermissionRequest`；新�
 
 ### 可恢复归档
 
-`SetArchived { session, archived }` 在会话锁内更新 `archived`，发布带 revision 的
-`ArchiveChanged`，并返回同一时刻的完整 Session 快照。相同值的重复请求不产生新事件。
+`SetArchived { session, archived }` 通过会话恢复锁串行化归档、启动、关闭和删除，
+发布带 revision 的 `ArchiveChanged`，并返回完成操作时的完整 Session 快照。
+相同值的重复请求不产生新事件，也不会隐式启动未归档的停止会话。
 客户端仍按 revision 合并响应、目录和事件，不能用迟到响应覆盖更高版本。
 
 `ListSessions` 默认只返回未归档会话，`include_archived=true` 返回完整目录。
-归档不删除会话、不停止 Agent、不取消已接受的回合；`GetSession`、`Attach` 和
-`LoadHistory` 继续可用，`Cancel` 仍可显式停止正在执行的回合。
-归档后新 `Prompt` 返回 `FAILED_PRECONDITION`；恢复后按原生命周期判断是否可发送。
-Stopped / Failed 会话也可以归档和恢复，但恢复不会启动新 Agent 或使失效会话复活。
+归档先停止运行实例和正在执行的回合，再提交归档标记；不删除会话或历史。
+归档必然已停止，已停止不必然归档。`GetSession`、`Attach` 和 `LoadHistory` 继续可读取记录。
+归档后新 `Prompt` 返回 `FAILED_PRECONDITION`；不会通过发送或取消请求自动重启。
+恢复加载原会话，成功后将取消归档与就绪状态一起提交；失败、能力不支持或提交前取消
+保持原记录已归档且已停止，不创建替代会话。已知持久化故障仍拒绝修改。
 
 GUI 在归档时保留草稿和未发队列并暂停派发，恢复本身不自动解除队列暂停。
 `DeleteSession` / `bast session remove` 仍是停止 Agent 并遗忘会话的永久删除操作，
 不作为旧服务器不支持归档时的兼容替代。
 
 归档元数据与会话快照一起提交。默认 `localdb` 保留会话与历史事件，daemon 重启后可读取；
+加载旧版本归档但未停止的记录时，将其规范为停止状态，不启动归档的 Agent。
 `memory` 模式只保留有界内存历史，重启后丢失。Agent 继续对话还取决于其会话恢复能力，
 已淘汰的内存事件不会恢复。
 归档功能需更新 daemon、CLI 与 GUI；旧 daemon 返回 `UNIMPLEMENTED` 时应提示升级，

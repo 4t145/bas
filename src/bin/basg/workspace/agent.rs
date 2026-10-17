@@ -93,8 +93,8 @@ impl Workspace {
                     let history_owner = view.clone();
                     let history_agent = selected.clone();
                     menu.separator()
-                    .item(PopupMenuItem::new(crate::i18n::tr!("agent-history-title"))
-                        .icon(IconName::ListClock)
+                    .item(shortcuts::menu_item(crate::i18n::tr!("agent-history-title"), Some(Box::new(shortcuts::OpenSessionManager)))
+                        .icon(crate::history::ICON)
                         .on_click(move |_, window, cx| {
                             menus::in_parent(parent, window, cx, |window, cx| {
                                 let _ = history_owner.update(cx, |this, cx| {

@@ -5,7 +5,7 @@ use crate::{theme, ui::window_controls::TitleBar};
 use gpui_kit::{
     AppContext, Bounds, ClickEvent, Global, Render, TestSupportExt, WeakEntity, WindowBounds,
     WindowDecorations, WindowHandle, WindowKind, WindowOptions, actions,
-    component::{ActiveTheme, Root},
+    component::{ActiveTheme, Icon, Root},
     div,
     prelude::*,
     px, size,
@@ -151,7 +151,10 @@ impl Render for Host {
             on_action: $cx.listener(Self::close_action);
         } [
             TitleBar { on_close_window: $cx.listener(Self::close); } [
-                $crate::i18n::tr!("agent-history-title"),
+                #div { flex; items_center; gap_2; } [
+                    Icon(ICON) { size: crate::ui::ICON.px; },
+                    $crate::i18n::tr!("agent-history-title"),
+                ],
             ],
             #div { flex_1; min_h_0; } [$self.browser.clone()],
         ] }

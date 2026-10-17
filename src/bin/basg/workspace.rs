@@ -383,17 +383,12 @@ impl Workspace {
     }
 
     fn send_hint(&self, _: &App) -> String {
-        if self.working() {
-            crate::i18n::tr!(
-                "composer-queue-hint",
-                shortcut = self.composer_send_shortcut()
-            )
+        let label = if self.working() {
+            crate::i18n::tr!("composer-queue-hint")
         } else {
-            crate::i18n::tr!(
-                "composer-send-hint",
-                shortcut = self.composer_send_shortcut()
-            )
-        }
+            crate::i18n::tr!("composer-send-hint")
+        };
+        crate::ui::shortcut::format(label, self.composer_send_shortcut())
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {

@@ -2,6 +2,7 @@
 
 mod controls;
 mod form;
+mod sessions;
 use crate::theme::{self, preferences::Preferences};
 use form::{DraftError, Form};
 use gpui_kit::{
@@ -435,7 +436,7 @@ impl AppearancePage {
                 .clone();
                 gds_uim::el! {
                     #div { id: $field.id(); test_support; w_full; min_w_0; } [
-                        Input($&input) { small; disabled: $self.document.is_none(); },
+                        $crate::ui::input::placeholder(&input, Input::new(&input).small().disabled(self.document.is_none())),
                     ]
                 }
                 .into_any_element()
@@ -477,7 +478,14 @@ impl AppearancePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.replace_form(&Preferences::default(), window, cx);
+        self.replace_form(
+            &Preferences {
+                confirm_session_delete: self.form.confirm_delete,
+                ..Preferences::default()
+            },
+            window,
+            cx,
+        );
         self.save(window, cx);
     }
 

@@ -2,6 +2,62 @@ use super::*;
 use gpui_kit::{TestAppContext, size, test::TestWindowExt};
 
 #[gpui_kit::test]
+fn session_preferences_have_their_own_category_and_remain_searchable(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("settings fixture");
+    let path = directory.path().join("settings.json");
+    std::fs::write(&path, r#"{"appearance":{"theme_source":"builtin","content_opacity":0.7,"confirm_session_delete":false}}"#)
+        .expect("preferences");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::configuration::init(Some(path.clone()), cx);
+        crate::theme::init(None, cx);
+    });
+    let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        Root::new(cx.new(|cx| Settings::new(window, cx)), window, cx)
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("settings-confirm-delete").is_none());
+        let appearance = window.find("settings-appearance-text").bounds();
+        let sessions = window.find("settings-sessions-text").bounds();
+        assert_eq!(appearance.left(), sessions.left());
+        assert!(window.try_find("settings-sessions-expand").is_none());
+        window.click("settings-sessions", cx);
+        window.render_frame(cx);
+        assert!(window.find("session-settings").visible());
+        assert!(window.try_find("appearance-layout-card").is_none());
+        assert!(window.try_find("settings-backend-context").is_none());
+        window.click("settings-confirm-delete", cx);
+        assert!(
+            cx.global::<crate::theme::Appearance>()
+                .confirm_session_delete
+        );
+        window.click("settings-confirm-delete", cx);
+        assert!(
+            !cx.global::<crate::theme::Appearance>()
+                .confirm_session_delete
+        );
+        window.click("settings-agents", cx);
+        window.click("settings-search", cx);
+        window.input("删除", cx);
+    })
+    .expect("session category and search");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("settings-confirm-delete").visible());
+        assert!(window.try_find("agents-page").is_none());
+    })
+    .expect("search locates session preferences from the Agent page");
+    let saved = bas::config::Store::at(path)
+        .load()
+        .expect("saved settings")
+        .settings;
+    assert_eq!(saved.appearance.confirm_session_delete, Some(false));
+    assert_eq!(saved.appearance.content_opacity, Some(0.7));
+}
+
+#[gpui_kit::test]
 fn shared_header_tracks_configuration_ownership(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("isolated frontend settings");
     let path = directory.path().join("frontend.json");

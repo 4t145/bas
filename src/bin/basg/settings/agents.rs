@@ -942,7 +942,7 @@ impl Agents {
                     #div { flex; flex_col; gap_1; } [
                         #div { text_size: $crate::ui::SMALL; } [ $label ],
                         #div { id: $id; test_support; } [
-                            Input($input) { small; disabled: $(self.editor.deleting() || !self.registry.editable()); }
+                            $crate::ui::input::placeholder(input, Input::new(input).small().disabled(self.editor.deleting() || !self.registry.editable()))
                         ],
                     ]
                 }),

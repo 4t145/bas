@@ -1479,9 +1479,9 @@ fn composer_toolbar_keeps_options_attachments_and_send_on_one_row_in_both_modes(
             let agent = window.find("agent-picker").bounds();
             let connection = window
                 .find(if compact {
-                    "compact-connection"
+                    "compact-connection-indicator"
                 } else {
-                    "conversation-connection"
+                    "conversation-connection-indicator"
                 })
                 .bounds();
             assert!(agent.right() <= connection.left());

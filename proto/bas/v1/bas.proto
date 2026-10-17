@@ -31,15 +31,15 @@ service Bas {
   rpc ImportAgentSession(ImportAgentSessionRequest) returns (CreateSessionResponse);
   // Deletes Agent history only. Imported sessions must first be explicitly closed.
   rpc DeleteAgentSession(DeleteAgentSessionRequest) returns (DeleteSessionResponse);
-  // Standard ACP close, retaining the local transcript as a stopped session.
+  // Stops the runtime, using standard ACP close when supported, retaining the transcript.
   rpc CloseSession(GetSessionRequest) returns (GetSessionResponse);
-  // Explicitly reloads a stopped Agent session, preserving its ID, history and archive flag.
+  // Explicitly reloads a stopped, non-archived session, preserving its ID and history.
   rpc RestartSession(GetSessionRequest) returns (GetSessionResponse);
   // Lists non-archived sessions by default.
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   // Reads one session's metadata.
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
-  // Hides/restores a session without stopping its backend or deleting history.
+  // Archives after stopping; restores by starting the original session before unarchiving.
   rpc SetArchived(SetArchivedRequest) returns (SetArchivedResponse);
   // Stops a session's backend and forgets it.
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);

@@ -24,6 +24,7 @@ mod view;
 pub(crate) mod window;
 
 const MAX_DISCOVERIES: usize = 2;
+pub(crate) const ICON: gpui_kit::assets::IconName = gpui_kit::assets::IconName::MessagesSquare;
 
 pub(crate) type OpenSession = Rc<dyn Fn(SessionSnapshot, &mut App) -> bool>;
 
@@ -47,6 +48,13 @@ struct Target {
     generation: u64,
     agent: String,
     info: acp::SessionInfo,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrimaryAction {
+    Open,
+    Restart,
+    Restore,
 }
 
 enum Operation {
@@ -408,6 +416,27 @@ impl Browser {
             })
     }
 
+    fn primary_action(&self, agent: &str, info: &acp::SessionInfo) -> PrimaryAction {
+        match self.imported(agent, info) {
+            Some(session) if session.meta.archived => PrimaryAction::Restore,
+            Some(session) if session.meta.status == SessionStatus::Stopped => {
+                PrimaryAction::Restart
+            }
+            _ => PrimaryAction::Open,
+        }
+    }
+
+    fn activate(&mut self, target: Target, expected: PrimaryAction, cx: &mut Context<Self>) {
+        if !self.current(&target) || self.primary_action(&target.agent, &target.info) != expected {
+            return;
+        }
+        match expected {
+            PrimaryAction::Open => self.import(target, cx),
+            PrimaryAction::Restart => self.restart(target, cx),
+            PrimaryAction::Restore => self.restore(target, cx),
+        }
+    }
+
     fn import(&mut self, target: Target, cx: &mut Context<Self>) {
         if !self.current(&target) || self.operation.is_some() {
             return;
@@ -465,7 +494,7 @@ impl Browser {
         let Some(snapshot) = self.imported(&target.agent, &target.info) else {
             return;
         };
-        if snapshot.meta.status != SessionStatus::Stopped {
+        if snapshot.meta.status != SessionStatus::Stopped || snapshot.meta.archived {
             return;
         }
         let capabilities = &self.pages[&target.agent].initialization.agent_capabilities;
@@ -509,10 +538,11 @@ impl Browser {
     fn active(&self, target: &Target) -> bool {
         self.imported(&target.agent, &target.info)
             .is_some_and(|snapshot| {
-                !matches!(
-                    snapshot.meta.status,
-                    SessionStatus::Stopped | SessionStatus::Failed
-                )
+                !snapshot.meta.archived
+                    && !matches!(
+                        snapshot.meta.status,
+                        SessionStatus::Stopped | SessionStatus::Failed
+                    )
             })
     }
 
@@ -542,7 +572,7 @@ impl Browser {
             confirm_label: crate::i18n::tr!("agent-history-delete").into(),
         };
         let owner = cx.entity().downgrade();
-        if let Err(error) = crate::application::open_confirmation(
+        if let Err(error) = crate::application::open_delete_confirmation(
             confirmation,
             move |cx| {
                 let _ = owner.update(cx, |this, cx| {
@@ -572,43 +602,14 @@ impl Browser {
         if !self.current(&target) || self.operation.is_some() || !self.active(&target) {
             return;
         }
-        if self.pages[&target.agent]
-            .initialization
-            .agent_capabilities
-            .session_capabilities
-            .close
-            .is_none()
-        {
-            return;
-        }
         let Some(session) = self
             .imported(&target.agent, &target.info)
             .map(|snapshot| snapshot.meta.id)
         else {
             return;
         };
-        let confirmation = crate::application::Confirmation {
-            title: crate::i18n::tr!("agent-session-close").into(),
-            message: crate::i18n::tr!("agent-session-close-confirm").into(),
-            confirm_label: crate::i18n::tr!("agent-session-close").into(),
-        };
-        let owner = cx.entity().downgrade();
-        if let Err(error) = crate::application::open_confirmation(
-            confirmation,
-            move |cx| {
-                let _ = owner.update(cx, |this, cx| {
-                    if this.current(&target)
-                        && this.operation.is_none()
-                        && this.active(&target)
-                        && this.send(Command::CloseSession(session), cx)
-                    {
-                        this.operation = Some(Operation::Close { session });
-                    }
-                });
-            },
-            cx,
-        ) {
-            self.notice = Some(error.to_string());
+        if self.send(Command::CloseSession(session), cx) {
+            self.operation = Some(Operation::Close { session });
         }
     }
 

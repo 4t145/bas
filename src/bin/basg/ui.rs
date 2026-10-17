@@ -2,7 +2,10 @@
 //! use the separate content font preferences.
 
 mod button;
+pub(crate) mod input;
 pub(crate) mod input_geometry;
+pub(crate) mod session_status;
+pub(crate) mod shortcut;
 pub(crate) mod time;
 pub(crate) mod tooltip;
 pub(crate) mod window_controls;
@@ -61,6 +64,17 @@ pub(crate) fn action_button(id: impl Into<gpui_kit::ElementId>) -> Button {
     }
 }
 
+pub(crate) fn icon_action(
+    id: impl Into<gpui_kit::ElementId>,
+    icon: IconName,
+    hint: impl Into<gpui_kit::SharedString>,
+) -> Button {
+    let hint = hint.into();
+    icon_button(id, icon)
+        .accessibility_label(hint.clone())
+        .tooltip(hint)
+}
+
 /// Reading and editing utilities stay quiet until the user targets them.
 pub(crate) fn subtle_icon_button(
     id: impl Into<gpui_kit::ElementId>,
@@ -74,11 +88,15 @@ pub(crate) fn subtle_icon_button(
     el! {
         #icon_button(id, icon) {
             custom: variant;
-            text_color: $cx.theme()
-                .muted_foreground
-                .opacity(SUBTLE_FOREGROUND_OPACITY);
+            text_color: $secondary_foreground(cx);
         }
     }
+}
+
+pub(crate) fn secondary_foreground(cx: &App) -> gpui_kit::Hsla {
+    cx.theme()
+        .muted_foreground
+        .opacity(SUBTLE_FOREGROUND_OPACITY)
 }
 
 pub(crate) fn menu(menu: PopupMenu) -> PopupMenu {

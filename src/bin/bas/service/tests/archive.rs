@@ -24,7 +24,9 @@ async fn archive_reply_keeps_its_committed_snapshot_when_a_restore_overtakes_it(
         .expect("committed archive event");
     assert!(matches!(
         event.kind,
-        bas::model::EventKind::ArchiveChanged { archived: true }
+        bas::model::EventKind::StatusChanged {
+            status: bas::model::SessionStatus::Stopped
+        }
     ));
     let restored = service
         .set_archived(Request::new(pb::SetArchivedRequest {

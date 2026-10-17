@@ -618,11 +618,9 @@ impl Agents {
                     id: "agents-registry-search"; test_support; w_full; p_1; bg: $palette.card;
                     border_1; border_color: $palette.border; rounded_md;
                 } [
-                    Input($&self.registry_search) {
-                        small;
-                        appearance: false; cleanable: true; prefix: $search_icon;
-                        aria_label: $crate::i18n::tr!("agent-search");
-                    },
+                    $crate::ui::input::placeholder(&self.registry_search,
+                        Input::new(&self.registry_search).small().appearance(false).cleanable(true)
+                            .prefix(search_icon).aria_label(crate::i18n::tr!("agent-search"))),
                 ],
                 $toolbar,
             ]

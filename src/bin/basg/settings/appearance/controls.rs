@@ -127,7 +127,7 @@ impl AppearancePage {
                     on_click: $cx.listener(move |this, _, window, cx| this.step_number(field, false, window, cx));
                 },
                 #div { id: $field.id(); test_support; flex_1; min_w_0; } [
-                    Input(input) { small; appearance: false; text_center; disabled: $self.document.is_none(); }
+                    $ui::input::placeholder(input, Input::new(input).small().appearance(false).text_center().disabled(self.document.is_none()))
                 ],
                 #ui::icon_button($format!("{}-increase", field.id()), $IconName::Plus) {
                     accessibility_label: $crate::i18n::tr!("appearance-value-increase", field = field.label());
@@ -206,7 +206,8 @@ impl AppearancePage {
                 self.number_stepper(field, cx)
             }
             _ => {
-                gds_uim::el! { #div { flex_1; min_w_0; } [$self.control(field)] }.into_any_element()
+                gds_uim::el! { #div { flex_1; min_w_0; flex; justify_end; } [$self.control(field)] }
+                    .into_any_element()
             }
         };
         gds_uim::el! {

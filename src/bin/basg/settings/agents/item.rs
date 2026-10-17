@@ -20,13 +20,7 @@ pub(super) fn action(
     icon: IconName,
     hint: impl Into<SharedString>,
 ) -> crate::ui::Button {
-    let hint = hint.into();
-    gds_uim::el! {
-        #crate::ui::icon_button(id, icon) {
-            accessibility_label: $hint.clone();
-            tooltip: $hint;
-        }
-    }
+    crate::ui::icon_action(id, icon, hint)
 }
 
 #[derive(IntoElement)]

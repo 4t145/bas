@@ -161,16 +161,14 @@ impl Workspace {
                 }
             ]
         };
-        let end = gds_uim::el! { #crate::ui::tooltip::bounded(
-            $group.clone(),
-            tick,
-            $crate::i18n::tr!("conversation-end-shortcut"),
-        ) {
+        let end = gds_uim::el! { #div {
+            id: $group.clone();
+            hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("conversation-end"), ScrollConversationToEnd);
             test_support; role: gpui_kit::Role::Button;
             aria_label: $crate::i18n::tr!("conversation-end"); group: group;
             h: MARKER_HEIGHT.px; flex_shrink_0; w_full; cursor_pointer;
             on_click: $cx.listener(Self::on_turn_navigation_end);
-        } };
+        } [$tick] };
         gds_uim::el! { $rail [
             #div {
                 id: "turn-shortcuts"; test_support; flex; flex_col;

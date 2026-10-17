@@ -22,9 +22,9 @@ impl Workspace {
                 #div {
                     id: "application-menu-slot"; test_support; flex_1; min_w_0; flex; items_center;
                 } [$self.application_button(cx)],
-                #layout::icon_button("agent-history-open", IconName::ListClock) {
+                #layout::icon_button("agent-history-open", $crate::history::ICON) {
                     accessibility_label: $crate::i18n::tr!("agent-history-title");
-                    tooltip: $crate::i18n::tr!("agent-history-title");
+                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("agent-history-title"), shortcuts::OpenSessionManager);
                     disabled: $!self.backend.connected;
                     on_click: $cx.listener(|this, _, window, cx| {
                         let agent = this.current().map(|meta| meta.agent.to_string())
@@ -39,7 +39,7 @@ impl Workspace {
                 },
                 #layout::icon_button("new-session", IconName::Plus) {
                     accessibility_label: $crate::i18n::tr!("session-new");
-                    tooltip: $crate::i18n::tr!("session-new-shortcut");
+                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("session-new"), NewSession);
                     on_click: $cx.listener(Self::on_sidebar_new_session);
                 },
             ]
@@ -53,7 +53,7 @@ impl Workspace {
         let search = gds_uim::el! {
             #div { id: "thread-search-row"; test_support; px_3; pt_2; pb_3; flex; items_center; gap_2; } [
                 #div { id: "thread-search"; test_support; flex_1; min_w_0; } [
-                    Input($&self.navigation.search) { small; prefix: search_icon; cleanable: true; }
+                    $crate::ui::input::placeholder(&self.navigation.search, Input::new(&self.navigation.search).small().prefix(search_icon).cleanable(true))
                 ],
                 #layout::icon_button("archived-list", IconName::Archive) {
                     selected: $self.navigation.archived;
@@ -85,6 +85,7 @@ impl Workspace {
         } [
             $header, $search,
             #div { id: "session-list"; flex_1; min_h_0; overflow_y_scroll; } [..empty, ..columns],
+            $self.server_status_footer(cx),
         ] }
     }
 

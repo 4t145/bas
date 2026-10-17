@@ -152,7 +152,7 @@ async fn rejected_requests_leave_no_acceptance_or_history() {
     assert!(matches!(
         session.accept_prompt(inactive.clone()).await,
         Err(SubmissionError::Rejected(PromptRejection {
-            kind: Kind::Unavailable,
+            kind: Kind::Archived,
             ..
         }))
     ));

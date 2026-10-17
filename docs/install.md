@@ -11,6 +11,29 @@ bast agents
 basg
 ```
 
+### 快速试用界面改动
+
+```sh
+make install-basg-dev
+basg-dev
+```
+
+此入口在 Nix GUI 开发环境内运行 Cargo **dev profile** 增量编译，复用当前 checkout
+的 `target/`（或已有的 `CARGO_TARGET_DIR`），不清理缓存、不进行沙箱内 release 重编译。
+首次构建、依赖／工具链／编译选项变化仍可能较慢。
+Nix 只将已编译程序、桌面入口和图形运行库封装为不可变包，再安装到当前 profile。
+因此删除构建目录或移动源码后，已安装程序仍可启动，运行库也由 profile 保持存活。
+
+开发版命令为 **`basg-dev`**，桌面入口为 **BasG（开发版）**；
+正式版的 `basg` 命令和入口保持不变。二者连接同一个 daemon、使用相同配置，
+不要把重新打开正式版误认为测试了开发版。更新后关闭旧开发进程，再打开开发版。
+开发安装不修改配置、不安装／重启后端，也不代替测试；安装前运行相关检查。
+涉及 daemon 或 RPC 的变更仍需使用 `make install-bas-service` 更新后端。
+
+可用 `NIX_PROFILE_OPTIONS=--offline` 禁止 Nix 联网，或用 `--profile /path` 指定 profile。
+卸载开发版使用 `nix profile remove basg-dev`，不会卸载正式版。
+正式发布继续使用下述 Nix release 安装流程。
+
 `make install-bas` 只安装 release 版 `bas` 和 `bast`，不安装、更新或卸载任何外部
 ACP 适配器及其 CLI，也不创建或修改用户配置。外部后端可通过运行中的 daemon 按需从 ACP Registry 安装，或由用户按官方文档独立管理。
 未配置后端时只提供 `embedded` echo 后端。

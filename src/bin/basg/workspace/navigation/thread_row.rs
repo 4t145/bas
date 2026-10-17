@@ -1,88 +1,12 @@
+use crate::ui::session_status::Status as RowStatus;
 use bas::model::Timestamp;
 use gpui_kit::component::menu::PopupMenuItem;
-use gpui_kit::component::spinner::Spinner;
 
 use crate::ui::time::recent_time;
 use crate::workspace::*;
 
-const STATUS_SIZE: f32 = 12.;
-const UNREAD_SIZE: f32 = 6.;
-const STOPPED_WIDTH: f32 = 8.;
-const STOPPED_HEIGHT: f32 = 1.;
 pub(super) const ACTIONS_WIDTH: f32 = layout::ICON_BUTTON_SIZE * 2.;
 pub(super) const ACTIONS_GAP: f32 = 4.;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RowStatus {
-    Starting,
-    Working,
-    Unread,
-    Idle,
-    Failed,
-    Stopped,
-}
-
-impl RowStatus {
-    fn for_session(session: &SessionMeta, seen: u64, active_unread: bool) -> Self {
-        match session.status {
-            SessionStatus::Starting => Self::Starting,
-            SessionStatus::Working => Self::Working,
-            SessionStatus::Failed => Self::Failed,
-            SessionStatus::Stopped => Self::Stopped,
-            SessionStatus::Idle if session.last_reply.raw() > seen || active_unread => Self::Unread,
-            SessionStatus::Idle => Self::Idle,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Starting => crate::i18n::tr!("status-starting"),
-            Self::Working => crate::i18n::tr!("status-running"),
-            Self::Unread => crate::i18n::tr!("status-unread"),
-            Self::Idle => crate::i18n::tr!("status-ready"),
-            Self::Failed => crate::i18n::tr!("status-failed"),
-            Self::Stopped => crate::i18n::tr!("status-stopped"),
-        }
-    }
-
-    fn indicator(self, id: SessionId, cx: &App) -> AnyElement {
-        let indicator = gds_uim::el! { #div {
-            id: $SharedString::from(format!("thread-indicator-{id}"));
-            test_support; flex; items_center; justify_center; flex_shrink_0;
-        } };
-        match self {
-            Self::Starting | Self::Working => gds_uim::el! {
-                $indicator { size: STATUS_SIZE.px; } [
-                    Spinner { icon: IconName::LoaderCircle; with_size: STATUS_SIZE.px; color: $cx.theme().primary; }
-                ]
-            },
-            Self::Unread => gds_uim::el! { $indicator { size: UNREAD_SIZE.px; rounded_full; bg: $cx.theme().primary; } },
-            Self::Idle => gds_uim::el! { $indicator { size_0; } },
-            Self::Failed => gds_uim::el! { $indicator { size: STATUS_SIZE.px; } [
-                Icon(IconName::TriangleAlert) { with_size: STATUS_SIZE.px; text_color: $cx.theme().danger; }
-            ] },
-            Self::Stopped => gds_uim::el! { $indicator {
-                w: STOPPED_WIDTH.px; h: STOPPED_HEIGHT.px; bg: $cx.theme().muted_foreground;
-            } },
-        }
-        .into_any_element()
-    }
-
-    fn slot(self, id: SessionId, cx: &App) -> AnyElement {
-        let slot = gds_uim::el! { #div {
-            size: layout::ICON_BUTTON_SIZE.px; flex_shrink_0;
-            flex; items_center; justify_center;
-        } [$self.indicator(id, cx)] };
-        if self == Self::Idle {
-            return slot.into_any_element();
-        }
-        gds_uim::el! { $slot {
-            id: $SharedString::from(format!("thread-status-{id}")); test_support;
-            cursor_default; role: gpui_kit::Role::Status;
-            aria_label: $self.label();
-            hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(self.label(), window, cx);
-        } }.into_any_element()
-    }
-}
 
 impl Workspace {
     pub(super) fn thread_row(&self, session: &SessionMeta, cx: &mut Context<Self>) -> AnyElement {
@@ -150,7 +74,7 @@ impl Workspace {
                 #div {
                     id: $SharedString::from(format!("thread-rail-{id}"));
                     test_support; size: layout::ICON_BUTTON_SIZE.px; flex_shrink_0;
-                } [$state.slot(id, cx)],
+                } [$state.render(format!("thread-status-{id}"), format!("thread-indicator-{id}"), cx)],
             ]
         };
         gds_uim::el! {
@@ -238,19 +162,21 @@ impl Workspace {
             self.sessions.seen_replies.get(&id).copied().unwrap_or(0),
             self.selected.id == Some(id) && self.has_unread_reply(),
         );
-        let can_close = session
-            .initialization
-            .as_ref()
-            .is_some_and(|init| init.agent_capabilities.session_capabilities.close.is_some())
+        let can_close = !archived
             && !matches!(
                 session.status,
                 SessionStatus::Stopped | SessionStatus::Failed
             );
+        let stopped = !archived && session.status == SessionStatus::Stopped;
+        let can_restart = self.can_restart_agent_session(id);
+        let runtime_busy = self.sessions.pending.closing.contains(&id)
+            || self.sessions.pending.restarting.contains(&id);
         let owner = cx.entity().downgrade();
         self.open_context_menu(
             position,
             (if state == RowStatus::Unread { 6 } else { 5 }) - usize::from(draft)
-                + usize::from(can_close),
+                + usize::from(can_close)
+                + usize::from(stopped),
             std::rc::Rc::new(move |menu, window, _| {
                 let parent = window.window_handle();
                 let pin_owner = owner.clone();
@@ -259,6 +185,7 @@ impl Workspace {
                 let delete_owner = owner.clone();
                 let read_owner = owner.clone();
                 let close_owner = owner.clone();
+                let restart_owner = owner.clone();
                 menu.item(
                     shortcuts::menu_item(
                         if pinned {
@@ -298,12 +225,14 @@ impl Workspace {
                         } else {
                             crate::i18n::tr!("session-archive")
                         },
-                        (!draft && !archived).then(|| {
+                        (!draft).then(|| {
                             Box::new(shortcuts::ArchiveThread) as Box<dyn gpui_kit::Action>
                         }),
                     )
                     .icon(if draft {
                         IconName::Trash
+                    } else if archived {
+                        IconName::ArchiveRestore
                     } else {
                         IconName::Archive
                     })
@@ -330,15 +259,36 @@ impl Workspace {
                 })
                 .when(can_close, |menu| {
                     menu.item(
-                        PopupMenuItem::new(crate::i18n::tr!("agent-session-close"))
-                            .disabled(disabled)
-                            .on_click(move |_, window, cx| {
-                                menus::in_parent(parent, window, cx, |_, cx| {
-                                    let _ = close_owner.update(cx, |this, cx| {
-                                        this.request_close_agent_session(id, cx);
-                                    });
+                        shortcuts::menu_item(
+                            crate::i18n::tr!("agent-session-close"),
+                            Some(Box::new(shortcuts::ToggleSession)),
+                        )
+                        .icon(IconName::Square)
+                        .disabled(disabled || runtime_busy)
+                        .on_click(move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |_, cx| {
+                                let _ = close_owner.update(cx, |this, cx| {
+                                    this.request_close_agent_session(id, cx);
                                 });
-                            }),
+                            });
+                        }),
+                    )
+                })
+                .when(stopped, |menu| {
+                    menu.item(
+                        shortcuts::menu_item(
+                            crate::i18n::tr!("agent-session-start"),
+                            Some(Box::new(shortcuts::ToggleSession)),
+                        )
+                        .icon(IconName::Play)
+                        .disabled(!can_restart)
+                        .on_click(move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |_, cx| {
+                                let _ = restart_owner.update(cx, |this, cx| {
+                                    this.request_restart_agent_session(id, cx);
+                                });
+                            });
+                        }),
                     )
                 })
                 .when(!draft, |menu| {
@@ -347,6 +297,7 @@ impl Workspace {
                             crate::i18n::tr!("session-delete"),
                             Some(Box::new(shortcuts::DeleteThread)),
                         )
+                        .icon(IconName::Trash)
                         .disabled(disabled)
                         .on_click(move |_, window, cx| {
                             menus::in_parent(parent, window, cx, |window, cx| {
@@ -377,6 +328,3 @@ impl Workspace {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

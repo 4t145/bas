@@ -542,7 +542,6 @@ impl Bas for Service {
     ) -> Result<Response<pb::GetSessionResponse>, Status> {
         let session = self.session(&request.into_inner().session).await?;
         if session.meta().status != bas::model::SessionStatus::Stopped {
-            self.registry.ensure_restored(&session).await?;
             session.close_backend().await?;
             self.registry.permissions().close(session.id());
             self.registry.elicitations().close(session.id());
@@ -696,6 +695,9 @@ impl Bas for Service {
             Ok(None) => {}
             Err(error) => return submission_response(Err(error)),
         }
+        if session.meta().archived {
+            return submission_response(session.accept_prompt(submission).await);
+        }
         if let Err(error) = self.registry.ensure_restored(&session).await {
             // Another caller may have registered this identity while restoration
             // was pending. An accepted submission remains queryable when inactive.
@@ -739,6 +741,9 @@ impl Bas for Service {
     ) -> Result<Response<pb::CancelResponse>, Status> {
         let request: acp::CancelNotification = decode(request)?;
         let session = self.session(&request.session_id.to_string()).await?;
+        if session.meta().status == bas::model::SessionStatus::Stopped {
+            return Ok(Response::new(pb::CancelResponse {}));
+        }
         self.registry.ensure_restored(&session).await?;
         session.cancel_acp(request).await?;
         self.registry.permissions().cancel(session.id());
@@ -922,7 +927,10 @@ impl Bas for Service {
     ) -> Result<Response<pb::SetArchivedResponse>, Status> {
         let request = request.into_inner();
         let session = self.session(&request.session).await?;
-        let snapshot = session.try_set_archived(request.archived).await?;
+        let snapshot = self
+            .registry
+            .set_archived(&session, request.archived)
+            .await?;
         Ok(Response::new(pb::SetArchivedResponse {
             session: Some(pb::Session::try_from(&snapshot).map_err(metadata_error)?),
         }))

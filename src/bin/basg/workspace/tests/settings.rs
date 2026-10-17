@@ -227,7 +227,7 @@ fn settings_open_a_single_separate_window_without_replacing_the_workspace(cx: &m
             window.within("popup-menu").click(3usize, cx);
             window.render_frame(cx);
             assert!(window.try_find("settings-page-host").is_none());
-            assert!(window.try_find("conversation-connection").is_some());
+            assert!(window.try_find("server-status").is_some());
             assert_eq!(window.bounds().size, original_size);
             original_size
         })

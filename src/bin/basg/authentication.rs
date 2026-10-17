@@ -329,7 +329,8 @@ impl Authentication {
         gds_uim::el! {
             #div {
                 id: $format!("authentication-choice-{index}");
-                test_support; flex; flex_col; gap_2;
+                test_support; flex; flex_col; gap_2; min_w_0; max_w_full;
+                @$(method.description.is_some() || unsupported.is_some()) => { w_full; };
             } [
                 #div { flex; items_start; } [
                     Button($format!("authentication-method-{index}")) {
@@ -392,7 +393,7 @@ impl Render for Authentication {
                 .collect::<Vec<_>>();
             gds_uim::el! {
                 #div {
-                    id: "authentication-methods"; test_support; flex; flex_col; gap_3; pt_1;
+                    id: "authentication-methods"; test_support; flex; flex_wrap; items_start; gap_3; pt_1;
                 } [ ..empty, ..choices ]
             }
         });

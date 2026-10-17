@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Incremental compilation stays in Cargo's normal target directory. Only packaging
+# enters the Nix sandbox; the installed binary does not point back into the checkout.
+set -euo pipefail
+
+if [[ ${1:-} = -h || ${1:-} = --help ]]; then
+    cat <<'USAGE'
+Usage: bash scripts/install-basg-dev [--offline] [nix profile options...]
+Build basg with Cargo's dev profile and install basg-dev plus BasG (Development).
+Reuses the checkout's Cargo cache (including CARGO_TARGET_DIR when set).
+Does not replace release basg, restart bas, alter configuration, or run tests.
+Run the relevant tests before installing. The installed artifact is an immutable copy.
+USAGE
+    exit 0
+fi
+
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+[[ $(uname -s) = Linux ]] || { echo 'Development installation currently requires Linux.' >&2; exit 1; }
+for tool in nix python3; do
+    command -v "$tool" >/dev/null || { echo "$tool is required." >&2; exit 1; }
+done
+nix_options=()
+for argument in "$@"; do
+    [[ $argument != --offline ]] || nix_options+=(--offline)
+done
+
+temporary=$(mktemp -d)
+trap 'rm -rf -- "$temporary"' EXIT
+source_path=$("$root/scripts/nix-source")
+# Verify the profile before spending time compiling. Never remove an installed build
+# until compilation, packaging, and the new binary's startup check have all succeeded.
+installed=$(nix profile list "$@" --json)
+cd -- "$root"
+started=$SECONDS
+echo 'Building BasG with the incremental Cargo dev profile…'
+nix develop "${nix_options[@]}" "$source_path#gui" --command \
+    env CARGO_INCREMENTAL=1 cargo build --locked --features gui --bin basg \
+    --message-format=json-render-diagnostics > "$temporary/artifacts.jsonl"
+binary=$(python3 - "$temporary/artifacts.jsonl" <<'PY'
+import json
+import sys
+
+artifacts = []
+with open(sys.argv[1]) as stream:
+    for line in stream:
+        message = json.loads(line)
+        if (message.get("reason") == "compiler-artifact"
+                and message["target"]["name"] == "basg"
+                and "bin" in message["target"]["kind"]
+                and message.get("executable")):
+            artifacts.append(message["executable"])
+if len(artifacts) != 1:
+    raise SystemExit("Expected exactly one compiled basg executable")
+print(artifacts[0])
+PY
+)
+[[ -x $binary ]] || { echo 'Cargo did not produce an executable basg.' >&2; exit 1; }
+printf 'Cargo build: %ss\n' "$((SECONDS - started))"
+
+export BAS_DEV_SOURCE="$source_path" BAS_DEV_BINARY="$binary"
+output=$(nix build "${nix_options[@]}" --impure --no-link --print-out-paths --expr '
+  let
+    source = builtins.getFlake (builtins.getEnv "BAS_DEV_SOURCE");
+    pkgs = import source.inputs.nixpkgs { system = builtins.currentSystem; };
+  in import (source.outPath + "/nix/dev-package.nix") {
+    inherit pkgs;
+    binary = builtins.path { path = builtins.getEnv "BAS_DEV_BINARY"; name = "basg"; };
+  }
+')
+env -u LD_LIBRARY_PATH "$output/bin/basg-dev" --help >/dev/null
+if [[ $installed != *\""$output"\"* ]]; then
+    # Store-path profile additions use the derivation name, not a flake attribute.
+    # Only the developer entry is replaced; release basg and the backend are untouched.
+    nix profile remove "$@" basg-dev >/dev/null 2>&1 || true
+    nix profile add "$@" "$output"
+fi
+printf 'Installed: %s/bin/basg-dev\n' "$output"
+printf 'Total: %ss. Launch basg-dev or BasG (Development); release basg is unchanged.\n' "$((SECONDS - started))"

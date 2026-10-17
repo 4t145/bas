@@ -129,7 +129,7 @@ impl Workspace {
             confirm_label: crate::i18n::tr!("action-delete-permanently").into(),
         };
         let view = cx.entity().downgrade();
-        if let Err(error) = crate::application::open_confirmation(
+        if let Err(error) = crate::application::open_delete_confirmation(
             confirmation,
             move |cx| {
                 let _ = view.update(cx, |this, cx| {
