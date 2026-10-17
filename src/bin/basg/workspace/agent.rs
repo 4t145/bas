@@ -1,10 +1,29 @@
 use super::*;
 use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::{Bounds, canvas, component::badge::Badge};
+use std::{cell::Cell, rc::Rc};
 
 pub(super) const TOOLBAR_AGENT_ICON_SIZE: f32 = crate::ui::SMALL_ICON;
 
 impl Workspace {
+    pub(super) fn new_thread_agent(&self, cx: &App) -> String {
+        if let Some(agent) = &cx.global::<theme::Appearance>().default_agent {
+            return agent.clone();
+        }
+        if !self.selected.agent.is_empty() {
+            return self.selected.agent.clone();
+        }
+        self.sessions
+            .entries
+            .iter()
+            .max_by_key(|session| session.updated_at)
+            .map(|session| session.agent.to_string())
+            .or_else(|| self.backend.agents.first().map(|agent| agent.id.clone()))
+            .unwrap_or_default()
+    }
+
     pub(super) fn agent_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let running = self.activity_count();
         let agents: Vec<_> = self
             .backend
             .agents
@@ -51,7 +70,7 @@ impl Workspace {
         } else {
             self.menu_button(
                 button,
-                agents.len() + 3,
+                agents.len() + 2,
                 false,
                 move |menu, _, _| {
                     let mut menu = menu.check_side(Side::Right);
@@ -90,18 +109,7 @@ impl Workspace {
                         );
                     }
                     let view = view.clone();
-                    let history_owner = view.clone();
-                    let history_agent = selected.clone();
                     menu.separator()
-                    .item(shortcuts::menu_item(crate::i18n::tr!("agent-history-title"), Some(Box::new(shortcuts::OpenSessionManager)))
-                        .icon(crate::history::ICON)
-                        .on_click(move |_, window, cx| {
-                            menus::in_parent(parent, window, cx, |window, cx| {
-                                let _ = history_owner.update(cx, |this, cx| {
-                                    this.open_agent_history(history_agent.clone(), window, cx);
-                                });
-                            });
-                        }))
                     .item(
                         PopupMenuItem::element(|_, _| {
                             gds_uim::el! { #div {
@@ -124,7 +132,33 @@ impl Workspace {
                 cx,
             )
         };
-        crate::ui::tooltip::bounded("agent-picker-hint", menu, hint)
+        let bounds = Rc::new(Cell::new(Bounds::default()));
+        let measured = bounds.clone();
+        let activity_open = self
+            .window
+            .reply_preview
+            .as_ref()
+            .is_some_and(|preview| preview.key == reply::PreviewKey::Activity);
+        gds_uim::el! { #div {
+            id: "agent-picker-hint"; test_support; relative; flex; flex_shrink_0;
+            on_hover: $cx.listener(move |this, hovered: &bool, window, cx| {
+                this.hover_activity(*hovered, bounds.get(), window, cx);
+            });
+            on_mouse_down: gpui_kit::MouseButton::Left, $cx.listener(|this, _, window, cx| {
+                this.close_reply_preview(window, cx);
+            });
+            @$running > 0 => {
+                pr_3;
+                role: gpui_kit::Role::Status;
+                aria_label: $crate::i18n::tr!("agent-activity-count", count = running);
+            };
+            @$running == 0 && !activity_open => {
+                hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(hint.clone(), window, cx);
+            };
+        } [
+            Badge { count: running; small; max: 99; color: $cx.theme().primary; } [$menu],
+            #canvas($move |bounds, _, _| measured.set(bounds), $|_, _, _, _| {}) { absolute; size_full; },
+        ] }
     }
 }
 

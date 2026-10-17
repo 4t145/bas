@@ -314,6 +314,7 @@ impl Registry {
             session: id,
             spec,
             cwd,
+            additional_directories: Vec::new(),
             host: Arc::clone(&self.host),
             updates: updates.clone(),
         };
@@ -426,6 +427,7 @@ impl Registry {
             session: meta.id,
             spec,
             cwd,
+            additional_directories: meta.additional_directories,
             host: Arc::clone(&self.host),
             updates: updates.clone(),
         };

@@ -1,5 +1,13 @@
 # 原版 UI 依赖基线
 
+## 音频播放依赖
+
+音频控件由 Bas 实现；解码与设备播放复用 crates.io 正式发布的
+[rodio 0.21.1](https://docs.rs/rodio/0.21.1/rodio/)（MIT OR Apache-2.0）、
+CPAL 0.16.0（Apache-2.0）和 Symphonia 0.5.5（MPL-2.0），具体版本由 Cargo.lock 固定。
+Linux 通过 ALSA 动态库输出音频，GUI 的 Nix 构建、开发 shell 和运行包装共用依赖列表。
+不复制或修改依赖源码，不引入 vendor 覆盖；第三方许可证不改标为第一方 MIT。
+
 ## 会话设置、输入提示与加载过渡
 
 用户实测：删除确认混在“排版与输入”，placeholder 与正文颜色太接近，切换会话等待

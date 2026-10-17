@@ -15,6 +15,7 @@ impl Workspace {
             | Update::Deleted { session, .. }
             | Update::ClosedSession { session, .. }
             | Update::RestartedSession { session, .. }
+            | Update::DirectoriesUpdated { session, .. }
             | Update::Submission { session, .. }
             | Update::TrackingFailed { session, .. }
             | Update::Cancelled { session, .. } => Some(*session),
@@ -76,6 +77,9 @@ impl Workspace {
                         .update(cx, |panel, cx| panel.failed(error.presentation(), cx));
                 }
             }
+            Update::DirectoriesUpdated { session, result } => {
+                self.directories_updated(session, result, cx);
+            }
             Update::Configured { session, result } => {
                 self.configured(session, result.map_err(|error| error.presentation()));
             }
@@ -123,6 +127,7 @@ impl Workspace {
                     self.backend.agents = catalog.agents;
                     // An older catalog can arrive after choosing a newly installed agent.
                     if !self.selected.creating
+                        && self.selected.id.is_none()
                         && self.selected.authentication.required.is_none()
                         && !self
                             .backend
@@ -130,12 +135,8 @@ impl Workspace {
                             .iter()
                             .any(|agent| agent.id == self.selected.agent)
                     {
-                        self.selected.agent = self
-                            .backend
-                            .agents
-                            .first()
-                            .map(|agent| agent.id.clone())
-                            .unwrap_or_default();
+                        self.selected.agent = self.new_thread_agent(cx);
+                        self.selected.waiting_for_agent_selection = self.selected.agent.is_empty();
                         self.selected.authentication.required = None;
                     }
                     if let Some(conversation) = &mut self.selected.timeline.conversation
@@ -222,6 +223,10 @@ impl Workspace {
             }
             Update::Archived { session, result } => {
                 self.sessions.pending.archiving.remove(&session);
+                self.workspace_archive_completed(
+                    session,
+                    result.as_ref().is_ok_and(|snapshot| snapshot.meta.archived),
+                );
                 match result {
                     Ok(incoming) => {
                         if !self.sessions.removed.contains(&session) {
@@ -503,6 +508,7 @@ impl Workspace {
             Update::Elicitations { .. } | Update::ElicitationUnavailable { .. } => {}
         }
         self.pause_archived();
+        self.finish_workspace_removals(window, cx);
         for (id, outbox) in &mut self.sessions.outboxes {
             if self.sessions.runtimes.failure(*id).is_some() {
                 outbox.pause();

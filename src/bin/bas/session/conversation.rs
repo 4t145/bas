@@ -18,6 +18,7 @@ use super::{AttachOptions, Attachment, HistoryError, Limits, history::Ring};
 use crate::agent::{self, Agent, TurnUpdate, Update};
 use crate::storage::{self, Storage};
 
+mod directories;
 mod submission;
 pub use submission::SubmissionError;
 
@@ -89,6 +90,7 @@ struct State {
     restored: bool,
     deleted: bool,
     closing: bool,
+    reloading: bool,
 }
 
 impl Session {
@@ -131,6 +133,7 @@ impl Session {
                 restored,
                 deleted: false,
                 closing: false,
+                reloading: false,
             }),
             transaction: tokio::sync::Mutex::new(()),
             updates_task: Mutex::new(None),
@@ -153,6 +156,7 @@ impl Session {
         self.owned(|session| async move {
             let _gate = session.transaction.lock().await;
             let mut meta = session.meta();
+            meta.subagents.invalidate_activity();
             let events = if meta.archived && meta.status != SessionStatus::Stopped {
                 let mut events = Vec::new();
                 if let Some(turn) = meta.active_turn {
@@ -180,7 +184,7 @@ impl Session {
                             Vec::new()
                         }
                     },
-                    _ => return Ok(()),
+                    _ => Vec::new(),
                 }
             };
             session.publish_with_meta_locked(events, &mut meta).await?;
@@ -210,6 +214,7 @@ impl Session {
                 }
                 let mut meta = state.meta.clone();
                 meta.initialization = agent.initialization();
+                meta.subagents = agent.subagents();
                 meta.initialization_raw = agent.initialization_raw();
                 meta.acp = agent.session_info().map(|mut info| {
                     info.session_id = meta.id.to_string().into();
@@ -287,6 +292,7 @@ impl Session {
             };
             meta.initialization = agent.initialization();
             meta.initialization_raw = agent.initialization_raw();
+            meta.subagents = agent.subagents();
             meta.acp = agent.session_info().map(|mut info| {
                 info.session_id = meta.id.to_string().into();
                 info
@@ -899,8 +905,32 @@ impl Session {
             }
             let result = match update {
                 Update::Acp(update) => session.publish_locked([EventKind::Acp(update)]).await,
+                Update::Subagent(notification) => {
+                    session
+                        .publish_locked([EventKind::Subagent(notification)])
+                        .await
+                }
                 Update::Commit { update, committed } => {
                     let result = session.publish_locked([EventKind::Acp(update)]).await;
+                    if result.is_ok() {
+                        let _ = committed.send(());
+                    }
+                    result
+                }
+                Update::Workspace {
+                    directories,
+                    mut config,
+                    subagents,
+                    committed,
+                } => {
+                    config.session_id = session.id().to_string().into();
+                    let result = session
+                        .publish_locked([EventKind::WorkspaceChanged {
+                            directories,
+                            config,
+                            subagents,
+                        }])
+                        .await;
                     if result.is_ok() {
                         let _ = committed.send(());
                     }
@@ -1148,6 +1178,7 @@ impl State {
         self.check_health()?;
         if self.deleted
             || self.closing
+            || self.reloading
             || !self.restored
             || self.agent.is_none()
             || !matches!(

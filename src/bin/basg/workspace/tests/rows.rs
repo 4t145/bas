@@ -642,7 +642,9 @@ fn rows_discarding_local_draft_preserves_another_threads_title_edit(cx: &mut Tes
     attach(&fixture, target.clone(), cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
+            view.backend.connected = false;
             view.new_thread(Some("/tmp".into()), window, cx);
+            view.backend.connected = true;
             view.composer
                 .input
                 .update(cx, |input, cx| input.set_value("local draft", window, cx));
@@ -704,6 +706,7 @@ fn rows_workspace_indicator_tracks_collapse_and_plus_does_not_toggle_it(cx: &mut
         assert!(fixture.view.read(cx).selected.id.is_none());
         assert!(window.find("draft-thread-0").visible());
         assert!(matches!(fixture.commands.try_recv(), Ok(Command::Detach)));
+        assert!(matches!(fixture.commands.try_recv(), Ok(Command::Create(request)) if request.agent == target.agent.to_string()));
         assert!(fixture.commands.try_recv().is_err());
     })
     .expect("workspace collapse and independent new-thread action");

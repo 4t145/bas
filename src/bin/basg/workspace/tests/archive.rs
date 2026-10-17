@@ -300,7 +300,7 @@ fn inactive_catalog_archive_retains_attachments_and_does_not_resume_queue(cx: &m
     assert!(fixture.commands.try_recv().is_err());
 }
 
-fn archived(mut meta: SessionMeta, value: bool, revision: u64) -> SessionMeta {
+pub(super) fn archived(mut meta: SessionMeta, value: bool, revision: u64) -> SessionMeta {
     meta.archived = value;
     meta.revision = Cursor::from_raw(revision);
     meta

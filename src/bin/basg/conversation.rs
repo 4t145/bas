@@ -236,7 +236,9 @@ impl Conversation {
                 changed.or(notice)
             }
             EventKind::TitleChanged { .. }
+            | EventKind::Subagent(_)
             | EventKind::ArchiveChanged { .. }
+            | EventKind::WorkspaceChanged { .. }
             | EventKind::StatusChanged { .. } => None,
             EventKind::Failed { message } => {
                 self.foreground_state = Some(acp2::StateUpdate::Idle(acp2::IdleStateUpdate::new()));

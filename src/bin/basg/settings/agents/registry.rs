@@ -405,7 +405,6 @@ impl Agents {
     }
 
     fn registry_actions(&self, entry: &Entry, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        let status = entry.spec.as_ref().and_then(|spec| self.status(spec));
         let busy = self
             .operations
             .get(&entry.id)
@@ -417,18 +416,18 @@ impl Agents {
             .is_some_and(|version| !entry.version.is_empty() && version != &entry.version);
         let action = if busy {
             let id = entry.id.clone();
-            gds_uim::el! {
+            Some(gds_uim::el! {
                 #item::action($format!("agents-install-cancel-{}", entry.id), $IconName::X, $crate::i18n::tr!("agent-cancel-action")) {
                     on_click: $cx.listener(move |this, _, _, cx| this.cancel_install(&id, cx));
                 }
-            }
+            }.into_any_element())
         } else if entry.source == Source::Registry
             && (matches!(entry.status, Status::NotInstalled | Status::Missing) || update)
         {
             let id = entry.id.clone();
             let disabled =
                 !self.managed_allowed(cx) || any_busy || entry.status == Status::Unsupported;
-            gds_uim::el! {
+            Some(gds_uim::el! {
                 #item::action($format!("agents-install-{}", entry.id), $(if update { IconName::RefreshCw } else { IconName::Download }), $(if update {
                         crate::i18n::tr!("agent-update-action")
                     } else {
@@ -437,48 +436,23 @@ impl Agents {
                     disabled: $disabled;
                     on_click: $cx.listener(move |this, _, _, cx| this.install(id.clone(), cx));
                 }
-            }
-        } else if let Some(spec) = entry.spec.clone() {
-            let id = entry.id.clone();
-            let embedded = spec.kind == bas::config::agent::Kind::Embedded;
-            gds_uim::el! {
-                #item::action($format!("agents-registry-check-{}", entry.id), $(if embedded { IconName::MessageCircle } else { IconName::RefreshCw }), $(if embedded {
-                        crate::i18n::tr!("agent-start-chat")
-                    } else {
-                        status.map_or(crate::i18n::tr!("agent-check"), super::status::check_label)
-                    })) {
-                    loading: $status.is_some_and(crate::agents::Status::busy);
-                    disabled: $(!self.registry.editable() || self.dirty(cx)
-                        || status.is_some_and(crate::agents::Status::busy));
-                    on_click: $cx.listener(move |this, _, _, cx| this.check_registry_agent(&id, &spec, cx));
-                }
-            }
+            }.into_any_element())
+        } else if entry.spec.is_some() {
+            None
         } else {
-            gds_uim::el! {
+            Some(gds_uim::el! {
                 #item::action($format!("agents-registry-unavailable-{}", entry.id), $IconName::CircleAlert, $status_label(entry)) {
                     disabled: true;
                 }
-            }
+            }.into_any_element())
         };
         let remove = entry.id.clone();
-        let can_chat = entry
-            .spec
-            .as_ref()
-            .is_some_and(|spec| spec.kind != bas::config::agent::Kind::Embedded)
-            && status.is_some_and(crate::agents::Status::connected)
-            && !busy;
         gds_uim::el! {
             #div { flex; items_center; gap_1; flex_shrink_0; } [
-                $action,
-                ..$can_chat.then(|| {
-                    let id = entry.id.clone();
-                    gds_uim::el! {
-                        #item::action($format!("agents-registry-start-chat-{}", entry.id), $IconName::MessageCircle, $crate::i18n::tr!("agent-start-chat")) {
-                            disabled: $(!self.registry.editable() || self.dirty(cx));
-                            on_click: $cx.listener(move |this, _, _, cx| this.begin_chat(id.clone(), cx));
-                        }
-                    }
-                }),
+                ..$entry.spec.as_ref().filter(|spec| !busy && spec.kind == bas::config::agent::Kind::Acp)
+                    .map(|spec| self.check_button(format!("agents-registry-check-{}", entry.id), spec, cx)),
+                ..action,
+                ..$entry.spec.as_ref().filter(|_| !busy).map(|spec| self.account_actions(spec, cx)),
                 ..$bool::then(entry.installed_version.is_some() && !busy, || gds_uim::el! {
                     #item::action($format!("agents-remove-{}", entry.id), $IconName::Trash, $crate::i18n::tr!("agent-mark-remove")) {
                         disabled: $(!self.managed_allowed(cx) || any_busy);
@@ -489,19 +463,6 @@ impl Agents {
         }.into_any_element()
     }
 
-    fn check_registry_agent(
-        &mut self,
-        id: &str,
-        spec: &bas::config::AgentSpec,
-        cx: &mut Context<Self>,
-    ) {
-        if spec.kind == bas::config::agent::Kind::Embedded {
-            self.begin_chat(id.to_owned(), cx);
-        } else {
-            self.start_check(spec.clone(), true, cx);
-        }
-    }
-
     pub(super) fn item_feedback(&self, entry: &Entry) -> Option<String> {
         let status = entry.spec.as_ref().and_then(|spec| self.status(spec));
         let has_authentication = entry
@@ -509,6 +470,13 @@ impl Agents {
             .as_ref()
             .is_some_and(|spec| self.authentications.contains_key(&spec.id));
         let operation = self.operations.get(&entry.id);
+        if let Some(message) = entry
+            .spec
+            .as_ref()
+            .and_then(|spec| self.logout_message(spec))
+        {
+            return Some(message);
+        }
         operation
             .filter(|operation| operation.busy)
             .map(|operation| operation.message.clone())
@@ -547,10 +515,7 @@ impl Agents {
         let card = item::Item {
             entry: entry.clone(),
             status: self.item_status(entry),
-            status_hint: entry.spec.as_ref().map_or_else(
-                || status_label(entry).into(),
-                |spec| self.check_detail(spec),
-            ),
+            status_hint: status_label(entry).into(),
             feedback: self.item_feedback(entry),
             actions: self.registry_actions(entry, cx),
             content,

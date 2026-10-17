@@ -291,6 +291,25 @@ impl Timeline {
                 )
                 .context("cannot write to stdout")?;
             }
+            EventKind::Subagent(notification) => {
+                crate::safe::safe_writeln!(
+                    stdout,
+                    "{:>6} ---- subagent {} {:?}",
+                    decoded.cursor,
+                    notification.session_id,
+                    notification.update
+                )
+                .context("cannot write to stdout")?;
+            }
+            EventKind::WorkspaceChanged { directories, .. } => {
+                crate::safe::safe_writeln!(
+                    stdout,
+                    "{:>6} ---- additional directories {:?}",
+                    decoded.cursor,
+                    directories
+                )
+                .context("cannot write to stdout")?;
+            }
         }
 
         stdout.flush().context("cannot flush stdout")

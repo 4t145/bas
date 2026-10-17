@@ -76,6 +76,11 @@ pub struct SessionMeta {
     /// Working directory the agent was launched in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    /// Additional filesystem roots; cwd remains the base for relative paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_directories: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "super::Subagents::is_empty")]
+    pub subagents: super::Subagents,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     /// Agent-reported timestamp, separate from the daemon's event clock.
@@ -117,6 +122,8 @@ impl SessionMeta {
             title: None,
             owner,
             cwd: None,
+            additional_directories: Vec::new(),
+            subagents: super::Subagents::default(),
             created_at: now,
             updated_at: now,
             agent_updated_at: None,
@@ -153,8 +160,24 @@ impl SessionMeta {
                 }
                 self.apply_acp(update);
             }
+            EventKind::Subagent(notification) => {
+                if let crate::acp::SessionUpdate::SubagentUpdate(update) = &notification.update {
+                    let _ = self
+                        .subagents
+                        .apply(Some(notification.session_id.0.as_ref()), update);
+                }
+            }
             EventKind::TitleChanged { title } => self.title = Some(title.clone()),
             EventKind::ArchiveChanged { archived } => self.archived = *archived,
+            EventKind::WorkspaceChanged {
+                directories,
+                config,
+                subagents,
+            } => {
+                self.additional_directories = directories.clone();
+                self.acp = Some(config.clone());
+                self.subagents = subagents.clone();
+            }
             EventKind::StatusChanged { status } => {
                 self.status = *status;
                 if *status != SessionStatus::Working {
@@ -175,6 +198,9 @@ impl SessionMeta {
             }
         }
         self.revision = event.cursor;
+        if matches!(self.status, SessionStatus::Stopped | SessionStatus::Failed) {
+            self.subagents.invalidate_activity();
+        }
         self.updated_at = event.at;
         true
     }
@@ -185,6 +211,9 @@ impl SessionMeta {
     pub fn apply_acp(&mut self, update: &crate::acp::SessionUpdate) {
         use crate::acp::SessionUpdate;
         match update {
+            SessionUpdate::SubagentUpdate(update) => {
+                let _ = self.subagents.apply(None, update);
+            }
             SessionUpdate::AvailableCommandsUpdate(update) => {
                 self.available_commands = Some(update.clone());
             }

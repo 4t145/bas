@@ -34,6 +34,7 @@ pub(super) struct WindowState {
     pub(super) usage_details: Option<SessionId>,
     pub(super) reply_preview: Option<reply::Preview>,
     pub(super) reply_hover: Option<Task<()>>,
+    pub(super) activity_hover: Option<Task<()>>,
     pub(super) sidebar_visible: bool,
     pub(super) compact: bool,
     pub(super) output_open: bool,
@@ -49,6 +50,7 @@ impl WindowState {
             usage_details: None,
             reply_preview: None,
             reply_hover: None,
+            activity_hover: None,
             sidebar_visible: !compact,
             compact,
             output_open: false,
@@ -106,6 +108,8 @@ pub(super) struct NavigationState {
     pub(super) directories: Vec<PathBuf>,
     pub(super) selected_directory: Option<PathBuf>,
     pub(super) collapsed: HashSet<Option<PathBuf>>,
+    pub(super) hidden: HashSet<Option<PathBuf>>,
+    pub(super) removing: HashMap<Option<PathBuf>, navigation::removal::Removal>,
     pub(super) archived: bool,
     pub(super) pinned: HashSet<SessionId>,
     pub(super) restore: RestoreState,
@@ -122,6 +126,8 @@ impl NavigationState {
             directories: vec![directory.clone()],
             selected_directory: Some(directory),
             collapsed: HashSet::new(),
+            hidden: HashSet::new(),
+            removing: HashMap::new(),
             archived: false,
             pinned: HashSet::new(),
             restore: RestoreState::default(),
@@ -132,6 +138,10 @@ impl NavigationState {
     }
 
     pub(super) fn attach_restore(&mut self, store: Option<navigation::restore::Store>) {
+        self.hidden = store
+            .as_ref()
+            .map(navigation::restore::Store::hidden_workspaces)
+            .unwrap_or_default();
         self.pinned = store
             .as_ref()
             .map(navigation::restore::Store::pinned)
@@ -165,6 +175,7 @@ impl DirectoryDrafts {
 pub(super) struct FolderPicker {
     pub(super) pending: bool,
     pub(super) waiting_activation: bool,
+    pub(super) session: Option<(SessionId, u64)>,
 }
 
 /// State shared by foreground and background sessions; selection never resets it.

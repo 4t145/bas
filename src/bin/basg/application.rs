@@ -113,7 +113,6 @@ pub(crate) fn open_message(
 ///
 /// # Errors
 /// Returns a platform error if the confirmation window cannot be created.
-#[cfg(all(test, feature = "gui-tests"))]
 pub(crate) fn open_confirmation(
     request: Confirmation,
     on_confirm: impl FnOnce(&mut App) + 'static,

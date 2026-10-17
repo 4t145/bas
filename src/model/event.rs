@@ -22,15 +22,13 @@ pub enum InterruptionReason {
 /// ACP updates retain their complete schema; other variants describe daemon lifecycle.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "ACP updates dominate the stream; inline payloads avoid an allocation per chunk"
-)]
 pub enum EventKind {
     Acp(
         #[serde(serialize_with = "serialize_acp", deserialize_with = "deserialize_acp")]
         acp::SessionUpdate,
     ),
+    /// Child traffic stays scoped to its original ACP session, never flattened into the parent.
+    Subagent(acp::SessionNotification),
     TurnStarted {
         turn: TurnId,
     },
@@ -47,6 +45,12 @@ pub enum EventKind {
     },
     ArchiveChanged {
         archived: bool,
+    },
+    WorkspaceChanged {
+        directories: Vec<std::path::PathBuf>,
+        config: acp::NewSessionResponse,
+        #[serde(default)]
+        subagents: super::Subagents,
     },
     StatusChanged {
         status: super::SessionStatus,
@@ -92,6 +96,7 @@ impl Event {
     #[must_use]
     pub fn is_transient(&self) -> bool {
         matches!(&self.kind, EventKind::Acp(acp::SessionUpdate::Notice(_)))
+            || matches!(&self.kind, EventKind::Subagent(notification) if matches!(notification.update, acp::SessionUpdate::Notice(_)))
     }
 
     #[must_use]

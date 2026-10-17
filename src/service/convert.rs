@@ -31,6 +31,8 @@ pub enum Error {
     MissingRuntime,
     #[error("permission carries no ACP request")]
     MissingPermissionRequest,
+    #[error("workspace update carries no ACP session configuration")]
+    MissingAcpPayload,
     #[error("working directory is not valid UTF-8; the protocol requires UTF-8 paths")]
     NonUtf8Cwd,
     #[error("invalid ACP JSON: {0}")]
@@ -128,6 +130,14 @@ impl TryFrom<&model::SessionSnapshot> for pb::Session {
             agent: meta.agent.to_string(),
             title: meta.title.clone(),
             owner: Some((&meta.owner).into()),
+            subagents: Some(pb::AcpPayload {
+                json: serde_json::to_vec(&meta.subagents)?,
+            }),
+            additional_directories: meta
+                .additional_directories
+                .iter()
+                .map(|path| utf8_cwd(path).map(str::to_owned))
+                .collect::<Result<_, _>>()?,
             cwd: meta
                 .cwd
                 .as_deref()
@@ -214,6 +224,16 @@ impl TryFrom<pb::Session> for model::SessionSnapshot {
             title: session.title,
             owner: session.owner.ok_or(Error::MissingOwner)?.into(),
             cwd: session.cwd.map(PathBuf::from),
+            subagents: session
+                .subagents
+                .map(|payload| payload.decode())
+                .transpose()?
+                .unwrap_or_default(),
+            additional_directories: session
+                .additional_directories
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
             created_at: model::Timestamp::from_millis(session.created_at),
             updated_at: model::Timestamp::from_millis(session.updated_at),
             agent_updated_at: session.agent_updated_at.map(model::Timestamp::from_millis),
@@ -384,6 +404,7 @@ acp_payload!(
     crate::acp::SetSessionModeRequest,
     crate::acp::SetSessionModeResponse,
     crate::acp::SessionUpdate,
+    crate::acp::SessionNotification,
 );
 
 impl From<&model::Event> for pb::Event {
@@ -437,6 +458,21 @@ impl From<&model::Event> for pb::Event {
                     archived: *archived,
                 })
             }
+            model::EventKind::Subagent(notification) => Kind::SubagentUpdate(notification.into()),
+            model::EventKind::WorkspaceChanged {
+                directories,
+                config,
+                subagents,
+            } => Kind::WorkspaceChanged(pb::WorkspaceChanged {
+                subagents: Some(pb::AcpPayload {
+                    json: serde_json::to_vec(subagents).expect("subagent snapshot serializes"),
+                }),
+                additional_directories: directories
+                    .iter()
+                    .map(|path| path.to_str().expect("validated workspace path").to_owned())
+                    .collect(),
+                acp: Some(config.into()),
+            }),
             model::EventKind::StatusChanged { status } => Kind::StatusChanged(pb::StatusChanged {
                 status: pb::SessionStatus::from(*status) as i32,
             }),
@@ -502,6 +538,20 @@ impl TryFrom<pb::Event> for model::Event {
                 Kind::TitleChanged(value) => model::EventKind::TitleChanged { title: value.title },
                 Kind::ArchiveChanged(value) => model::EventKind::ArchiveChanged {
                     archived: value.archived,
+                },
+                Kind::SubagentUpdate(value) => model::EventKind::Subagent(value.decode()?),
+                Kind::WorkspaceChanged(value) => model::EventKind::WorkspaceChanged {
+                    subagents: value
+                        .subagents
+                        .map(|payload| payload.decode())
+                        .transpose()?
+                        .unwrap_or_default(),
+                    directories: value
+                        .additional_directories
+                        .into_iter()
+                        .map(PathBuf::from)
+                        .collect(),
+                    config: value.acp.ok_or(Error::MissingAcpPayload)?.decode()?,
                 },
                 Kind::StatusChanged(value) => model::EventKind::StatusChanged {
                     status: value.status.try_into()?,

@@ -556,7 +556,10 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("authentication-error").visible());
-        assert!(window.try_find("agents-item-status-codex").is_none());
+        assert_eq!(
+            window.find("agents-item-status-codex").label(),
+            Some("已安装")
+        );
         assert!(window.try_find("agents-operation-codex").is_none());
         assert!(matches!(
             view.read(cx).status(&spec),
@@ -589,7 +592,10 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
         window.render_frame(cx);
         assert!(window.find("agents-authentication-open-0").visible());
         assert!(window.try_find("authentication-error").is_none());
-        assert!(window.try_find("agents-item-status-codex").is_none());
+        assert_eq!(
+            window.find("agents-item-status-codex").label(),
+            Some("已安装")
+        );
     })
     .expect("configuration owns its authentication feedback");
     cx.update_window(window.into(), |_, window, cx| {

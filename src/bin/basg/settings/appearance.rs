@@ -298,6 +298,7 @@ impl AppearancePage {
         select!(ui_font);
         select!(mono_font);
         select!(composer_enter);
+        select!(default_agent);
     }
 
     /// # Errors
@@ -384,8 +385,8 @@ impl AppearancePage {
     fn control(&self, field: Field) -> gpui_kit::AnyElement {
         match field {
             Field::Language => gds_uim::el! {
-                #div { id: $field.id(); test_support; } [
-                    Select($&self.form.language) { small; cursor_pointer; }
+                #div { id: $field.id(); test_support; w_full; } [
+                    Select($&self.form.language) { small; w_full; cursor_pointer; }
                 ]
             }
             .into_any_element(),
@@ -402,8 +403,8 @@ impl AppearancePage {
             }
             .into_any_element(),
             Field::ComposerEnter => gds_uim::el! {
-                #div { id: $field.id(); test_support; } [
-                    Select($&self.form.composer_enter) { small; cursor_pointer; }
+                #div { id: $field.id(); test_support; w_full; } [
+                    Select($&self.form.composer_enter) { small; w_full; cursor_pointer; }
                 ]
             }
             .into_any_element(),
@@ -481,6 +482,13 @@ impl AppearancePage {
         self.replace_form(
             &Preferences {
                 confirm_session_delete: self.form.confirm_delete,
+                default_agent: self
+                    .form
+                    .default_agent
+                    .read(cx)
+                    .selected_value()
+                    .cloned()
+                    .flatten(),
                 ..Preferences::default()
             },
             window,

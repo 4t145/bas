@@ -3,8 +3,14 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 mod archive;
 #[cfg(unix)]
 mod authentication;
+#[cfg(unix)]
+mod directories;
+#[cfg(unix)]
+mod logout;
 mod management;
 mod permissions;
+#[cfg(unix)]
+mod subagents;
 mod submission;
 
 use bas::{

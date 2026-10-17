@@ -79,6 +79,11 @@ impl Attachment {
                 base64::engine::general_purpose::STANDARD.encode(data),
                 mime,
             ))
+        } else if mime.starts_with("audio/") {
+            acp::ContentBlock::Audio(acp::AudioContent::new(
+                base64::engine::general_purpose::STANDARD.encode(data),
+                mime,
+            ))
         } else {
             let text = std::str::from_utf8(&data)
                 .ok()
@@ -151,6 +156,7 @@ impl Attachment {
     pub fn supported(&self, capabilities: &acp::PromptCapabilities) -> bool {
         match self.content.as_ref() {
             acp::ContentBlock::Image(_) => capabilities.image,
+            acp::ContentBlock::Audio(_) => capabilities.audio,
             acp::ContentBlock::Resource(resource) => {
                 capabilities.embedded_context
                     || matches!(

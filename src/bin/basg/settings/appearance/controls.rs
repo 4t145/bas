@@ -4,7 +4,6 @@ use super::*;
 use crate::ui;
 use gpui_kit::{Entity, assets::IconName};
 
-const CONTROLS_WIDTH: f32 = 320.;
 const STEPPER_WIDTH: f32 = 112.;
 const LINE_HEIGHT_STEP: f32 = 0.1;
 const OPACITY_STEP: f32 = 0.05;
@@ -210,30 +209,22 @@ impl AppearancePage {
                     .into_any_element()
             }
         };
-        gds_uim::el! {
-            #div {
-                id: $format!("{}-row", field.id()); test_support;
-                flex; items_center; gap_3; py_3; flex_shrink_0;
-                @$(!last) => { border_b_1; border_color: $cx.theme().border; };
-            } [
-                #div { flex_1; min_w_0; flex; flex_col; gap_1; } [
-                    #div { id: $format!("{}-label", field.id()); test_support; } [$field.label()],
-                    #div { text_color: $cx.theme().muted_foreground; text_size: ui::SMALL; } [$field.help()],
-                ],
-                #div { flex; items_center; justify_end; gap_2; w: CONTROLS_WIDTH.px; flex_shrink_0; } [
-                    #div { w: ui::COMPACT_CONTROL.px; flex_shrink_0; } [
-                        ..$self.overridden(field, cx).then(|| gds_uim::el! {
-                            #ui::icon_button($format!("{}-default", field.id()), $IconName::RotateCcw) {
-                                accessibility_label: $crate::i18n::tr!("appearance-reset-field", field = field.label());
-                                tooltip: $crate::i18n::tr!("appearance-reset-field", field = field.label());
-                                disabled: $self.document.is_none();
-                                on_click: $cx.listener(move |this, _, window, cx| this.reset_field(field, window, cx));
-                            }
-                        }),
-                    ],
-                    $controls,
-                ],
-            ]
-        }.into_any_element()
+        let reset = self.overridden(field, cx).then(|| gds_uim::el! {
+            #ui::icon_button($format!("{}-default", field.id()), $IconName::RotateCcw) {
+                accessibility_label: $crate::i18n::tr!("appearance-reset-field", field = field.label());
+                tooltip: $crate::i18n::tr!("appearance-reset-field", field = field.label());
+                disabled: $self.document.is_none();
+                on_click: $cx.listener(move |this, _, window, cx| this.reset_field(field, window, cx));
+            }
+        }.into_any_element());
+        crate::settings::form::Row {
+            id: field.id().into(),
+            label: field.label(),
+            help: field.help(),
+            control: controls,
+            reset,
+            last,
+        }
+        .into_any_element()
     }
 }

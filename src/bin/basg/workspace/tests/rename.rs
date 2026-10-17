@@ -12,6 +12,7 @@ fn draft_title_is_saved_to_its_directory_before_switching_and_creation(cx: &mut 
     let mut fixture = fixture(cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
+            view.backend.connected = false;
             view.new_thread(Some("/draft/a".into()), window, cx);
             view.begin_rename(window, cx);
             view.renaming.input.update(cx, |input, cx| {
@@ -32,6 +33,7 @@ fn draft_title_is_saved_to_its_directory_before_switching_and_creation(cx: &mut 
                 input.set_value("created title", window, cx);
             });
             view.selected.waiting_for_agent_selection = false;
+            view.backend.connected = true;
             view.prepare_session(cx);
             assert!(view.renaming.edit.is_none());
         });

@@ -18,6 +18,7 @@ fn session_preferences_have_their_own_category_and_remain_searchable(cx: &mut Te
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("settings-confirm-delete").is_none());
+        let control_size = window.find("appearance-language").bounds().size;
         let appearance = window.find("settings-appearance-text").bounds();
         let sessions = window.find("settings-sessions-text").bounds();
         assert_eq!(appearance.left(), sessions.left());
@@ -27,6 +28,55 @@ fn session_preferences_have_their_own_category_and_remain_searchable(cx: &mut Te
         assert!(window.find("session-settings").visible());
         assert!(window.try_find("appearance-layout-card").is_none());
         assert!(window.try_find("settings-backend-context").is_none());
+        assert_eq!(
+            window.find("settings-default-agent").bounds().size,
+            control_size
+        );
+        window.click("settings-default-agent", cx);
+    })
+    .expect("open default Agent menu");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.press("down", cx);
+        window.press("enter", cx);
+    })
+    .expect("confirm default Agent");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, _, cx| {
+        assert_eq!(
+            cx.global::<crate::theme::Appearance>()
+                .default_agent
+                .as_deref(),
+            Some("embedded")
+        );
+        assert_eq!(
+            bas::config::Store::at(path.clone())
+                .load()
+                .expect("saved default")
+                .settings
+                .appearance
+                .default_agent
+                .as_deref(),
+            Some("embedded")
+        );
+    })
+    .expect("choose default Agent");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.click("settings-default-agent", cx);
+    })
+    .expect("reopen default Agent menu");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.press("up", cx);
+        window.press("enter", cx);
+    })
+    .expect("confirm last Agent preference");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        assert_eq!(cx.global::<crate::theme::Appearance>().default_agent, None);
         window.click("settings-confirm-delete", cx);
         assert!(
             cx.global::<crate::theme::Appearance>()

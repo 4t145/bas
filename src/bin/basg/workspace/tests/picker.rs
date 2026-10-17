@@ -522,7 +522,9 @@ fn pending_creation_disables_picker_and_rejects_late_selection(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
-fn explicit_new_thread_waits_for_agent_choice_across_catalog_refreshes(cx: &mut TestAppContext) {
+fn explicit_new_thread_initializes_the_last_agent_once_across_catalog_refreshes(
+    cx: &mut TestAppContext,
+) {
     for compact in [false, true] {
         let mut fixture = fixture(cx);
         let previous = session();
@@ -549,9 +551,10 @@ fn explicit_new_thread_waits_for_agent_choice_across_catalog_refreshes(cx: &mut 
                         cx,
                     );
                     view.refresh(cx);
-                    assert!(view.selected.waiting_for_agent_selection);
-                    assert!(!view.selected.creating);
-                    assert!(view.can_select_agent());
+                    assert!(!view.selected.waiting_for_agent_selection);
+                    assert!(view.selected.creating);
+                    assert!(!view.can_select_agent());
+                    assert_eq!(view.selected.agent, previous.agent.to_string());
                     assert_eq!(view.selected.id, None);
                     assert_eq!(view.sessions.drafts[&previous.id].text, "old thread draft");
                 });
@@ -559,7 +562,7 @@ fn explicit_new_thread_waits_for_agent_choice_across_catalog_refreshes(cx: &mut 
             window.render_frame(cx);
             assert!(window.find("agent-picker").visible());
         })
-        .expect("new-thread action leaves a stable selectable draft");
+        .expect("new-thread action initializes the previous agent");
         let commands: Vec<_> = std::iter::from_fn(|| fixture.commands.try_recv().ok()).collect();
         assert!(
             commands
@@ -568,9 +571,18 @@ fn explicit_new_thread_waits_for_agent_choice_across_catalog_refreshes(cx: &mut 
         );
         assert!(commands.iter().all(|command| matches!(
             command,
-            Command::Detach | Command::Refresh | Command::Foreground(_)
+            Command::Detach | Command::Create(_) | Command::Refresh | Command::Foreground(_)
         )));
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| matches!(command, Command::Create(_)))
+                .count(),
+            1
+        );
         cx.update_window(fixture.window.into(), |_, window, cx| {
+            finish_initialization(&fixture, session(), vec![], window, cx);
+            while fixture.commands.try_recv().is_ok() {}
             fixture.view.update(cx, |view, cx| {
                 view.composer.input.update(cx, |input, cx| {
                     input.set_value("new thread draft", window, cx)
@@ -593,6 +605,43 @@ fn explicit_new_thread_waits_for_agent_choice_across_catalog_refreshes(cx: &mut 
         );
         assert!(fixture.commands.try_recv().is_err());
     }
+}
+
+#[gpui_kit::test]
+fn configured_default_wins_but_explicit_agent_chat_keeps_its_target(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    attach(&fixture, session(), cx);
+    while fixture.commands.try_recv().is_ok() {}
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        cx.update_global::<theme::Appearance, _>(|preferences, _| {
+            preferences.default_agent = Some("preferred-agent".into());
+        });
+        fixture.view.update(cx, |view, cx| {
+            view.new_thread(Some("/preferred".into()), window, cx);
+            assert_eq!(view.selected.agent, "preferred-agent");
+            assert!(view.selected.creating);
+        });
+    })
+    .expect("configured default");
+    assert!(matches!(fixture.commands.try_recv(), Ok(Command::Detach)));
+    assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::Create(request))
+        if request.agent == "preferred-agent" && request.cwd == "/preferred")
+    );
+    assert!(fixture.commands.try_recv().is_err());
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.start_agent_chat("explicit-agent".into(), window, cx);
+            assert_eq!(view.selected.agent, "explicit-agent");
+        });
+    })
+    .expect("explicit agent overrides default");
+    assert!(matches!(fixture.commands.try_recv(), Ok(Command::Detach)));
+    assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::Create(request))
+        if request.agent == "explicit-agent")
+    );
+    assert!(fixture.commands.try_recv().is_err());
 }
 
 #[gpui_kit::test]

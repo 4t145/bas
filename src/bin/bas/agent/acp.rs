@@ -22,9 +22,12 @@ use super::{
 
 mod authentication;
 mod convert;
+mod directories;
 pub mod history;
+mod management;
 mod probe;
 pub use authentication::{authenticate_expected, interactive as authenticate_interactive};
+pub use management::logout;
 pub(crate) use probe::AuthenticationError;
 pub use probe::{CheckResult, check_connection, resolve_program};
 
@@ -115,7 +118,8 @@ impl Driver {
         let connection = Connection {
             transport,
             session: request.session,
-            cwd: request.cwd,
+            cwd: request.cwd.clone(),
+            additional_directories: request.additional_directories,
             state: Arc::clone(&state),
             updates: request.updates.clone(),
             host: request.host,
@@ -140,12 +144,14 @@ impl Driver {
         })??;
         Ok(Box::new(Session {
             agent: request.spec.id.clone(),
+            cwd: request.cwd,
             connection: opened.connection,
             acp_session: opened.created.session_id.clone(),
             initialized: opened.initialized,
             initialization_raw: opened.initialization_raw,
             created: opened.created,
-            state,
+            subagents: state.lock().await.subagents.clone(),
+            state: state.clone(),
             updates: request.updates,
             connection_task: Some(task),
             turn_task: None,
@@ -162,6 +168,7 @@ struct Connection {
     session: SessionId,
     transport: AcpAgent,
     cwd: PathBuf,
+    additional_directories: Vec<PathBuf>,
     state: Arc<Mutex<State>>,
     updates: mpsc::Sender<Update>,
     host: Arc<dyn Host>,
@@ -192,6 +199,7 @@ impl Connection {
             session,
             transport,
             cwd,
+            additional_directories,
             state,
             updates,
             host,
@@ -210,7 +218,10 @@ impl Connection {
         };
         let notification_state = Arc::clone(&state);
         let permission_host = Arc::clone(&host);
+        let permission_state = Arc::clone(&state);
         let read_host = Arc::clone(&host);
+        let read_state = Arc::clone(&state);
+        let write_state = Arc::clone(&state);
         let elicitation_host = Arc::clone(&host);
         let completion_host = Arc::clone(&host);
         let elicitation_state = Arc::clone(&state);
@@ -223,6 +234,10 @@ impl Connection {
                 .map_err(agent_client_protocol::Error::into_internal_error)
         }, on_receive_notification!())
         .on_receive_request(async move |mut request: v1::RequestPermissionRequest, responder, cx| {
+            if !permission_state.lock().await.accepts_session(&request.session_id) {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            }
             request.session_id = session.to_string().into();
             let host = Arc::clone(&permission_host);
             let cancellation = responder.cancellation();
@@ -240,6 +255,10 @@ impl Connection {
             Ok(())
         }, on_receive_request!())
         .on_receive_request(async move |mut request: v1::ReadTextFileRequest, responder, _cx| {
+            if !read_state.lock().await.accepts_session(&request.session_id) {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            }
             request.session_id = session.to_string().into();
             let content = read_host.read_text_file(request).await
                 .map_err(agent_client_protocol::Error::into_internal_error)?;
@@ -247,6 +266,10 @@ impl Connection {
             Ok(())
         }, on_receive_request!())
         .on_receive_request(async move |mut request: v1::WriteTextFileRequest, responder, _cx| {
+            if !write_state.lock().await.accepts_session(&request.session_id) {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            }
             request.session_id = session.to_string().into();
             host.write_text_file(request).await
                 .map_err(agent_client_protocol::Error::into_internal_error)?;
@@ -268,12 +291,11 @@ impl Connection {
                 responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
                 return Ok(());
             }
-            if let Some(requested) = request.params.get("sessionId").and_then(serde_json::Value::as_str) {
-                let current = elicitation_state.lock().await.session.clone();
-                if current.as_ref().is_none_or(|current| current.0.as_ref() != requested) {
-                    responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
-                    return Ok(());
-                }
+            if let Some(requested) = request.params.get("sessionId").and_then(serde_json::Value::as_str)
+                && !elicitation_state.lock().await.accepts_session(&v1::SessionId::new(requested))
+            {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
             }
             let host = Arc::clone(&elicitation_host);
             let cancellation = responder.cancellation();
@@ -312,9 +334,16 @@ impl Connection {
                     return Ok(());
                 }
             };
+            if !additional_directories.is_empty()
+                && initialized.agent_capabilities.session_capabilities.additional_directories.is_none()
+            {
+                failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                let _ = ready.send(Err(Error::Unsupported { agent: startup_agent, operation: "additionalDirectories" }));
+                return Ok(());
+            }
             let opened_session = match startup {
                 Startup::Create => {
-                    let sent = cx.send_request(v1::NewSessionRequest::new(cwd));
+                    let sent = cx.send_request(v1::NewSessionRequest::new(cwd).additional_directories(additional_directories));
                     let id = serde_json::to_value(sent.id())?.to_string();
                     sent.block_task().await.map_err(|error| startup_error(&errors, &id, error))
                 }
@@ -324,7 +353,7 @@ impl Connection {
                     // https://agentclientprotocol.com/protocol/session-setup#loading-sessions
                     state.lock().await.session = Some(id.clone());
                     if initialized.agent_capabilities.load_session {
-                        let sent = cx.send_request(v1::LoadSessionRequest::new(id.clone(), cwd));
+                        let sent = cx.send_request(v1::LoadSessionRequest::new(id.clone(), cwd).additional_directories(additional_directories));
                         let request_id = serde_json::to_value(sent.id())?.to_string();
                         sent.block_task().await.map(|loaded| {
                                 v1::NewSessionResponse::new(id)
@@ -333,7 +362,7 @@ impl Connection {
                                     .meta(loaded.meta)
                             }).map_err(|error| startup_error(&errors, &request_id, error))
                     } else if initialized.agent_capabilities.session_capabilities.resume.is_some() {
-                        let sent = cx.send_request(v1::ResumeSessionRequest::new(id.clone(), cwd));
+                        let sent = cx.send_request(v1::ResumeSessionRequest::new(id.clone(), cwd).additional_directories(additional_directories));
                         let request_id = serde_json::to_value(sent.id())?.to_string();
                         sent.block_task().await.map(|resumed| {
                                 v1::NewSessionResponse::new(id)
@@ -369,6 +398,7 @@ impl Connection {
 
     fn capabilities() -> v1::ClientCapabilities {
         v1::ClientCapabilities::new()
+            .subagents(v1::SubagentCapabilities::new())
             .auth(v1::AuthCapabilities::new().terminal(true))
             .elicitation(
                 v1::ElicitationCapabilities::new()
@@ -417,12 +447,14 @@ struct Opened {
 
 struct Session {
     agent: AgentId,
+    cwd: PathBuf,
     connection: ConnectionTo<Agent>,
     acp_session: v1::SessionId,
     initialized: v1::InitializeResponse,
     initialization_raw: serde_json::Value,
     created: v1::NewSessionResponse,
     state: Arc<Mutex<State>>,
+    subagents: Arc<std::sync::Mutex<bas::model::Subagents>>,
     updates: mpsc::Sender<Update>,
     connection_task: Option<AbortOnDropHandle<()>>,
     turn_task: Option<AbortOnDropHandle<()>>,
@@ -435,6 +467,14 @@ struct Session {
 
 #[async_trait]
 impl AgentTrait for Session {
+    fn subagents(&self) -> bas::model::Subagents {
+        self.subagents.lock().expect("subagents lock").clone()
+    }
+
+    fn set_directories(&self, directories: Vec<PathBuf>) -> BoxFuture<'static, Result<(), Error>> {
+        self.reload_directories(directories)
+    }
+
     fn initialization_raw(&self) -> Option<serde_json::Value> {
         Some(self.initialization_raw.clone())
     }
@@ -676,9 +716,20 @@ async fn commit(
 struct State {
     session: Option<v1::SessionId>,
     active: Option<TurnId>,
+    reloading: bool,
+    subagents: Arc<std::sync::Mutex<bas::model::Subagents>>,
 }
 
 impl State {
+    fn accepts_session(&self, id: &v1::SessionId) -> bool {
+        self.session.as_ref().is_none_or(|root| root == id)
+            || self
+                .subagents
+                .lock()
+                .expect("subagents lock")
+                .contains(id.0.as_ref())
+    }
+
     /// # Errors
     /// Rejects notifications routed to another ACP session.
     async fn on_notification(
@@ -686,15 +737,44 @@ impl State {
         notification: v1::SessionNotification,
         updates: &mpsc::Sender<Update>,
     ) -> Result<(), Error> {
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|id| id != &notification.session_id)
-        {
+        if !self.accepts_session(&notification.session_id) {
             return Err(Error::backend(
                 "acp",
                 "update references a different session",
             ));
+        }
+        let root = self
+            .session
+            .get_or_insert_with(|| notification.session_id.clone());
+        let child = *root != notification.session_id;
+        if let v1::SessionUpdate::SubagentUpdate(update) = &notification.update {
+            if update.session_id == *root {
+                return Err(Error::backend(
+                    "acp",
+                    "subagent cannot own the root session",
+                ));
+            }
+            self.subagents
+                .lock()
+                .expect("subagents lock")
+                .apply(child.then_some(notification.session_id.0.as_ref()), update)
+                .map_err(|error| Error::backend("acp", error.to_string()))?;
+        }
+        if self.reloading {
+            return Ok(());
+        }
+        if child {
+            let _ = updates.send(Update::Subagent(notification)).await;
+            return Ok(());
+        }
+        if matches!(
+            notification.update,
+            v1::SessionUpdate::SubagentUpdate(_)
+                | v1::SessionUpdate::SessionMessage(_)
+                | v1::SessionUpdate::SessionMessageChunk(_)
+        ) {
+            let _ = updates.send(Update::Acp(notification.update)).await;
+            return Ok(());
         }
         let update = match self.active {
             Some(turn) => Update::Turn {

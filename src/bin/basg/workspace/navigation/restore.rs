@@ -16,11 +16,23 @@ struct Saved {
     pinned: std::collections::BTreeSet<SessionId>,
     #[serde(default)]
     seen_replies: std::collections::BTreeMap<SessionId, u64>,
+    #[serde(default)]
+    hidden_workspaces: std::collections::BTreeSet<Option<PathBuf>>,
 }
 
 pub(in crate::workspace) struct Store {
     path: PathBuf,
     saved: Saved,
+}
+
+struct WriteLock(fs::File);
+
+impl Drop for WriteLock {
+    fn drop(&mut self) {
+        // A concurrently spawned process can retain a duplicate descriptor.
+        // Finish the transaction without waiting for that process to close it.
+        let _ = self.0.unlock();
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,6 +71,27 @@ impl Store {
 
     pub fn thread(&self) -> Option<SessionId> {
         self.saved.thread
+    }
+
+    pub fn hidden_workspaces(&self) -> HashSet<Option<PathBuf>> {
+        self.saved.hidden_workspaces.iter().cloned().collect()
+    }
+
+    /// # Errors
+    /// Returns lock, read or write failures without altering unrelated window state.
+    pub fn set_workspace_hidden(
+        &mut self,
+        directory: Option<PathBuf>,
+        hidden: bool,
+    ) -> Result<(), Error> {
+        let _lock = self.lock()?;
+        let mut saved = self.latest()?;
+        if hidden {
+            saved.hidden_workspaces.insert(directory);
+        } else {
+            saved.hidden_workspaces.remove(&directory);
+        }
+        self.write(saved)
     }
 
     pub fn pinned(&self) -> HashSet<SessionId> {
@@ -153,7 +186,7 @@ impl Store {
 
     /// # Errors
     /// Returns IO failures or Busy without blocking the UI on another writer.
-    fn lock(&self) -> Result<fs::File, Error> {
+    fn lock(&self) -> Result<WriteLock, Error> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -164,7 +197,7 @@ impl Store {
             .truncate(false)
             .open(self.path.with_extension("lock"))?;
         match lock.try_lock() {
-            Ok(()) => Ok(lock),
+            Ok(()) => Ok(WriteLock(lock)),
             Err(fs::TryLockError::WouldBlock) => Err(Error::Busy),
             Err(fs::TryLockError::Error(error)) => Err(error.into()),
         }
@@ -288,6 +321,13 @@ impl Workspace {
             });
         if let Some(thread) = thread {
             self.activate(thread, true, window, cx);
+        } else if self
+            .navigation
+            .hidden
+            .contains(&self.navigation.selected_directory)
+        {
+            // Do not recreate a removed workspace merely because it is the launch cwd.
+            self.detach_thread(None, window, cx);
         }
     }
 }

@@ -57,6 +57,50 @@ fn read(fixture: &Fixture) -> Preferences {
 }
 
 #[gpui_kit::test]
+fn default_agent_persists_and_appearance_reset_does_not_change_session_preferences(
+    cx: &mut TestAppContext,
+) {
+    let fixture = fixture(
+        cx,
+        Preferences {
+            default_agent: Some("codex-acp".into()),
+            ..builtin()
+        },
+    );
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |page, cx| {
+            assert_eq!(
+                page.form.default_agent.read(cx).selected_value(),
+                Some(&Some("codex-acp".into()))
+            );
+            page.form.default_agent.update(cx, |select, cx| {
+                select.set_items(
+                    vec![form::Choice(None), form::Choice(Some("qwen".into()))],
+                    window,
+                    cx,
+                );
+                select.set_selected_value(&Some("qwen".into()), window, cx);
+            });
+            page.flush_pending(window, cx);
+        });
+        window.render_frame(cx);
+        window.click("settings-reset", cx);
+    })
+    .expect("default agent preference");
+    assert_eq!(read(&fixture).default_agent.as_deref(), Some("qwen"));
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |page, cx| {
+            page.form.default_agent.update(cx, |select, cx| {
+                select.set_selected_value(&None, window, cx)
+            });
+            page.flush_pending(window, cx);
+        });
+    })
+    .expect("use last agent");
+    assert_eq!(read(&fixture).default_agent, None);
+}
+
+#[gpui_kit::test]
 fn language_selection_saves_and_updates_existing_controls(cx: &mut TestAppContext) {
     if !crate::i18n::isolated_language_test(
         "settings::appearance::tests::language_selection_saves_and_updates_existing_controls",
@@ -486,6 +530,7 @@ fn all_fields_round_trip_and_default_is_applied_immediately(cx: &mut TestAppCont
         content_line_height: Some(1.8),
         content_opacity: Some(0.8),
         composer_enter_behavior: ComposerEnterBehavior::Newline,
+        default_agent: None,
         confirm_session_delete: Some(true),
         theme_file: Some("theme.json".into()),
         theme_source: ThemeSource::Builtin,

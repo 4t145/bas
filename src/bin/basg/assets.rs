@@ -53,6 +53,7 @@ gpui_kit::assets::icon_assets!(
         ArchiveRestore,
         Menu,
         Info,
+        LogIn,
         LogOut,
         Pin,
         PinOff,
@@ -74,6 +75,9 @@ gpui_kit::assets::icon_assets!(
         ListClock,
         Circle,
         Clock,
+        Volume2,
+        Play,
+        Pause,
         X
     ]
 );

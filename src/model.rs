@@ -10,6 +10,7 @@ mod ids;
 mod message;
 pub mod presentation;
 mod session;
+mod subagent;
 mod submission;
 mod time;
 
@@ -19,6 +20,7 @@ pub use event::*;
 pub use ids::*;
 pub use message::*;
 pub use session::*;
+pub use subagent::*;
 pub use submission::*;
 pub use time::*;
 
