@@ -64,10 +64,12 @@ Agent 也可以通过 [Slash commands](https://agentclientprotocol.com/protocol/
 
 - 附件选择、拖放等现有文件入口将 `audio/*` 文件构造成原生 ACP AudioContent。
   必须有 `promptCapabilities.audio`，不借用 `embeddedContext` 绕过协商。
-- 返回的 AudioContent 显示播放、暂停和停止控件，不依赖 Agent 的输入能力标志。
+- 返回的 AudioContent 显示播放、暂停和停止图标控件，保留悬停提示及无障碍名称，不依赖 Agent 的输入能力标志。
   只有显式点击才解码和打开默认音频输出设备；历史回放不自动播放。
 - 每个聊天窗口同时播放一段音频，切换会话或关闭窗口会停止播放。
   解码与设备操作在独立线程中进行，格式、设备和播放错误显示在对应控件中。
+  回复预览与正文用同一音频身份共享状态；自然播放结束后清除当前条目并禁用停止按钮。
+  停止、切换音频或释放播放器会立即使旧请求失效，设备初始化完成后再次核对，避免启动已取消的音频。
 - 使用发布版 rodio／Symphonia，支持 WAV、MP3、FLAC、Ogg Vorbis、AAC／M4A 等其已启用的解码格式。
   不支持的编码明确报错；不承诺 Opus、裸 PCM 包或任意音频 MIME 都可播放。
 - 沿用附件的 8 MiB 单文件、16 MiB 合计限制及 RPC 大小限制，不增加上传协议。

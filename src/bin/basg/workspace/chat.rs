@@ -5,6 +5,7 @@ use super::composer::{COMPOSER_CONTROL_INSET, COMPOSER_SIDE_PADDING};
 use super::*;
 
 pub(super) mod content;
+mod resource;
 
 pub(super) const CONTENT_WIDTH: f32 = 840.;
 pub(super) const THREAD_BODY_PADDING: f32 = 12.;

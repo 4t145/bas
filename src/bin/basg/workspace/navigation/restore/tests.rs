@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn bookmarks_persist_independently_and_stale_writers_preserve_them() {
+    let directory = tempfile::tempdir().expect("state directory");
+    let path = directory.path().join("window.json");
+    let mut first = Store::open(path.clone());
+    let mut second = Store::open(path.clone());
+    let bookmarked = SessionId::new();
+    let pinned = SessionId::new();
+    assert!(first.bookmarks().is_empty());
+    first.set_bookmarked(bookmarked, true).expect("bookmark");
+    second
+        .set_pinned(pinned, true)
+        .expect("pin from stale reader");
+    second.save(Some(pinned)).expect("selection");
+    let restored = Store::open(path.clone());
+    assert_eq!(restored.bookmarks(), HashSet::from([bookmarked]));
+    assert_eq!(restored.pinned(), HashSet::from([pinned]));
+    first
+        .set_bookmarked(bookmarked, false)
+        .expect("remove bookmark");
+    let restored = Store::open(path);
+    assert!(restored.bookmarks().is_empty());
+    assert_eq!(restored.thread(), Some(pinned));
+    assert_eq!(restored.pinned(), HashSet::from([pinned]));
+}
+
+#[test]
 fn completed_write_releases_lock_while_a_duplicate_descriptor_remains_open() {
     let directory = tempfile::tempdir().expect("state directory");
     let mut store = Store::open(directory.path().join("window.json"));
@@ -46,6 +72,7 @@ fn concurrent_writers_are_rejected_before_read_modify_write() {
     let lock = first.lock().expect("hold transaction lock");
     let id = SessionId::new();
     assert!(matches!(second.set_pinned(id, true), Err(Error::Busy)));
+    assert!(matches!(second.set_bookmarked(id, true), Err(Error::Busy)));
     assert!(matches!(second.save(Some(id)), Err(Error::Busy)));
     assert!(matches!(
         second.save_reads(&HashMap::from([(id, 4)])),

@@ -5,6 +5,7 @@
 //! messages stay in [`crate::v1`] and [`crate::v2`].
 
 pub mod commands;
+pub(crate) mod resources;
 pub mod sessions;
 
 #[cfg(test)]
@@ -65,8 +66,8 @@ pub const COMMANDS: &[commands::Descriptor] = &[
     },
     commands::Descriptor {
         name: "plan",
-        description: "Publish an execution plan",
-        hint: None,
+        description: "Run a cancellable plan, or clear it",
+        hint: Some("milliseconds between steps (default 5000), or clear"),
     },
     commands::Descriptor {
         name: "permission",

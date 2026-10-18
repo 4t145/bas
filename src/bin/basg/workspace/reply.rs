@@ -36,6 +36,7 @@ pub(super) struct ReplyPreview {
     documents: Vec<Option<Entity<gpui_kit::component::text::TextViewState>>>,
     images: Vec<Entity<images::Cache>>,
     audio: Entity<crate::audio::Player>,
+    local_files: bool,
     _changed: Vec<Subscription>,
 }
 
@@ -335,6 +336,7 @@ impl Workspace {
                 message,
                 key,
                 audio: self.audio.clone(),
+                local_files: self.backend.server.ip().is_loopback(),
                 documents,
                 images,
                 _changed: changed,
@@ -477,6 +479,18 @@ impl Render for ReplyPreview {
             .enumerate()
             .map(|(index, (block, (document, images)))| {
                 let id = format!("preview-{}-{index}", self.message.id);
+                if let bas::acp::ContentBlock::Audio(audio) = block {
+                    let playback_id = match self.key {
+                        PreviewKey::Reply(_) => {
+                            chat::content::message_block_id(&self.message, index)
+                        }
+                        PreviewKey::Attachment(attachment) => {
+                            format!("attachment-{attachment}-{index}")
+                        }
+                        PreviewKey::Activity => id.clone(),
+                    };
+                    return crate::audio::content(&id, &playback_id, audio, &self.audio, cx);
+                }
                 if matches!(self.key, PreviewKey::Attachment(_))
                     && let bas::acp::ContentBlock::Image(image) = block
                 {
@@ -500,6 +514,7 @@ impl Render for ReplyPreview {
                     }),
                     images,
                     &self.audio,
+                    self.local_files,
                     cx,
                 )
             })

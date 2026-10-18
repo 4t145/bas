@@ -53,6 +53,7 @@ pub(super) fn action_item(
 impl Workspace {
     pub(super) fn application_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let view = cx.entity().downgrade();
+        let connected = self.backend.connected;
         self.menu_button(
             el! {
                 #layout::icon_button("app-menu", IconName::Menu) {
@@ -60,13 +61,16 @@ impl Workspace {
                     tooltip: $crate::i18n::tr!("app-menu");
                 }
             },
-            6,
+            10,
             false,
             move |menu, window, _| {
                 let parent = window.window_handle();
                 let settings = view.clone();
                 let about = view.clone();
                 let quit = view.clone();
+                let new_session = view.clone();
+                let workspace = view.clone();
+                let manager = view.clone();
                 menu.min_w(px(280.))
                     .max_w(px(320.))
                     .item(
@@ -90,6 +94,57 @@ impl Workspace {
                         ),
                     )
                     .separator()
+                    .item(
+                        shortcuts::menu_item(
+                            crate::i18n::tr!("session-new"),
+                            Some(Box::new(NewSession)),
+                        )
+                        .on_click(move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |window, cx| {
+                                let _ = new_session.update(cx, |this, cx| {
+                                    this.close_menu(window, cx);
+                                    this.new_session(window, cx);
+                                });
+                            });
+                        }),
+                    )
+                    .item(
+                        shortcuts::menu_item(
+                            crate::i18n::tr!("workspace-add"),
+                            Some(Box::new(shortcuts::AddWorkspace)),
+                        )
+                        .on_click(move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |window, cx| {
+                                let _ = workspace.update(cx, |this, cx| {
+                                    this.close_menu(window, cx);
+                                    this.open_workspace_add_menu(window, cx);
+                                });
+                            });
+                        }),
+                    )
+                    .separator()
+                    .item(
+                        shortcuts::menu_item(
+                            crate::i18n::tr!("agent-history-title"),
+                            Some(Box::new(shortcuts::OpenSessionManager)),
+                        )
+                        .disabled(!connected)
+                        .on_click(move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |window, cx| {
+                                let _ = manager.update(cx, |this, cx| {
+                                    this.close_menu(window, cx);
+                                    // Activate the manager after the borrowed popup finishes closing.
+                                    cx.defer_in(window, |this, window, cx| {
+                                        this.on_open_session_manager(
+                                            &shortcuts::OpenSessionManager,
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                });
+                            });
+                        }),
+                    )
                     .item(
                         application_item(
                             crate::i18n::tr!("settings-title"),

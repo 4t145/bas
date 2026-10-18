@@ -173,6 +173,11 @@ impl Conversation {
     }
 
     pub(super) fn apply_legacy_plan(&mut self, plan: &acp::Plan) {
+        if plan.entries.is_empty() {
+            self.plans
+                .retain(|plan| plan_id(plan).is_none_or(|id| id.0.as_ref() != LEGACY_PLAN_ID));
+            return;
+        }
         let entries = serde_json::to_value(&plan.entries).and_then(serde_json::from_value);
         if let Ok(entries) = entries {
             self.apply_protocol_update(&acp2::SessionUpdate::PlanUpdate(acp2::PlanUpdate::new(

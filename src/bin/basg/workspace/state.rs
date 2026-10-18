@@ -110,8 +110,9 @@ pub(super) struct NavigationState {
     pub(super) collapsed: HashSet<Option<PathBuf>>,
     pub(super) hidden: HashSet<Option<PathBuf>>,
     pub(super) removing: HashMap<Option<PathBuf>, navigation::removal::Removal>,
-    pub(super) archived: bool,
+    pub(super) view: navigation::View,
     pub(super) pinned: HashSet<SessionId>,
+    pub(super) bookmarks: HashSet<SessionId>,
     pub(super) restore: RestoreState,
     pub(super) drafts: DirectoryDrafts,
     pub(super) picker: FolderPicker,
@@ -128,8 +129,9 @@ impl NavigationState {
             collapsed: HashSet::new(),
             hidden: HashSet::new(),
             removing: HashMap::new(),
-            archived: false,
+            view: navigation::View::Workspaces,
             pinned: HashSet::new(),
+            bookmarks: HashSet::new(),
             restore: RestoreState::default(),
             drafts: DirectoryDrafts::default(),
             picker: FolderPicker::default(),
@@ -138,6 +140,10 @@ impl NavigationState {
     }
 
     pub(super) fn attach_restore(&mut self, store: Option<navigation::restore::Store>) {
+        self.bookmarks = store
+            .as_ref()
+            .map(navigation::restore::Store::bookmarks)
+            .unwrap_or_default();
         self.hidden = store
             .as_ref()
             .map(navigation::restore::Store::hidden_workspaces)

@@ -9,6 +9,7 @@ actions!(
         RenameThread,
         ArchiveThread,
         ToggleThreadPin,
+        ToggleThreadBookmark,
         DeleteThread,
         AddWorkspace,
         ToggleSession,
@@ -31,6 +32,7 @@ pub(super) fn bind_keys(cx: &mut App) {
             KeyBinding::new("f2", RenameThread, Some(context)),
             KeyBinding::new("ctrl-w", ArchiveThread, Some(context)),
             KeyBinding::new("ctrl-alt-p", ToggleThreadPin, Some(context)),
+            KeyBinding::new("ctrl-d", ToggleThreadBookmark, Some(context)),
             KeyBinding::new("ctrl-alt-w", DeleteThread, Some(context)),
             KeyBinding::new("ctrl-alt-n", AddWorkspace, Some(context)),
             KeyBinding::new("ctrl-s", ToggleSession, Some(context)),
@@ -170,6 +172,17 @@ impl Workspace {
             && self.sessions.entries.iter().any(|session| session.id == id)
         {
             self.toggle_pinned(id, cx);
+        }
+    }
+
+    pub(super) fn on_toggle_thread_bookmark(
+        &mut self,
+        _: &ToggleThreadBookmark,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.selected.id {
+            self.toggle_bookmark(id, cx);
         }
     }
 

@@ -202,6 +202,7 @@ GUI 与 daemon 默认读取 `$XDG_CONFIG_HOME/bas/settings.json`，未设置 XDG
       {
         "id": "codex",
         "kind": "acp",
+        "description": "用于代码审查与实现",
         "command": { "program": "codex-acp", "args": [] }
       },
       {
@@ -222,6 +223,8 @@ GUI 与 daemon 默认读取 `$XDG_CONFIG_HOME/bas/settings.json`，未设置 XDG
 `id` 是 GUI 中显示的后端名，必须唯一；`embedded` 是本机 echo 测试后端。
 添加其他 ACP 后端时，使用 `kind: "acp"`，把启动程序与参数分别放在 `command.program`、
 `command.args` 中。程序可用绝对路径；参数数组保留空格边界，不经过 shell 解析，也不会展开 `~` 或 `$HOME`。
+`description` 是自定义智能体的可选备注，可在 GUI 中编辑并显示于卡片，不影响启动参数。
+使用备注前须同步更新 Bas daemon；旧版采用严格配置解析，不能识别这个新增字段。
 `env` 可为该后端覆盖非秘密环境变量；其余变量继承自 bas。凭据使用各 Agent 的原生
 登录或服务环境，不应把 API key 填入共享 JSON。设置页保留已有 `env`，但不收集密钥。
 

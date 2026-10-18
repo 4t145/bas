@@ -3,6 +3,13 @@ use bas::model::{ContentBlock, Role, ToolCall, ToolCallStatus};
 
 use super::super::*;
 
+pub(in crate::workspace) fn message_block_id(
+    message: &bas::model::Message,
+    index: usize,
+) -> String {
+    format!("message-{}-{index}", message.id)
+}
+
 fn tool_icon(kind: bas::model::ToolKind) -> IconName {
     use bas::model::ToolKind;
     match kind {
@@ -51,7 +58,7 @@ impl Workspace {
                             .iter()
                             .enumerate()
                             .map(|(block_index, block)| {
-                                self.render_block(format!("{id}-{block_index}"), block, index, cx)
+                                self.render_block(message_block_id(message, block_index), block, index, cx)
                             }),
                         ..$user.then(|| gds_uim::el! {
                             #div {
@@ -94,10 +101,18 @@ impl Workspace {
     ) -> AnyElement {
         let markdown = block_source(block).map(|text| self.markdown(id.clone(), text, index, cx));
         let images = self.content_images(&id, index, cx);
-        render_content(id, block, markdown, &images, &self.audio, cx)
+        render_content(
+            id,
+            block,
+            markdown,
+            &images,
+            &self.audio,
+            self.backend.server.ip().is_loopback(),
+            cx,
+        )
     }
 
-    fn disclosure(
+    pub(in crate::workspace) fn disclosure(
         &self,
         id: &str,
         label: &str,
@@ -206,14 +221,17 @@ impl Workspace {
                 overflow_hidden;
             } [
                 #div {
-                    flex; items_center; gap_2; px_2; py_1;
+                    px_2; py_1;
                     on_prepaint: $self.track_content_header(id);
                 } [
+                    #crate::ui::ContentRow::new(
+                        $format!("tool-row-{id}"),
                         $crate::ui::tooltip::bounded(
                             SharedString::from(format!("tool-hint-{id}")),
                             command,
                             title.to_owned(),
-                        ) { flex_1; min_w_0; },
+                        )
+                    ) [
                         Button($SharedString::from(format!("status-{id}"))) {
                             ghost; xsmall; cursor_default;
                             w: $px(crate::ui::COMPACT_CONTROL);
@@ -228,6 +246,7 @@ impl Workspace {
                                 tool.status == ToolCallStatus::InProgress,
                             ),
                         ],
+                    ],
                 ],
                 ..$expanded.then(|| {
                     gds_uim::el! {
@@ -655,34 +674,12 @@ pub(in crate::workspace) fn render_content(
     markdown: Option<AnyElement>,
     images: &Entity<images::Cache>,
     audio_player: &Entity<crate::audio::Player>,
+    local_files: bool,
     cx: &App,
 ) -> AnyElement {
     match block {
         ContentBlock::Text(_) => gds_uim::el! { #div [..markdown] }.into_any_element(),
-        ContentBlock::ResourceLink(resource) => {
-            let uri = resource.uri.clone();
-            let group = SharedString::from(format!("resource-copy-{id}"));
-            gds_uim::el! {
-                #div {
-                    group: $group.clone();
-                    rounded_md; border_1;
-                    border_color: $cx.theme().border;
-                    p_3; flex; gap_3; items_center;
-                } [
-                    Icon($IconName::File) { small; },
-                    #div { flex_1; min_w_0; } [
-                        $resource.name.clone(),
-                        $caption(uri.clone(), cx) { truncate; },
-                    ],
-                    $message_actions::action_button(SharedString::from(id), IconName::Copy, cx) {
-                        tooltip: $crate::i18n::tr!("action-copy-resource");
-                        invisible;
-                        group_hover: $group, $gds_uim::m! { visible; };
-                        on_click: $move |_, _, cx| copy_chat_text(&uri, cx);
-                    },
-                ]
-            }.into_any_element()
-        }
+        ContentBlock::ResourceLink(resource) => super::resource::render(&id, resource, local_files, cx),
         ContentBlock::Image(image) => gds_uim::el! {
             #div { flex; flex_col; gap_2; } [
                 $caption(crate::i18n::tr!("resource-image", type = (image.mime_type).to_string()), cx),
@@ -703,7 +700,7 @@ pub(in crate::workspace) fn render_content(
             _ => caption(crate::i18n::tr!("resource-embedded"), cx).into_any_element(),
         },
         ContentBlock::Audio(audio) => {
-            crate::audio::content(&id, audio, audio_player, cx)
+            crate::audio::content(&id, &id, audio, audio_player, cx)
         }
         _ => caption(crate::i18n::tr!("resource-preview-unavailable"), cx).into_any_element(),
     }

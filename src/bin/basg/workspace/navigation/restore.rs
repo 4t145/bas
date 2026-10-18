@@ -15,6 +15,8 @@ struct Saved {
     #[serde(default)]
     pinned: std::collections::BTreeSet<SessionId>,
     #[serde(default)]
+    bookmarks: std::collections::BTreeSet<SessionId>,
+    #[serde(default)]
     seen_replies: std::collections::BTreeMap<SessionId, u64>,
     #[serde(default)]
     hidden_workspaces: std::collections::BTreeSet<Option<PathBuf>>,
@@ -96,6 +98,23 @@ impl Store {
 
     pub fn pinned(&self) -> HashSet<SessionId> {
         self.saved.pinned.iter().copied().collect()
+    }
+
+    pub fn bookmarks(&self) -> HashSet<SessionId> {
+        self.saved.bookmarks.iter().copied().collect()
+    }
+
+    /// # Errors
+    /// Returns persistence failures without changing this or another window's saved state.
+    pub fn set_bookmarked(&mut self, id: SessionId, bookmarked: bool) -> Result<(), Error> {
+        let _lock = self.lock()?;
+        let mut saved = self.latest()?;
+        if bookmarked {
+            saved.bookmarks.insert(id);
+        } else {
+            saved.bookmarks.remove(&id);
+        }
+        self.write(saved)
     }
 
     pub fn seen_replies(&self) -> HashMap<SessionId, u64> {

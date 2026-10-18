@@ -96,7 +96,11 @@ impl Workspace {
         self.sessions
             .entries
             .iter()
-            .filter(|meta| meta.archived == self.navigation.archived)
+            .filter(|meta| {
+                self.navigation
+                    .view
+                    .includes(meta, &self.navigation.bookmarks)
+            })
             .cloned()
             .collect()
     }

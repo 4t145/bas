@@ -60,6 +60,11 @@ nix run .#acp-test-agent -- --help
 `/permission`、`/elicit` 和 `/sleep 10000`（测试停止按钮）。
 无需模型或 API key。若要测试登录／退出登录，可另建配置增加 `--require-auth`。
 
+`/plan` 按客户端能力选择旧式 `plan` 或新版 `plan_update`，不会重复发布两份。
+停止正在运行的计划会结束当前回合并移除计划；完成后的计划可用 `/plan clear` 清除。
+`/rich` 的 `sample.md` 引用指向实际临时文件，可在同一主机打开；文件在 Agent 连接结束后清理。
+`/help` 输出标准 Markdown 列表。旧会话里已保存的旧格式输出不会被重新排版为新内容，请重新发送 `/help`。
+
 会话仅在此进程内存中保存；客户端重启 Agent 进程后不能恢复之前的测试会话。
 本工具尚未实现 subagent 演示，不应用普通工具调用验收子 Agent 角标。
 声明式 NixOS／Home Manager 安装和卸载方法见 [安装文档](../docs/install.md#安装独立-acp-测试-agent)。
@@ -97,7 +102,8 @@ nix run .#acp-test-agent -- --help
 | `/rich` | text、image、audio、resource link、embedded resource | ✅ | ✅（额外发送 message upsert） |
 | `/thought` | 先发送 thought chunk 再回答 | ✅ | ✅（额外发送 thought upsert） |
 | `/tool` | tool call 生命周期、内容、diff、raw output | ✅ | ✅（upsert + content chunk + 多文件结构 diff） |
-| `/plan` | 发布执行计划 | ✅ | ✅ |
+| `/plan [milliseconds]` | 推进三步计划（默认每步间隔 5000 ms），可用客户端停止按钮取消 | ✅ | ✅ |
+| `/plan clear` | 清除演示计划 | ✅ | ✅ |
 | `/permission` | 向客户端请求权限并回报结果 | ✅ | ✅ |
 | `/elicit` | 发送表单 Elicitation | ✅ | ✅ |
 | `/elicit-url` | 发送 URL Elicitation，并发送 `elicitation/complete` | ✅ | ✅ |

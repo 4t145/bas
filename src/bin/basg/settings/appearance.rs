@@ -183,7 +183,7 @@ pub(super) struct AppearancePage {
     /// Section the sidebar asked to reveal; consumed by the next render.
     pub(super) scroll_to: Option<usize>,
     scroll: ScrollHandle,
-    message: String,
+    pub(super) message: String,
     pending: Option<Task<()>>,
     reload: bool,
     subscriptions: Vec<Subscription>,
@@ -553,9 +553,6 @@ impl Render for AppearancePage {
                     } [
                         $crate::i18n::tr!("appearance-theme-override", path = (path.display()).to_string())
                     ]
-                }),
-                ..$bool::then(!self.message.is_empty(), || gds_uim::el! {
-                    #div { text_size: $crate::ui::SMALL; } [ $self.message.clone() ]
                 }),
             ]
         };

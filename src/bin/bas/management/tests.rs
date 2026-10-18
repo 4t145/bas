@@ -79,10 +79,11 @@ async fn offline_refresh_uses_cached_registry_and_custom_missing_agents_remain_v
     let fixture = fixture::Fixture::serve(None, false).await;
     let directory = tempfile::tempdir().expect("temporary directory");
     let manager = fixture::manager(&directory, &fixture.url);
-    let missing = AgentSpec::acp(
+    let mut missing = AgentSpec::acp(
         "custom-missing",
         Command::new(directory.path().join("absent"), []),
     );
+    missing.description = "Custom review agent".into();
     let initial = manager
         .catalog(
             vec![AgentSpec::embedded().into(), missing.clone().into()],
@@ -103,14 +104,29 @@ async fn offline_refresh_uses_cached_registry_and_custom_missing_agents_remain_v
             .iter()
             .any(|entry| entry.id == "custom-missing"
                 && entry.source == Source::Custom
+                && entry.description == "Custom review agent"
                 && entry.status == Status::Missing)
     );
+    let mut collision = missing.clone();
+    collision.id = "fixture-agent".into();
+    let custom_catalog = manager
+        .catalog(vec![collision.into()], false)
+        .await
+        .expect("custom Registry ID");
+    let custom = custom_catalog
+        .entries
+        .iter()
+        .find(|entry| entry.id == "fixture-agent")
+        .expect("custom entry");
+    assert_eq!(custom.source, Source::Custom);
+    assert_eq!(custom.description, "Custom review agent");
     let url = fixture.url.clone();
     drop(fixture);
     let offline = manager
         .catalog(vec![missing.into()], true)
         .await
         .expect("cached offline catalog");
+    assert!(offline.entries.iter().any(|entry| entry.id == "custom-missing" && entry.description == "Custom review agent"));
     assert!(offline.warning.expect("offline warning").contains("缓存"));
     assert!(
         manager

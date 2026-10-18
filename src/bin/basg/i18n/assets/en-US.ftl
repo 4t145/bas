@@ -189,7 +189,7 @@ settings-saved = Saved
 settings-search = Search settings…
 settings-scope-frontend = BasG · Frontend
 settings-scope-backend = bas · Backend
-settings-frontend-description = Local preferences · Saved automatically
+settings-frontend-description = Local preferences
 settings-frontend-context = Local settings
 settings-backend-description = Backend agent registrations · Save after editing
 settings-backend-context = Backend: { $address }
@@ -245,6 +245,7 @@ agent-config-mismatch = Use the same settings file for basg and bas, then retry.
 agent-config-unloaded = Load this configuration in bas, then verify readiness again.
 agent-current = Agent · { $agent }
 agent-custom-description = Connect local agents through ACP.
+agent-description = Notes (optional)
 agent-custom-help = Enter the agent program and arguments to add it to Bas.
 agent-source-registry = ACP Registry
 agent-source-custom = Custom
@@ -470,7 +471,7 @@ turn-jump = Go to this turn
 turn-limit = This turn reached its output or request limit
 turn-refused = The agent declined this request
 turn-stopped = Turn stopped
-workspace-add = Add working folder…
+workspace-add = Add workspace
 session-directories-title = Additional session workspaces
 session-directory-add = Attach working folder…
 session-directory-remove = Remove additional folder: { $path }
@@ -552,7 +553,7 @@ queue-paused-count = { $count ->
     }
 queue-resume = Resume sending
 queue-send-now = Stop task and send
-queue-withdraw = Return to editor
+queue-withdraw = Retrieve
 
 ## Activity and content
 
@@ -595,6 +596,11 @@ resource-embedded = Embedded resource
 resource-file = File · { $type } · { $uri }
 resource-image = Image · { $type }
 resource-preview-unavailable = Resource preview unavailable
+resource-open = Open resource
+resource-open-name = Open resource: { $name }
+resource-open-unavailable = Cannot open this resource locally; copy its address instead
+resource-open-error = Cannot open resource
+resource-file-missing = File not found: { $path }
 running-count = { $running } running
 status-agent-confirming = Waiting for agent confirmation…
 status-applying = Applying settings…
@@ -660,6 +666,33 @@ tool-output = Output
 tool-preview-unavailable = Tool preview unavailable
 
 ## Navigation, usage and time
+
+sidebar-bookmarks = Bookmarks
+sidebar-history = History
+sidebar-bookmarks-count = Bookmarks: { $count }
+session-bookmark = Add bookmark
+session-unbookmark = Remove bookmark
+session-bookmark-failed = Could not save bookmark
+history-today = Today
+history-yesterday = Yesterday
+history-week = This week
+history-month = { $month ->
+    [1] January
+    [2] February
+    [3] March
+    [4] April
+    [5] May
+    [6] June
+    [7] July
+    [8] August
+    [9] September
+    [10] October
+    [11] November
+    [12] December
+   *[other] Unknown month
+    }
+history-month-year = { $month } { $year }
+history-unknown = Unknown date
 
 commands-shortcuts = ↑↓ Select · Tab / Enter Complete · Esc Close
 option-choose = Choose { $name }

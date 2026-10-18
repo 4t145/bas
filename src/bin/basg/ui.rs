@@ -2,6 +2,7 @@
 //! use the separate content font preferences.
 
 mod button;
+mod content_row;
 pub(crate) mod input;
 pub(crate) mod input_geometry;
 pub(crate) mod session_status;
@@ -10,6 +11,7 @@ pub(crate) mod time;
 pub(crate) mod tooltip;
 pub(crate) mod window_controls;
 pub(crate) use button::Button;
+pub(crate) use content_row::ContentRow;
 
 use gds_uim::el;
 use gpui_kit::{

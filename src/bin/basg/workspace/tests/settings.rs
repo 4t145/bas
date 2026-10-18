@@ -224,7 +224,7 @@ fn settings_open_a_single_separate_window_without_replacing_the_workspace(cx: &m
             let original_size = window.bounds().size;
             window.click("app-menu", cx);
             window.render_frame(cx);
-            window.within("popup-menu").click(3usize, cx);
+            window.within("popup-menu").click(7usize, cx);
             window.render_frame(cx);
             assert!(window.try_find("settings-page-host").is_none());
             assert!(window.try_find("server-status").is_some());

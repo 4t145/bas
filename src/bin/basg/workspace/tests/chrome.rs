@@ -194,12 +194,18 @@ fn archive_filter_is_outside_search_and_row_actions_stay_icon_sized(cx: &mut Tes
         assert!(window.try_find("refresh").is_none());
         window.click("archived-list", cx);
         window.render_frame(cx);
-        assert!(fixture.view.read(cx).navigation.archived);
+        assert_eq!(
+            fixture.view.read(cx).navigation.view,
+            workspace_navigation::View::Archived
+        );
         assert_eq!(fixture.view.read(cx).selected.id, Some(active.id));
         let restore = window.find(format!("archive-{}", archived.id)).bounds();
         assert_eq!(restore.size, action.size);
         window.click("archived-list", cx);
-        assert!(!fixture.view.read(cx).navigation.archived);
+        assert_eq!(
+            fixture.view.read(cx).navigation.view,
+            workspace_navigation::View::Workspaces
+        );
         assert!(
             fixture.commands.try_recv().is_err(),
             "filtering is not an RPC action"

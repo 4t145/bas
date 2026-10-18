@@ -27,8 +27,10 @@ pub enum Command {
     Thought,
     /// Publish and finish a tool call.
     Tool,
-    /// Publish an execution plan.
-    Plan,
+    /// Run an execution plan, waiting between steps.
+    Plan { millis: u64 },
+    /// Remove the demo plan.
+    ClearPlan,
     /// Ask the client for permission.
     Permission,
     /// Send a form elicitation.
@@ -85,6 +87,9 @@ pub enum StopReason {
 /// Default delay used by `/sleep` when no argument is given.
 pub const DEFAULT_SLEEP_MILLIS: u64 = 3_000;
 
+/// Default interval between demo plan steps, leaving time to test cancellation.
+pub const DEFAULT_PLAN_MILLIS: u64 = 5_000;
+
 impl StopReason {
     /// Parse the value accepted by `/stop`.
     #[must_use]
@@ -138,7 +143,11 @@ pub fn parse(text: &str) -> Command {
         "rich" => Command::Rich,
         "thought" => Command::Thought,
         "tool" => Command::Tool,
-        "plan" => Command::Plan,
+        "plan" if argument == "clear" => Command::ClearPlan,
+        "plan" => match parse_millis(argument, DEFAULT_PLAN_MILLIS) {
+            Ok(millis) => Command::Plan { millis },
+            Err(reason) => Command::Invalid { reason },
+        },
         "permission" => Command::Permission,
         "elicit" => Command::Elicitation,
         "elicit-url" | "elicit_url" => Command::ElicitationUrl,
@@ -161,16 +170,21 @@ pub fn parse(text: &str) -> Command {
 }
 
 fn parse_sleep(argument: &str) -> Command {
-    if argument.is_empty() {
-        return Command::Sleep {
-            millis: DEFAULT_SLEEP_MILLIS,
-        };
-    }
-    match argument.parse::<u64>() {
+    match parse_millis(argument, DEFAULT_SLEEP_MILLIS) {
         Ok(millis) => Command::Sleep { millis },
-        Err(_) => Command::Invalid {
-            reason: format!("`{argument}` is not a millisecond count"),
-        },
+        Err(reason) => Command::Invalid { reason },
+    }
+}
+
+/// # Errors
+/// Rejects arguments that are not an unsigned millisecond count.
+fn parse_millis(argument: &str, default: u64) -> Result<u64, String> {
+    if argument.is_empty() {
+        Ok(default)
+    } else {
+        argument
+            .parse()
+            .map_err(|_| format!("`{argument}` is not a millisecond count"))
     }
 }
 

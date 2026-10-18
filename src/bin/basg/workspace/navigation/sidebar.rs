@@ -1,4 +1,4 @@
-use super::groups;
+use super::{View, groups, history};
 use crate::workspace::*;
 use gpui_kit::component::menu::PopupMenuItem;
 
@@ -12,7 +12,11 @@ impl Workspace {
     ) -> impl IntoElement {
         let query = self.navigation.search.read(cx).value().to_lowercase();
         let sessions = self.visible_sessions();
-        let groups = self.grouped_threads(&sessions, &query);
+        let groups = if self.navigation.view.flat() {
+            Vec::new()
+        } else {
+            self.grouped_threads(&sessions, &query)
+        };
         let header = gds_uim::el! {
             #div {
                 id: "sidebar-header"; test_support; flex; flex_shrink_0;
@@ -44,7 +48,7 @@ impl Workspace {
                 },
             ]
         };
-        let archived_hint = if self.navigation.archived {
+        let archived_hint = if self.navigation.view == View::Archived {
             crate::i18n::tr!("session-show-active")
         } else {
             crate::i18n::tr!("session-show-archived")
@@ -55,20 +59,74 @@ impl Workspace {
                 #div { id: "thread-search"; test_support; flex_1; min_w_0; } [
                     $crate::ui::input::placeholder(&self.navigation.search, Input::new(&self.navigation.search).small().prefix(search_icon).cleanable(true))
                 ],
-                #layout::icon_button("archived-list", IconName::Archive) {
-                    selected: $self.navigation.archived;
-                    accessibility_label: archived_hint; tooltip: archived_hint;
-                    on_click: $cx.listener(Self::on_sidebar_archived);
-                },
+                #div { flex; items_center; gap_1; flex_shrink_0; } [
+                    #layout::icon_button("bookmarked-list", IconName::Bookmark) {
+                        selected: $(self.navigation.view == View::Bookmarks);
+                        accessibility_label: $crate::i18n::tr!("sidebar-bookmarks"); tooltip: $crate::i18n::tr!("sidebar-bookmarks");
+                        on_click: $cx.listener(|this, _, _, cx| this.toggle_sidebar_view(View::Bookmarks, cx));
+                    },
+                    #layout::icon_button("history-list", IconName::Clock) {
+                        selected: $(self.navigation.view == View::History);
+                        accessibility_label: $crate::i18n::tr!("sidebar-history"); tooltip: $crate::i18n::tr!("sidebar-history");
+                        on_click: $cx.listener(|this, _, _, cx| this.toggle_sidebar_view(View::History, cx));
+                    },
+                    #layout::icon_button("archived-list", IconName::Archive) {
+                        selected: $(self.navigation.view == View::Archived);
+                        accessibility_label: archived_hint; tooltip: archived_hint;
+                        on_click: $cx.listener(|this, _, _, cx| this.toggle_sidebar_view(View::Archived, cx));
+                    },
+                ],
             ]
         };
-        let empty = groups.is_empty().then(|| {
+        let empty = (if self.navigation.view.flat() {
+            !sessions
+                .iter()
+                .any(|session| matches_query(session, &query))
+        } else {
+            groups.is_empty()
+        })
+        .then(|| {
             gds_uim::el! { #div { p_3; } [#caption($crate::i18n::tr!("session-no-results"), cx)] }
         });
-        let columns = groups.into_iter().enumerate().map(|(index, group)| {
+        let columns = if self.navigation.view == View::History {
+            let now = jiff::Zoned::now();
+            history::groups(&sessions, &query, &now)
+                .into_iter()
+                .map(|group| {
+                    let label = group.period.label(now.date());
+                    gds_uim::el! { #div { flex; flex_col; } [
+                        #div {
+                            id: $group.period.id(); test_support; role: gpui_kit::Role::Label;
+                            aria_label: $label.clone(); px_3; pt_3; pb_1;
+                            text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                        } [$label],
+                        ..$group.sessions.into_iter().map(|session| self.thread_row(session, cx)),
+                    ] }
+                    .into_any_element()
+                })
+                .collect::<Vec<_>>()
+        } else if self.navigation.view == View::Bookmarks {
+            let threads: Vec<_> = history::sorted(&sessions)
+                .into_iter()
+                .filter(|session| matches_query(session, &query))
+                .collect();
+            let label = crate::i18n::tr!("sidebar-bookmarks-count", count = threads.len());
+            vec![
+                gds_uim::el! { #div { flex; flex_col; } [
+                    #div {
+                        id: "thread-bookmarks-title"; test_support; role: gpui_kit::Role::Label;
+                        aria_label: $label.clone(); px_3; pt_2; pb_1;
+                        text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                    } [$label],
+                    ..$threads.into_iter().map(|session| self.thread_row(session, cx)),
+                ] }
+                .into_any_element(),
+            ]
+        } else {
+            groups.into_iter().enumerate().map(|(index, group)| {
             let collapsed = query.is_empty() && self.navigation.collapsed.contains(&group.directory);
             let directory = group.directory.clone();
-            let draft_selected = self.selected.id.is_none()
+            let draft_selected = self.navigation.view == View::Workspaces && self.selected.id.is_none()
                 && self.navigation.selected_directory == directory;
             let header = self.workspace_header(index, directory, collapsed, cx);
             let draft = (!collapsed && draft_selected).then(|| self.draft_thread_row(index, cx));
@@ -77,14 +135,15 @@ impl Workspace {
             });
             let threads = group.threads.into_iter().filter(|_| !collapsed)
                 .map(|session| self.thread_row(session, cx));
-            gds_uim::el! { #div [$header, ..draft, ..empty, ..threads] }
-        }).collect::<Vec<_>>();
+            gds_uim::el! { #div [$header, ..draft, ..empty, ..threads] }.into_any_element()
+        }).collect::<Vec<_>>()
+        };
         gds_uim::el! { #div {
             flex; flex_col; w: SIDEBAR_WIDTH.px; flex_shrink_0; h_full;
             bg: $cx.theme().sidebar; border_r_1; border_color: $cx.theme().border;
         } [
             $header, $search,
-            #div { id: "session-list"; flex_1; min_h_0; overflow_y_scroll; } [..empty, ..columns],
+            #div { id: "session-list"; test_support; flex_1; min_h_0; overflow_y_scroll; } [..columns, ..empty],
             $self.server_status_footer(cx),
         ] }
     }
@@ -107,14 +166,14 @@ impl Workspace {
         self.new_session(window, cx);
     }
 
-    fn on_sidebar_archived(
-        &mut self,
-        _: &gpui_kit::ClickEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn toggle_sidebar_view(&mut self, view: View, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        self.navigation.archived = !self.navigation.archived;
+        self.save_title(cx);
+        self.navigation.view = if self.navigation.view == view {
+            View::Workspaces
+        } else {
+            view
+        };
         cx.notify();
     }
 

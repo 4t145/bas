@@ -176,6 +176,16 @@ fn usage_details_update_live_in_the_full_composer(cx: &mut TestAppContext) {
                 ("usage-cost", "会话累计费用 · 0.05 USD"),
             ],
         );
+        let used = window.find("usage-used").bounds();
+        let bar = window.find("usage-progress").bounds();
+        let secondary = window.find("usage-secondary").bounds();
+        assert!(used.bottom() <= bar.top());
+        assert!(bar.bottom() <= secondary.top());
+        assert_eq!(bar.size.height, px(6.));
+        assert_eq!(
+            bar.size.width,
+            window.find("usage-details").bounds().size.width
+        );
         window.click("usage-details", cx);
         window.render_frame(cx);
         assert!(window.try_find("usage-details").is_some());
@@ -266,6 +276,7 @@ fn compact_usage_popup_updates_without_clipping_or_changing_the_draft(cx: &mut T
             "usage-details",
             "usage-summary",
             "usage-used",
+            "usage-progress",
             "usage-capacity",
             "usage-remaining",
             "usage-cost",
@@ -347,6 +358,10 @@ fn usage_unknown_capacity_and_over_capacity_keep_honest_details(cx: &mut TestApp
         );
         assert!(window.try_find("usage-remaining").is_none());
         assert!(window.try_find("usage-cost").is_none());
+        assert!(
+            window.try_find("usage-progress").is_none(),
+            "unknown capacity is not zero percent"
+        );
         let button = window.find(format!("context-usage-{}", meta.id));
         let name = button
             .label()

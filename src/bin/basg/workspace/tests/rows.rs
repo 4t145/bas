@@ -361,7 +361,10 @@ fn rows_archive_filter_is_outside_input_on_same_line(cx: &mut TestAppContext) {
         assert!(filter.left() > input.right());
         assert!((filter.center().y - input.center().y).abs() <= px(0.5));
         window.click("archived-list", cx);
-        assert!(fixture.view.read(cx).navigation.archived);
+        assert_eq!(
+            fixture.view.read(cx).navigation.view,
+            workspace_navigation::View::Archived
+        );
     })
     .expect("archive list control outside input border");
 }
@@ -1090,6 +1093,7 @@ fn rows_context_pin_and_rename_target_without_selecting_on_open(cx: &mut TestApp
         assert_eq!(fixture.view.read(cx).selected.id, Some(active.id));
         for label in [
             crate::i18n::tr!("session-rename"),
+            crate::i18n::tr!("session-bookmark"),
             crate::i18n::tr!("session-delete"),
         ] {
             assert!(window.within(label).find("shortcut").visible());
@@ -1105,6 +1109,32 @@ fn rows_context_pin_and_rename_target_without_selecting_on_open(cx: &mut TestApp
     .expect("pin correct row without RPC");
     let menu = open_row_menu(&fixture, target.id, cx);
     cx.update_window(menu, |_, window, cx| {
+        window.press("down", cx);
+        window.press("down", cx);
+        window.press("enter", cx);
+        assert!(
+            fixture
+                .view
+                .read(cx)
+                .navigation
+                .bookmarks
+                .contains(&target.id)
+        );
+        assert!(
+            !fixture
+                .view
+                .read(cx)
+                .navigation
+                .bookmarks
+                .contains(&active.id)
+        );
+        assert_eq!(fixture.view.read(cx).selected.id, Some(active.id));
+        assert!(fixture.commands.try_recv().is_err());
+    })
+    .expect("bookmark the context-menu target without selecting or sending RPCs");
+    let menu = open_row_menu(&fixture, target.id, cx);
+    cx.update_window(menu, |_, window, cx| {
+        window.press("down", cx);
         window.press("down", cx);
         window.press("down", cx);
         window.press("enter", cx);
@@ -1127,7 +1157,7 @@ fn rows_context_archive_targets_clicked_row(cx: &mut TestAppContext) {
     while fixture.commands.try_recv().is_ok() {}
     let menu = open_row_menu(&fixture, target.id, cx);
     cx.update_window(menu, |_, window, cx| {
-        for _ in 0..3 {
+        for _ in 0..4 {
             window.press("down", cx);
         }
         window.press("enter", cx);

@@ -24,6 +24,7 @@ pub(super) struct Demo {
     authenticated: AtomicBool,
     next_message: AtomicU64,
     next_tool: AtomicU64,
+    resources: demo::resources::Resources,
 }
 
 impl Demo {
@@ -34,6 +35,7 @@ impl Demo {
             authenticated: AtomicBool::new(false),
             next_message: AtomicU64::new(0),
             next_tool: AtomicU64::new(0),
+            resources: demo::resources::Resources::default(),
         }
     }
 

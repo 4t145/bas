@@ -12,7 +12,7 @@ struct Playback {
 
 /// # Errors
 /// Returns audio decoding or output-device initialization failures.
-fn play(generation: u64, audio: &acp::AudioContent) -> Result<Playback, Error> {
+fn prepare(generation: u64, audio: &acp::AudioContent) -> Result<Playback, Error> {
     let source = decode(audio)?;
     let device_error = Arc::new(std::sync::Mutex::new(None));
     let capture = Arc::clone(&device_error);
@@ -23,6 +23,7 @@ fn play(generation: u64, audio: &acp::AudioContent) -> Result<Playback, Error> {
         .open_stream_or_fallback()?;
     stream.log_on_drop(false);
     let sink = rodio::Sink::connect_new(stream.mixer());
+    sink.pause();
     sink.append(source);
     Ok(Playback {
         generation,
@@ -32,9 +33,18 @@ fn play(generation: u64, audio: &acp::AudioContent) -> Result<Playback, Error> {
     })
 }
 
+fn start_if_current(generation: u64, sink: &rodio::Sink, current: &AtomicU64) -> bool {
+    if generation != current.load(Ordering::Acquire) {
+        return false;
+    }
+    sink.play();
+    true
+}
+
 pub(super) fn run(
     commands: mpsc::Receiver<Command>,
     events: tokio::sync::mpsc::UnboundedSender<Event>,
+    current: Arc<AtomicU64>,
 ) {
     let mut playback: Option<Playback> = None;
     loop {
@@ -53,11 +63,15 @@ pub(super) fn run(
         match command {
             Some(Command::Play { generation, audio }) => {
                 playback.take();
-                let state = match play(generation, &audio) {
-                    Ok(active) => {
+                if generation != current.load(Ordering::Acquire) {
+                    continue;
+                }
+                let state = match prepare(generation, &audio) {
+                    Ok(active) if start_if_current(generation, &active.sink, &current) => {
                         playback = Some(active);
                         State::Playing
                     }
+                    Ok(_) => continue,
                     Err(error) => State::Failed(error.to_string()),
                 };
                 if events.send(Event { generation, state }).is_err() {
@@ -116,3 +130,6 @@ pub(super) fn run(
     }
     // Dropping the sink and stream stops playback, including when its window closes.
 }
+
+#[cfg(test)]
+mod tests;

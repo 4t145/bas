@@ -52,7 +52,11 @@ fn click(window: &mut Window, id: &'static str, cx: &mut App) {
 fn fill(window: &mut Window, id: &'static str, value: &str, cx: &mut App) {
     click(window, id, cx);
     window.press("ctrl-a", cx);
-    window.input(value, cx);
+    if value.is_empty() {
+        window.press("backspace", cx);
+    } else {
+        window.input(value, cx);
+    }
 }
 
 #[gpui_kit::test]
@@ -133,6 +137,7 @@ fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
             "[\"a b\", \"\", \"--literal=$HOME\"]",
             cx,
         );
+        fill(window, "agents-description", " 用于接口回归测试 ", cx);
         click(window, "agents-save", cx);
     })
     .expect("save arguments through UI");
@@ -150,6 +155,13 @@ fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
         ["a b", "", "--literal=$HOME"]
     );
     assert_eq!(
+        saved.settings.daemon.agents[1]
+            .as_custom()
+            .expect("custom")
+            .description,
+        "用于接口回归测试"
+    );
+    assert_eq!(
         saved.settings.daemon.agents[0]
             .as_custom()
             .expect("custom")
@@ -157,6 +169,64 @@ fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
         "original"
     );
     assert_eq!(saved.settings.appearance, initial_settings.appearance);
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("agents-item-description-custom").label(),
+            Some("用于接口回归测试")
+        );
+        click(window, "agents-edit-0", cx);
+        fill(window, "agents-description", "discard this note", cx);
+        click(window, "agents-cancel", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("agents-item-description-custom").label(),
+            Some("用于接口回归测试")
+        );
+        click(window, "agents-edit-0", cx);
+        fill(window, "agents-description", "用于 UI 回归测试", cx);
+        click(window, "agents-save", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("agents-item-description-custom").label(),
+            Some("用于 UI 回归测试")
+        );
+    })
+    .expect("edit, cancel and save custom notes");
+    let noted = Store::at(path.clone()).load().expect("saved notes");
+    let custom = noted.settings.daemon.agents[1].as_custom().expect("custom");
+    assert_eq!(custom.description, "用于 UI 回归测试");
+    assert_eq!(
+        custom.command,
+        saved.settings.daemon.agents[1]
+            .as_custom()
+            .expect("original custom")
+            .command
+    );
+    cx.update_window(window.into(), |_, window, cx| {
+        click(window, "agents-edit-0", cx);
+        fill(window, "agents-description", "", cx);
+        click(window, "agents-save", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("agents-item-description-custom").label(),
+            Some(""),
+            "an empty note stays empty"
+        );
+    })
+    .expect("clear optional notes without adding a placeholder");
+    assert!(
+        Store::at(path.clone())
+            .load()
+            .expect("cleared notes")
+            .settings
+            .daemon
+            .agents[1]
+            .as_custom()
+            .expect("custom")
+            .description
+            .is_empty()
+    );
     let confirmation = cx
         .update_window(window.into(), |_, window, cx| {
             let before = cx.windows();

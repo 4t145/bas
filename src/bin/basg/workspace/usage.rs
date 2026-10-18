@@ -5,7 +5,7 @@ mod format;
 use bas::acp_v2 as acp;
 use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
-    progress::ProgressCircle,
+    progress::{Progress, ProgressCircle},
 };
 use std::rc::Rc;
 
@@ -47,6 +47,7 @@ fn on_details_mouse_down(_: &gpui_kit::MouseDownEvent, window: &mut Window, cx: 
 }
 
 fn details(usage: &acp::UsageUpdate, cx: &App) -> AnyElement {
+    let fraction = ratio(usage);
     let remaining = usage.size.saturating_sub(usage.used);
     let used = label(
         "usage-used",
@@ -93,12 +94,36 @@ fn details(usage: &acp::UsageUpdate, cx: &App) -> AnyElement {
             #div {
                 text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
             } [ $crate::i18n::tr!("usage-title") ],
-            $label("usage-summary", summary(usage)),
-            #div { h: 1.0.px; bg: $cx.theme().border; },
-            $used,
-            $capacity,
-            ..remaining,
-            ..cost
+            #div {
+                id: "usage-summary"; test_support; role: gpui_kit::Role::Label;
+                aria_label: $summary(usage); flex; flex_col; gap_2;
+            } [
+                #div { flex; items_center; justify_between; gap_2; } [
+                    #div { font_weight: FontWeight::SEMIBOLD; } [$used],
+                    ..$fraction.map(|ratio| gds_uim::el! {
+                        #div { text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground; } [
+                            $label("usage-percentage", format!("{:.0}%", (ratio * 100.).round()))
+                        ]
+                    }),
+                ],
+                ..$fraction.map(|ratio| gds_uim::el! {
+                    #div { id: "usage-progress"; test_support; w_full; } [
+                    Progress("usage-progress-indicator") {
+                        small; value: $((ratio * 100.) as f32);
+                        color: $(if ratio >= WARNING_RATIO { cx.theme().warning } else { cx.theme().primary });
+                        accessibility_label: $summary(usage);
+                    }]
+                }),
+            ],
+            #div {
+                id: "usage-secondary"; test_support; flex; flex_col; gap_1;
+                text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+            } [$capacity, ..remaining],
+            ..$cost.map(|cost| gds_uim::el! {
+                #div { pt_2; border_t_1; border_color: $cx.theme().border;
+                    text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                } [$cost]
+            }),
         ]
     }
     .into_any_element()

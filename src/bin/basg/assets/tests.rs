@@ -33,6 +33,7 @@ fn registry_icons_are_embedded_and_render_visible_svg_pixels() {
         IconName::ListTodo,
         IconName::Circle,
         IconName::Clock,
+        IconName::Bookmark,
         IconName::RotateCcw,
         IconName::RotateCw,
         IconName::Minus,

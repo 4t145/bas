@@ -18,6 +18,7 @@ fn session_preferences_have_their_own_category_and_remain_searchable(cx: &mut Te
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("settings-confirm-delete").is_none());
+        assert_eq!(window.find("settings-save-status").label(), Some(""));
         let control_size = window.find("appearance-language").bounds().size;
         let appearance = window.find("settings-appearance-text").bounds();
         let sessions = window.find("settings-sessions-text").bounds();
@@ -87,6 +88,14 @@ fn session_preferences_have_their_own_category_and_remain_searchable(cx: &mut Te
             !cx.global::<crate::theme::Appearance>()
                 .confirm_session_delete
         );
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("settings-save-status").label(),
+            Some("已保存并应用")
+        );
+        let status = window.find("settings-save-status").bounds();
+        assert!(status.right() <= window.find("session-settings").bounds().left());
+        assert!(status.top() > window.find("settings-confirm-delete").bounds().bottom());
         window.click("settings-agents", cx);
         window.click("settings-search", cx);
         window.input("删除", cx);

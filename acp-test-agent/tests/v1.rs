@@ -228,7 +228,7 @@ async fn v1_lifecycle_and_feature_demos() -> Result<(), Box<dyn std::error::Erro
             let response = prompt(&cx, &session_id, "/help").await?;
             assert_eq!(response.stop_reason, v1::StopReason::EndTurn);
             let updates = drain(&mut update_rx).await;
-            assert!(messages(&updates).contains("ACP test agent demos"));
+            assert_eq!(messages(&updates), acp_test_agent::demo::help_text());
             assert!(
                 updates
                     .iter()
@@ -257,6 +257,24 @@ async fn v1_lifecycle_and_feature_demos() -> Result<(), Box<dyn std::error::Erro
                 v1::SessionUpdate::AgentMessageChunk(chunk)
                     if matches!(chunk.content, v1::ContentBlock::Resource(_))
             )));
+            let uri = updates
+                .iter()
+                .find_map(|update| match update {
+                    v1::SessionUpdate::AgentMessageChunk(chunk) => match &chunk.content {
+                        v1::ContentBlock::ResourceLink(resource) => Some(&resource.uri),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .expect("resource link");
+            let path = url::Url::parse(uri)
+                .expect("resource URL")
+                .to_file_path()
+                .expect("local resource");
+            assert_eq!(
+                std::fs::read_to_string(path).expect("open referenced file"),
+                acp_test_agent::demo::SAMPLE_RESOURCE
+            );
 
             let response = prompt(&cx, &session_id, "/commands").await?;
             assert_eq!(response.stop_reason, v1::StopReason::EndTurn);
@@ -299,16 +317,75 @@ async fn v1_lifecycle_and_feature_demos() -> Result<(), Box<dyn std::error::Erro
                     if update.fields.status == Some(v1::ToolCallStatus::Completed)
             )));
 
-            let response = prompt(&cx, &session_id, "/plan").await?;
+            let response = prompt(&cx, &session_id, "/plan 0").await?;
             assert_eq!(response.stop_reason, v1::StopReason::EndTurn);
             let updates = drain(&mut update_rx).await;
             assert!(
-                updates
+                !updates
                     .iter()
                     .any(|update| matches!(update, v1::SessionUpdate::Plan(_)))
             );
             assert!(
                 updates
+                    .iter()
+                    .any(|update| matches!(update, v1::SessionUpdate::PlanUpdate(_)))
+            );
+            let completed: Vec<_> = updates
+                .iter()
+                .filter_map(|update| match update {
+                    v1::SessionUpdate::PlanUpdate(plan) => match &plan.plan {
+                        v1::PlanUpdateContent::Items(plan) => Some(
+                            plan.entries
+                                .iter()
+                                .filter(|entry| entry.status == v1::PlanEntryStatus::Completed)
+                                .count(),
+                        ),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(completed, [1, 2, 3]);
+            prompt(&cx, &session_id, "/plan clear").await?;
+            assert!(
+                drain(&mut update_rx)
+                    .await
+                    .iter()
+                    .any(|update| matches!(update, v1::SessionUpdate::PlanRemoved(_)))
+            );
+            let prompt_cx = cx.clone();
+            let prompt_id = session_id.clone();
+            let pending =
+                tokio::spawn(async move { prompt(&prompt_cx, &prompt_id, "/plan 5000").await });
+            loop {
+                if matches!(
+                    timeout(UPDATE_TIMEOUT, update_rx.recv())
+                        .await
+                        .expect("running plan in time")
+                        .expect("plan update"),
+                    v1::SessionUpdate::PlanUpdate(_)
+                ) {
+                    break;
+                }
+            }
+            cx.send_notification(v1::CancelNotification::new(session_id.clone()))?;
+            assert_eq!(
+                timeout(UPDATE_TIMEOUT, pending)
+                    .await
+                    .expect("cancel plan in time")
+                    .expect("worker")
+                    .expect("response")
+                    .stop_reason,
+                v1::StopReason::Cancelled
+            );
+            let cancelled = drain(&mut update_rx).await;
+            assert!(
+                cancelled
+                    .iter()
+                    .any(|update| matches!(update, v1::SessionUpdate::PlanRemoved(_)))
+            );
+            assert!(
+                !cancelled
                     .iter()
                     .any(|update| matches!(update, v1::SessionUpdate::PlanUpdate(_)))
             );

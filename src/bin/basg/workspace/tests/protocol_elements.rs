@@ -98,7 +98,7 @@ fn plans_usage_compaction_and_dismissible_notices_are_visible(cx: &mut TestAppCo
         assert!(window.find("session-usage").bounds().size.height > px(0.));
         assert_eq!(
             window.find("expand-compaction-cmp").label(),
-            Some("上下文压缩完成")
+            Some("上下文压缩")
         );
         window.click("expand-compaction-cmp", cx);
         window.render_frame(cx);
@@ -218,6 +218,19 @@ fn plan_indicator_hover_lists_only_unfinished_entries(cx: &mut TestAppContext) {
         );
         assert_eq!(window.find("plan-hint-row-1").label(), Some("test"));
         assert_eq!(window.find("plan-hint-row-2").label(), Some("publish"));
+        for index in [1, 2] {
+            let row = window.find(format!("plan-hint-row-{index}")).bounds();
+            let marker = window.find(format!("plan-hint-marker-{index}")).bounds();
+            assert_eq!(
+                marker.center().y,
+                row.center().y,
+                "status aligns with the first text line"
+            );
+        }
+        assert!(
+            window.simulate_next_frame(cx) > 0,
+            "in-progress plans request animation frames"
+        );
         assert!(
             window.try_find("plan-hint-row-3").is_none(),
             "completed entries stay out of the hover hint"

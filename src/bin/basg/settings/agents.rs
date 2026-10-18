@@ -56,12 +56,19 @@ struct Form<T> {
     id: T,
     program: T,
     args: T,
+    description: T,
     grace: T,
 }
 
 impl<T> Form<T> {
-    fn fields(&self) -> [&T; 4] {
-        [&self.id, &self.program, &self.args, &self.grace]
+    fn fields(&self) -> [&T; 5] {
+        [
+            &self.id,
+            &self.program,
+            &self.args,
+            &self.description,
+            &self.grace,
+        ]
     }
 }
 
@@ -74,6 +81,7 @@ impl Form<Entity<InputState>> {
                     .placeholder(crate::i18n::tr!("agent-program-placeholder"))
             }),
             args: cx.new(|cx| InputState::new(window, cx).placeholder("[\"acp\"]")),
+            description: cx.new(|cx| InputState::new(window, cx)),
             grace: cx.new(|cx| InputState::new(window, cx)),
         }
     }
@@ -83,6 +91,7 @@ impl Form<Entity<InputState>> {
             id: self.id.read(cx).value().to_string(),
             program: self.program.read(cx).value().to_string(),
             args: self.args.read(cx).value().to_string(),
+            description: self.description.read(cx).value().to_string(),
             grace: self.grace.read(cx).value().to_string(),
         }
     }
@@ -103,6 +112,11 @@ impl Form<Entity<InputState>> {
                 "agents-args",
                 crate::i18n::tr!("agent-args-label"),
                 &self.args,
+            ));
+            rows.push((
+                "agents-description",
+                crate::i18n::tr!("agent-description"),
+                &self.description,
             ));
         }
         if connected {
@@ -128,6 +142,7 @@ fn values(spec: &AgentSpec) -> Form<String> {
                 .unwrap_or_default(),
         )
         .expect("string arrays serialize"),
+        description: spec.description.clone(),
         grace: spec.cancellation_grace.as_millis().to_string(),
     }
 }
@@ -768,6 +783,7 @@ impl Agents {
         } else {
             let form = self.form.values(cx);
             spec.id = form.id.into();
+            spec.description = form.description.trim().to_owned();
             if spec.kind == Kind::Acp {
                 let program = form.program;
                 let args = serde_json::from_str::<Vec<String>>(&form.args)
@@ -844,12 +860,13 @@ impl Agents {
     }
 }
 
-/// One-line description of how a backend is driven.
+/// Display metadata, without substituting launch details for an empty note.
 fn summary(spec: &AgentSpec) -> String {
-    match (spec.kind, spec.command()) {
-        (Kind::Embedded, _) => crate::i18n::tr!("agent-embedded-description").to_owned(),
-        (Kind::Acp, Some(command)) => format!("acp · {command}"),
-        (Kind::Acp, None) => crate::i18n::tr!("agent-command-missing").to_owned(),
+    match spec.kind {
+        Kind::Embedded if spec.description.is_empty() => {
+            crate::i18n::tr!("agent-embedded-description").to_owned()
+        }
+        _ => spec.description.clone(),
     }
 }
 
@@ -897,6 +914,9 @@ impl Agents {
             let mut entry = entry.clone();
             entry.spec = Some(spec.clone());
             entry.source = self.source(spec);
+            if entry.source == bas::management::Source::Custom {
+                entry.description = summary(spec);
+            }
             return entry;
         }
         bas::management::Entry {
@@ -1188,7 +1208,7 @@ impl Agents {
                         text_color: $cx.theme().muted_foreground;
                     } [ $self.message.clone() ]
                 }),
-                ..$self.saved_feedback(cx),
+                ..$bool::then(page == Page::Onboarding, || self.saved_feedback(cx)).flatten(),
                 ..$bool::then(!self.registration_errors.is_empty(), || gds_uim::el! {
                     #div { id: "agents-registration-errors"; test_support; text_size: $crate::ui::SMALL; } [
                         $self.registration_errors.clone()

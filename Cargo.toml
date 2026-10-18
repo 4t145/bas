@@ -29,6 +29,7 @@ gui = [
     "dep:unic-langid",
     "dep:gds-uim",
     "dep:gpui-kit",
+    "dep:jiff",
     "dep:reqwest_client",
     "dep:serde_json_lenient",
     "dep:base64",
@@ -76,6 +77,7 @@ gpui-kit = { version = "=0.6.6", optional = true, features = [
     "tree-sitter-typescript",
     "tree-sitter-diff",
 ] }
+jiff = { version = "0.2", optional = true }
 reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.6", optional = true }
 mime_guess = { version = "2", optional = true }
 markdown = { version = "=1.0.0", optional = true }

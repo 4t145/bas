@@ -111,7 +111,7 @@ fn workspace_removal_archives_all_members_ignoring_search_and_preserves_data(
                     .iter()
                     .all(|g| g.directory != Some("/one".into()))
             );
-            view.navigation.archived = true;
+            view.navigation.view = workspace_navigation::View::Archived;
             let archived = view.visible_sessions();
             assert_eq!(
                 view.grouped_threads(&archived, "")

@@ -83,10 +83,13 @@ impl std::str::FromStr for Command {
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Everything the daemon needs to launch one backend.
+/// Saved launch configuration and optional display metadata for one backend.
 pub struct AgentSpec {
     pub id: AgentId,
     pub kind: Kind,
+    /// User-provided notes, displayed by clients but not passed to the process.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     /// Required for ACP and forbidden for embedded agents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<Command>,
@@ -126,6 +129,7 @@ impl AgentSpec {
         Self {
             id: AgentId::new(Self::DEFAULT_ID),
             kind: Kind::Embedded,
+            description: String::new(),
             command: None,
             env: BTreeMap::new(),
             cancellation_grace: Self::default_cancellation_grace(),

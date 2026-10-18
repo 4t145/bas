@@ -41,13 +41,19 @@ impl Workspace {
         let query = self.navigation.search.read(cx).value().to_lowercase();
         let Some(meta) = self.sessions.entries.iter().find(|meta| {
             meta.id == session
-                && meta.archived == self.navigation.archived
+                && self
+                    .navigation
+                    .view
+                    .includes(meta, &self.navigation.bookmarks)
                 && matches_query(meta, &query)
         }) else {
             return;
         };
         let directory = meta.cwd.as_deref().map(navigation::groups::normalize);
-        if query.is_empty() && self.navigation.collapsed.contains(&directory) {
+        if !self.navigation.view.flat()
+            && query.is_empty()
+            && self.navigation.collapsed.contains(&directory)
+        {
             return;
         }
         self.begin_title_edit(Target::Thread(session), Location::Sidebar, window, cx);

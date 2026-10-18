@@ -496,6 +496,11 @@ impl Focusable for Settings {
 
 impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let feedback = match self.category {
+            Category::Appearance | Category::Sessions => self.appearance.read(cx).message.clone(),
+            Category::Agents => self.agents.read(cx).save_status().unwrap_or_default(),
+        };
+        let feedback_hint = feedback.clone();
         el! {
             #div {
                 id: "settings";
@@ -548,14 +553,15 @@ impl Render for Settings {
                             }),
                     ],
                     #div {
+                        id: "settings-save-status"; test_support;
+                        role: gpui_kit::Role::Status; aria_label: $feedback.clone();
+                        h: crate::ui::COMPACT_CONTROL.px; flex_shrink_0; truncate;
                         text_size: $crate::ui::SMALL;
                         text_color: $cx.theme().muted_foreground;
-                    } [
-                        $(match self.category {
-                            Category::Appearance | Category::Sessions => crate::i18n::tr!("settings-appearance-footer"),
-                            Category::Agents => crate::i18n::tr!("settings-agents-footer"),
-                        }),
-                    ],
+                        @$!feedback.is_empty() => {
+                            hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(feedback_hint.clone(), window, cx);
+                        };
+                    } [$feedback],
                 ],
                 #div {
                     flex_1;

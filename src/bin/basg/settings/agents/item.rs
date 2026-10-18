@@ -75,6 +75,7 @@ impl RenderOnce for Item {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let id = &self.entry.id;
         let version = self.entry.displayed_version().map(str::to_owned);
+        let description = self.entry.description.clone();
         let status = self.status.map(|label| {
             crate::ui::tooltip::bounded(
                 format!("agents-item-status-hint-{id}"),
@@ -134,6 +135,9 @@ impl RenderOnce for Item {
                         id: $format!("agents-item-description-{id}"); test_support;
                         role: gpui_kit::Role::Label; aria_label: $self.entry.description.clone();
                         min_w_0; flex_1; truncate; text_color: $cx.theme().muted_foreground;
+                        @$!description.is_empty() => {
+                            hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(description.clone(), window, cx);
+                        };
                     } [$self.entry.description.clone()],
                     $self.entry.links(),
                 ],

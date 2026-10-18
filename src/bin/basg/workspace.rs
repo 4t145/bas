@@ -564,7 +564,7 @@ impl Workspace {
     ) {
         self.audio.update(cx, |player, cx| player.reset(cx));
         self.save_title(cx);
-        self.navigation.archived = false;
+        self.navigation.view = navigation::View::Workspaces;
         self.save_draft(cx);
         self.close_reply_preview(window, cx);
         self.selected.detach();
@@ -654,7 +654,7 @@ impl Workspace {
 
     fn prepare_session(&mut self, cx: &mut Context<Self>) {
         if !self.backend.connected
-            || self.navigation.archived
+            || self.navigation.view == navigation::View::Archived
             || self.selected.id.is_some()
             || self.selected.creating
             || self.selected.waiting_for_agent_selection
@@ -698,7 +698,10 @@ impl Workspace {
     }
 
     fn can_select_agent(&self) -> bool {
-        if self.selected.creating || self.composer.paste_pending || self.navigation.archived {
+        if self.selected.creating
+            || self.composer.paste_pending
+            || self.navigation.view == navigation::View::Archived
+        {
             return false;
         }
         let Some(id) = self.selected.id else {

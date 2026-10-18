@@ -6,12 +6,62 @@ mod directories;
 pub(super) mod draft_row;
 mod folders;
 pub(super) mod groups;
+pub(super) mod history;
 pub(super) mod removal;
 pub(super) mod restore;
 mod sidebar;
 pub(super) mod thread_row;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum View {
+    #[default]
+    Workspaces,
+    Bookmarks,
+    History,
+    Archived,
+}
+
+impl View {
+    pub(super) fn includes(self, session: &SessionMeta, bookmarks: &HashSet<SessionId>) -> bool {
+        match self {
+            Self::Bookmarks => bookmarks.contains(&session.id),
+            Self::Archived => session.archived,
+            Self::Workspaces | Self::History => !session.archived,
+        }
+    }
+
+    pub(super) fn flat(self) -> bool {
+        matches!(self, Self::Bookmarks | Self::History)
+    }
+}
+
 impl Workspace {
+    pub(super) fn toggle_bookmark(&mut self, session: SessionId, cx: &mut Context<Self>) {
+        if self.sessions.pending.deleting.contains(&session)
+            || !self.sessions.entries.iter().any(|meta| meta.id == session)
+        {
+            return;
+        }
+        let bookmarked = !self.navigation.bookmarks.contains(&session);
+        if let Some(store) = &mut self.navigation.restore.store {
+            if let Err(error) = store.set_bookmarked(session, bookmarked) {
+                self.session_operation_error(
+                    session,
+                    crate::i18n::tr!("session-bookmark-failed"),
+                    error.to_string(),
+                    cx,
+                );
+                return;
+            }
+            self.navigation.bookmarks = store.bookmarks();
+        } else if bookmarked {
+            self.navigation.bookmarks.insert(session);
+        } else {
+            self.navigation.bookmarks.remove(&session);
+        }
+        cx.notify();
+    }
+
     pub(super) fn grouped_threads<'a>(
         &self,
         sessions: &'a [SessionMeta],
@@ -58,12 +108,19 @@ impl Workspace {
     ) {
         let sessions = self.visible_sessions();
         let query = self.navigation.search.read(cx).value().to_lowercase();
-        let threads: Vec<_> = self
-            .grouped_threads(&sessions, &query)
-            .into_iter()
-            .flat_map(|group| group.threads)
-            .map(|session| session.id)
-            .collect();
+        let threads: Vec<_> = if self.navigation.view.flat() {
+            history::sorted(&sessions)
+                .into_iter()
+                .filter(|session| matches_query(session, &query))
+                .map(|session| session.id)
+                .collect()
+        } else {
+            self.grouped_threads(&sessions, &query)
+                .into_iter()
+                .flat_map(|group| group.threads)
+                .map(|session| session.id)
+                .collect()
+        };
         if threads.is_empty() {
             return;
         }

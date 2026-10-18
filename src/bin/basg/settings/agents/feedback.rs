@@ -7,7 +7,7 @@ use gpui_kit::assets::IconName;
 mod tests;
 
 impl Agents {
-    pub(super) fn saved_feedback(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
+    pub(in crate::settings) fn save_status(&self) -> Option<String> {
         if self.editor.spec().is_some() {
             return None;
         }
@@ -16,7 +16,7 @@ impl Agents {
             .as_ref()
             .filter(|saved| self.display_catalog().iter().any(|spec| spec == *saved))?;
         let status = self.status(spec);
-        let label = match status {
+        Some(match status {
             Some(Status::Checking | Status::Connecting) => {
                 crate::i18n::tr!("agent-saved-connecting", agent = spec.id.to_string())
             }
@@ -27,7 +27,13 @@ impl Agents {
                 crate::i18n::tr!("agent-saved-signin", agent = spec.id.to_string())
             }
             _ => crate::i18n::tr!("agent-saved", agent = spec.id.to_string()),
-        };
+        })
+    }
+
+    pub(super) fn saved_feedback(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
+        let label = self.save_status()?;
+        let spec = self.saved.as_ref().expect("validated saved configuration");
+        let status = self.status(spec);
         let error = match status {
             Some(Status::Failed(error) | Status::Missing(error))
                 if !self.authentications.contains_key(&spec.id) =>

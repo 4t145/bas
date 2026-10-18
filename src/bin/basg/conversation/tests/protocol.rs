@@ -170,6 +170,19 @@ fn multiple_plans_replace_by_id_and_removal_survives_replay() {
         conversation.items.is_empty(),
         "plan updates are independent of transcript rows"
     );
+    update(
+        &mut conversation,
+        9,
+        acp::SessionUpdate::Plan(acp::Plan::new(Vec::new())),
+    );
+    assert_eq!(
+        conversation.plans.len(),
+        1,
+        "an empty legacy plan clears only that plan"
+    );
+    assert!(
+        matches!(&conversation.plans[0].plan, acp2::PlanUpdateContent::Markdown(plan) if plan.content == "## Updated")
+    );
 }
 
 #[test]

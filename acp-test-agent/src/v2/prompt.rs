@@ -104,8 +104,10 @@ async fn run_turn(
             run_tool(demo, connection, session_id, &cwd)?;
             acp::StopReason::EndTurn
         }
-        Command::Plan => {
-            run_plan(demo, connection, session_id)?;
+        Command::Plan { millis } => run_plan(demo, connection, session_id, millis).await?,
+        Command::ClearPlan => {
+            remove_plan(demo, connection, session_id)?;
+            send_text(demo, connection, session_id, "Plan cleared.")?;
             acp::StopReason::EndTurn
         }
         Command::Permission => {
@@ -390,6 +392,10 @@ fn run_rich(
     connection: &V2ConnectionTo<Client>,
     session_id: &acp::SessionId,
 ) -> Result<(), Error> {
+    let resource_uri = demo
+        .resources
+        .sample_uri()
+        .map_err(Error::into_internal_error)?;
     let message_id = demo.next_message_id("agent-message");
     demo.send_message_chunk(
         connection,
@@ -404,12 +410,11 @@ fn run_rich(
         acp::ContentBlock::Image(acp::ImageContent::new(SAMPLE_IMAGE_BASE64, "image/png")),
         acp::ContentBlock::Audio(acp::AudioContent::new(SAMPLE_AUDIO_BASE64, "audio/wav")),
         acp::ContentBlock::ResourceLink(
-            acp::ResourceLink::new("sample.md", "file:///acp-test-agent/sample.md")
-                .mime_type("text/markdown"),
+            acp::ResourceLink::new("sample.md", resource_uri.clone()).mime_type("text/markdown"),
         ),
         acp::ContentBlock::Resource(acp::EmbeddedResource::new(
             acp::EmbeddedResourceResource::TextResourceContents(
-                acp::TextResourceContents::new(SAMPLE_RESOURCE, "file:///acp-test-agent/sample.md")
+                acp::TextResourceContents::new(SAMPLE_RESOURCE, resource_uri)
                     .mime_type("text/markdown"),
             ),
         )),
@@ -513,12 +518,13 @@ fn run_tool(
     )
 }
 
-fn run_plan(
+async fn run_plan(
     demo: &Demo,
     connection: &V2ConnectionTo<Client>,
     session_id: &acp::SessionId,
-) -> Result<(), Error> {
-    let entries = vec![
+    millis: u64,
+) -> Result<acp::StopReason, Error> {
+    let mut entries = vec![
         acp::PlanEntry::new(
             "Inspect the workspace",
             acp::PlanEntryPriority::High,
@@ -535,14 +541,57 @@ fn run_plan(
             acp::PlanEntryStatus::Pending,
         ),
     ];
+    publish_plan(demo, connection, session_id, entries.clone())?;
+    for step in 1..entries.len() {
+        if wait_cancellable(demo, session_id, millis).await {
+            remove_plan(demo, connection, session_id)?;
+            send_text(demo, connection, session_id, "Plan cancelled.")?;
+            return Ok(acp::StopReason::Cancelled);
+        }
+        entries[step].status = acp::PlanEntryStatus::Completed;
+        if let Some(next) = entries.get_mut(step + 1) {
+            next.status = acp::PlanEntryStatus::InProgress;
+        }
+        publish_plan(demo, connection, session_id, entries.clone())?;
+    }
+    send_text(
+        demo,
+        connection,
+        session_id,
+        "Plan complete. Use `/plan clear` to remove it.",
+    )?;
+    Ok(acp::StopReason::EndTurn)
+}
+
+/// # Errors
+/// Returns a transport or session-storage error if the plan cannot be published.
+fn publish_plan(
+    demo: &Demo,
+    connection: &V2ConnectionTo<Client>,
+    session_id: &acp::SessionId,
+    entries: Vec<acp::PlanEntry>,
+) -> Result<(), Error> {
     demo.send_update(
         connection,
         session_id,
         acp::SessionUpdate::PlanUpdate(acp::PlanUpdate::new(acp::PlanUpdateContent::Items(
             acp::PlanItems::new("demo-plan", entries),
         ))),
-    )?;
-    send_text(demo, connection, session_id, "Plan update published.")
+    )
+}
+
+/// # Errors
+/// Returns a transport or session-storage error if the removal cannot be published.
+fn remove_plan(
+    demo: &Demo,
+    connection: &V2ConnectionTo<Client>,
+    session_id: &acp::SessionId,
+) -> Result<(), Error> {
+    demo.send_update(
+        connection,
+        session_id,
+        acp::SessionUpdate::PlanRemoved(acp::PlanRemoved::new("demo-plan")),
+    )
 }
 
 fn run_config(

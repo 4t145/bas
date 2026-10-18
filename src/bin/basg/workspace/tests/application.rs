@@ -143,8 +143,11 @@ fn application_menu_groups_labels_and_resolves_real_shortcut_hints(cx: &mut Test
             let items = [
                 (0, "关于 BasG"),
                 (1, "查看发布记录"),
-                (3, "设置"),
-                (5, "退出 BasG"),
+                (3, "新建会话"),
+                (4, "添加工作区"),
+                (6, "会话管理"),
+                (7, "设置"),
+                (9, "退出 BasG"),
             ];
             let mut row_height = None;
             for (id, label) in items {
@@ -157,7 +160,8 @@ fn application_menu_groups_labels_and_resolves_real_shortcut_hints(cx: &mut Test
                     row.bounds().size.height
                 );
             }
-            for label in ["设置", "退出 BasG"] {
+            for label in ["新建会话", "添加工作区", "会话管理", "设置", "退出 BasG"]
+            {
                 let text = window.within(label).find("label").bounds();
                 let shortcut = window.within(label).find("shortcut").bounds();
                 assert_eq!(
@@ -167,7 +171,7 @@ fn application_menu_groups_labels_and_resolves_real_shortcut_hints(cx: &mut Test
                 assert_eq!(text.bottom(), shortcut.bottom(), "same menu baseline");
                 assert!(text.right() <= shortcut.left());
             }
-            for id in [2, 4] {
+            for id in [2, 5, 8] {
                 let separator = window.within("popup-menu").find(id);
                 assert!(separator.bounds().size.height < row_height.expect("item height"));
                 assert!(
@@ -206,9 +210,7 @@ fn application_menu_groups_labels_and_resolves_real_shortcut_hints(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn application_menu_routes_actions_in_full_and_compact_modes_without_session_commands(
-    cx: &mut TestAppContext,
-) {
+fn application_menu_keeps_information_and_settings_actions_non_mutating(cx: &mut TestAppContext) {
     for compact in [false, true] {
         let mut fixture = fixture(cx);
         let meta = session();
@@ -225,7 +227,7 @@ fn application_menu_routes_actions_in_full_and_compact_modes_without_session_com
         .expect("workspace mode");
         while fixture.commands.try_recv().is_ok() {}
 
-        choose_item(&fixture, 3, cx);
+        choose_item(&fixture, 7, cx);
         let settings = cx.update(|cx| {
             crate::settings::window::current(cx).expect("settings action opened a window")
         });
@@ -256,7 +258,7 @@ fn application_menu_routes_actions_in_full_and_compact_modes_without_session_com
             Some(crate::application::RELEASES_URL)
         );
 
-        choose_item(&fixture, 5, cx);
+        choose_item(&fixture, 9, cx);
         let quit = cx
             .windows()
             .into_iter()
@@ -281,5 +283,120 @@ fn application_menu_routes_actions_in_full_and_compact_modes_without_session_com
         }
         cx.update_window(fixture.window.into(), |_, window, _| window.remove_window())
             .expect("close fixture");
+    }
+}
+
+#[gpui_kit::test]
+fn application_menu_routes_workspace_and_conversation_actions(cx: &mut TestAppContext) {
+    for compact in [false, true] {
+        let mut fixture = fixture(cx);
+        let meta = session();
+        attach(&fixture, meta.clone(), cx);
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            fixture.view.update(cx, |view, cx| {
+                view.window.compact = compact;
+                view.resize_window(window, cx);
+                view.sessions.record_prompt(meta.id);
+                view.composer
+                    .input
+                    .update(cx, |input, cx| input.set_value("keep draft", window, cx));
+            });
+        })
+        .expect("prepare workspace");
+        while fixture.commands.try_recv().is_ok() {}
+
+        let (commands, _requests) = mpsc::unbounded_channel();
+        let (_updates, events) = mpsc::channel(64);
+        let history = cx.update(|cx| {
+            let request = fixture.view.update(cx, |view, cx| {
+                view.history_request(meta.agent.to_string(), cx)
+            });
+            crate::history::window::open_connected(
+                request,
+                Connection::for_test(commands),
+                events,
+                cx,
+            )
+            .expect("fixture history window")
+        });
+        choose_item(&fixture, 6, cx);
+        cx.run_until_parked();
+        cx.update_window(history.into(), |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("agent-history-window").visible());
+            assert!(window.is_window_active());
+            window.remove_window();
+        })
+        .expect("menu opens the session manager");
+        cx.update(|cx| {
+            assert_eq!(fixture.view.read(cx).selected.id, Some(meta.id));
+            assert_eq!(
+                fixture.view.read(cx).composer.input.read(cx).value(),
+                "keep draft"
+            );
+        });
+
+        choose_item(&fixture, 4, cx);
+        cx.run_until_parked();
+        let folders = cx.update(|cx| {
+            fixture
+                .view
+                .read(cx)
+                .window
+                .menu
+                .as_ref()
+                .expect("folder menu")
+                .window
+                .expect("native menu")
+        });
+        cx.update_window(folders, |_, window, cx| {
+            window.render_frame(cx);
+            window.within("popup-menu").click(0usize, cx);
+        })
+        .expect("workspace folder choice");
+        cx.run_until_parked();
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            window.simulate_next_frame(cx);
+        })
+        .expect("activate folder picker parent");
+        cx.run_until_parked();
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| None);
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(fixture.view.read(cx).selected.id, Some(meta.id));
+            assert_eq!(
+                fixture.view.read(cx).composer.input.read(cx).value(),
+                "keep draft"
+            );
+        });
+        while let Ok(command) = fixture.commands.try_recv() {
+            assert!(
+                matches!(command, Command::Foreground(_)),
+                "management and cancelled folder selection preserve sessions"
+            );
+        }
+
+        choose_item(&fixture, 3, cx);
+        let mut creates = 0;
+        let mut detaches = 0;
+        while let Ok(command) = fixture.commands.try_recv() {
+            match command {
+                Command::Create(_) => creates += 1,
+                Command::Detach => detaches += 1,
+                Command::Foreground(_) => {}
+                _ => panic!("new conversation must not send, archive, delete or cancel"),
+            }
+        }
+        assert_eq!(creates, 1);
+        assert_eq!(detaches, 1);
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            assert_eq!(
+                fixture.view.read(cx).sessions.drafts[&meta.id].text,
+                "keep draft"
+            );
+            window.remove_window();
+        })
+        .expect("new session preserves the previous draft");
     }
 }

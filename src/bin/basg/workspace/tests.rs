@@ -10,6 +10,7 @@ mod approval;
 mod archive;
 mod audio;
 mod authentication;
+mod bookmarks;
 mod chrome;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod clipboard;

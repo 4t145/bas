@@ -70,7 +70,11 @@ fn search_enter_never_selects_a_thread_hidden_by_the_archive_filter(cx: &mut Tes
         while fixture.commands.try_recv().is_ok() {}
         cx.update_window(fixture.window.into(), |_, window, cx| {
             fixture.view.update(cx, |view, cx| {
-                view.navigation.archived = archived_list;
+                view.navigation.view = if archived_list {
+                    workspace_navigation::View::Archived
+                } else {
+                    workspace_navigation::View::Workspaces
+                };
                 cx.notify();
             });
             window.render_frame(cx);

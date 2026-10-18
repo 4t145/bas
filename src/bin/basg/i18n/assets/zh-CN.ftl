@@ -189,7 +189,7 @@ settings-saved = 已保存
 settings-search = 搜索设置…
 settings-scope-frontend = BasG · 前端
 settings-scope-backend = bas · 后端
-settings-frontend-description = 本机偏好设置 · 自动保存
+settings-frontend-description = 本机偏好设置
 settings-frontend-context = 本机设置
 settings-backend-description = 后端智能体注册 · 编辑后保存
 settings-backend-context = 后端：{ $address }
@@ -245,6 +245,7 @@ agent-config-mismatch = 请让 basg 与 bas 使用同一配置文件后重试。
 agent-config-unloaded = 请让 bas 加载当前配置后重新验证可用性。
 agent-current = 智能体 · { $agent }
 agent-custom-description = 通过 ACP 接入本机智能体。
+agent-description = 备注（可选）
 agent-custom-help = 填写智能体程序与参数，即可添加到 Bas。
 agent-source-registry = ACP 注册目录
 agent-source-custom = 自定义
@@ -470,7 +471,7 @@ turn-jump = 跳转到此轮对话
 turn-limit = 本轮达到输出或请求上限
 turn-refused = 智能体拒绝了本轮请求
 turn-stopped = 本轮已停止
-workspace-add = 添加工作文件夹…
+workspace-add = 添加工作区
 session-directories-title = 会话副工作区
 session-directory-add = 附加工作文件夹…
 session-directory-remove = 移除副目录：{ $path }
@@ -546,7 +547,7 @@ queue-interrupt = 停止并发送
 queue-paused-count = 待发送 · { $count } 条 · 已暂停
 queue-resume = 继续发送
 queue-send-now = 停止当前任务并发送
-queue-withdraw = 取回编辑
+queue-withdraw = 取回
 
 ## Activity and content
 
@@ -589,6 +590,11 @@ resource-embedded = 嵌入资源
 resource-file = 文件 · { $type } · { $uri }
 resource-image = 图片 · { $type }
 resource-preview-unavailable = 资源暂时无法预览
+resource-open = 打开资源
+resource-open-name = 打开资源：{ $name }
+resource-open-unavailable = 无法在本机打开此资源，可复制地址
+resource-open-error = 无法打开资源
+resource-file-missing = 文件不存在：{ $path }
 running-count = { $running } 个执行中
 status-agent-confirming = 等待智能体确认…
 status-applying = 正在应用设置…
@@ -648,6 +654,19 @@ tool-output = 输出
 tool-preview-unavailable = 工具内容暂时无法预览
 
 ## Navigation, usage and time
+
+sidebar-bookmarks = 书签
+sidebar-history = 历史记录
+sidebar-bookmarks-count = 书签 · { $count }
+session-bookmark = 添加书签
+session-unbookmark = 移除书签
+session-bookmark-failed = 保存书签失败
+history-today = 今天
+history-yesterday = 昨天
+history-week = 本周
+history-month = { $month }月
+history-month-year = { $year }年{ $month }
+history-unknown = 未知时间
 
 commands-shortcuts = ↑↓ 选择 · Tab / Enter 补全 · Esc 关闭
 option-choose = 选择{ $name }

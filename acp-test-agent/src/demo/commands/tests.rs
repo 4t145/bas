@@ -1,4 +1,4 @@
-use super::{Command, DEFAULT_SLEEP_MILLIS, StopReason, parse};
+use super::{Command, DEFAULT_PLAN_MILLIS, DEFAULT_SLEEP_MILLIS, StopReason, parse};
 
 #[test]
 fn plain_prompts_are_echoed_and_slash_commands_are_parsed() {
@@ -9,6 +9,14 @@ fn plain_prompts_are_echoed_and_slash_commands_are_parsed() {
         }
     );
     assert_eq!(parse("/sleep 25"), Command::Sleep { millis: 25 });
+    assert_eq!(parse("/plan 25"), Command::Plan { millis: 25 });
+    assert_eq!(
+        parse("/plan"),
+        Command::Plan {
+            millis: DEFAULT_PLAN_MILLIS
+        }
+    );
+    assert_eq!(parse("/plan clear"), Command::ClearPlan);
     assert_eq!(
         parse("/sleep"),
         Command::Sleep {
@@ -30,5 +38,6 @@ fn plain_prompts_are_echoed_and_slash_commands_are_parsed() {
 #[test]
 fn invalid_arguments_are_reported_instead_of_silently_defaulting() {
     assert!(matches!(parse("/sleep soon"), Command::Invalid { .. }));
+    assert!(matches!(parse("/plan soon"), Command::Invalid { .. }));
     assert!(matches!(parse("/stop eventually"), Command::Invalid { .. }));
 }

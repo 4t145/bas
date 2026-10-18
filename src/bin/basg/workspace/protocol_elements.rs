@@ -129,7 +129,7 @@ struct PlanHint {
 fn plan_hint_content(rows: &[PlanHintRow], cx: &App) -> AnyElement {
     el! {
         #div { flex; flex_col; gap_1; min_w_0; } [..$rows.iter().enumerate().map(|(index, row)| {
-            let PlanHint { label, content } = plan_hint_row(row, cx);
+            let PlanHint { label, content } = plan_hint_row(index, row, cx);
             el! {
                 #div {
                     id: $SharedString::from(format!("plan-hint-row-{index}"));
@@ -143,7 +143,8 @@ fn plan_hint_content(rows: &[PlanHintRow], cx: &App) -> AnyElement {
     .into_any_element()
 }
 
-fn plan_hint_row(row: &PlanHintRow, cx: &App) -> PlanHint {
+fn plan_hint_row(index: usize, row: &PlanHintRow, cx: &App) -> PlanHint {
+    let line_height = crate::ui::SMALL * 1.4;
     let (marker, text, heading) = match row {
         PlanHintRow::Heading(text) => (None, text.as_str(), true),
         PlanHintRow::Preview(text) => (None, text.as_str(), false),
@@ -166,6 +167,7 @@ fn plan_hint_row(row: &PlanHintRow, cx: &App) -> PlanHint {
     let content = el! {
         #div {
             flex_1; min_w_0; whitespace_normal;
+            line_height: line_height;
             @$heading => {
                 font_weight: FontWeight::SEMIBOLD;
                 text_color: $cx.theme().muted_foreground;
@@ -176,7 +178,16 @@ fn plan_hint_row(row: &PlanHintRow, cx: &App) -> PlanHint {
     let content = match marker {
         Some((icon, color)) => el! {
             #div { flex; items_start; gap_1p5; min_w_0; } [
-                Icon($icon) { size: crate::ui::SMALL_ICON.px; text_color: $color; },
+                #div {
+                    id: $SharedString::from(format!("plan-hint-marker-{index}")); test_support;
+                    w: crate::ui::ICON.px; h: line_height;
+                    flex_shrink_0; flex; items_center; justify_center;
+                } [
+                    $status::activity_icon(
+                        SharedString::from(format!("plan-hint-status-{index}")),
+                        icon, color, matches!(row, PlanHintRow::InProgress(_)),
+                    ),
+                ],
                 $content,
             ]
         }
@@ -398,50 +409,45 @@ impl Workspace {
             ),
         };
         let expanded = self.selected.timeline.expanded.contains(id);
-        let key = id.to_owned();
-        let disclosure = if expanded {
-            IconName::ChevronDown
-        } else {
-            IconName::ChevronRight
-        };
         let header = el! {
-            Button($SharedString::from(format!("expand-{id}"))) {
-                ghost; small; w_full;
-                icon: disclosure;
-                accessibility_label: $label.clone();
+            #div {
+                px_2; py_1;
                 on_prepaint: $self.track_content_header(id);
-                on_click: $cx.listener(move |this, _, _, cx| {
-                    this.toggle_content(&key, index, cx);
-                });
             } [
-                Icon(IconName::Archive) {
-                    size: crate::ui::ICON.px;
-                    text_color: $cx.theme().muted_foreground;
-                },
-                $status::activity_icon(
+                #crate::ui::ContentRow::new(
+                    $format!("compaction-row-{id}"),
+                    $self.disclosure(id, crate::i18n::tr!("compaction-title"), expanded, index, Some(IconName::Archive), cx).w_full()
+                ) [
+                Button($SharedString::from(format!("status-{id}"))) {
+                    ghost; xsmall; cursor_default;
+                    w: crate::ui::COMPACT_CONTROL.px; h: crate::ui::COMPACT_CONTROL.px;
+                    p_0; flex_none; tooltip: $label;
+                } [
+                    $status::activity_icon(
                         format!("compaction-status-{id}"),
                         icon,
                         color,
                         matches!(compaction.status, acp2::CompactionStatus::InProgress),
-                ),
-                #div { flex_1; text_color: color; } [$label],
+                    ),
+                ],
+                ],
             ]
         };
         el! {
             #div {
-                rounded_md; border_1;
+                rounded_md; w_full; min_w_0; border_1; overflow_hidden;
                 border_color: $cx.theme().border;
-                p_2; flex; flex_col; gap_2;
             } [
                 $header,
                 ..$compaction.error.as_ref().map(|error| el! {
                     #div {
-                        text_size: crate::ui::SMALL;
+                        px_3; pb_3; text_size: crate::ui::SMALL;
                         text_color: $cx.theme().danger;
                     } [$error.clone()]
                 }),
             ].gds_uim::m! {
-                @expanded: $|panel| panel.children(
+                @expanded: $|panel| panel.child(el! {
+                    #div { flex; flex_col; gap_3; px_3; pb_3; } [..$
                     compaction_summary_blocks(&compaction.summary)
                         .iter()
                         .enumerate()
@@ -460,8 +466,9 @@ impl Workspace {
                                         .into_any_element()
                                 }
                             },
-                        ),
-                );
+                        )
+                    ]
+                });
             }
         }
         .into_any_element()

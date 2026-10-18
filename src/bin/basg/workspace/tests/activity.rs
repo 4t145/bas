@@ -272,7 +272,7 @@ fn activity_counts_working_sessions_not_agent_types_and_excludes_failed_runtimes
                 ids.contains(&current.id),
                 "previous foreground is now background work"
             );
-            view.navigation.archived = true;
+            view.navigation.view = workspace_navigation::View::Archived;
             view.navigation.search.update(cx, |input, cx| {
                 input.set_value("no matching rows", window, cx)
             });

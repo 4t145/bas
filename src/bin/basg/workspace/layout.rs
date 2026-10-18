@@ -229,6 +229,7 @@ impl Workspace {
                 on_action: $cx.listener(Self::on_rename_thread);
                 on_action: $cx.listener(Self::on_archive_thread);
                 on_action: $cx.listener(Self::on_toggle_thread_pin);
+                on_action: $cx.listener(Self::on_toggle_thread_bookmark);
                 on_action: $cx.listener(Self::on_delete_thread);
                 on_action: $cx.listener(Self::on_add_workspace);
             } [

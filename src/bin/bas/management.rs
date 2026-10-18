@@ -274,7 +274,12 @@ impl Manager {
                     } else {
                         manifest.name
                     },
-                    description: manifest.description,
+                    description: if custom {
+                        spec.as_ref()
+                            .map_or_else(String::new, |spec| spec.description.clone())
+                    } else {
+                        manifest.description
+                    },
                     version: latest_version,
                     repository: manifest.repository,
                     license: manifest.license,
@@ -317,8 +322,10 @@ impl Manager {
             entries.push(Entry {
                 name: record.map_or_else(|| id.clone(), |record| record.manifest.name.clone()),
                 id,
-                description: record
-                    .map_or_else(String::new, |record| record.manifest.description.clone()),
+                description: record.map_or_else(
+                    || spec.description.clone(),
+                    |record| record.manifest.description.clone(),
+                ),
                 version: String::new(),
                 repository: record
                     .map_or_else(String::new, |record| record.manifest.repository.clone()),

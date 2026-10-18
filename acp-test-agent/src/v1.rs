@@ -25,6 +25,7 @@ pub(super) struct Demo {
     client_capabilities: Mutex<Option<acp::ClientCapabilities>>,
     next_message: AtomicU64,
     next_tool: AtomicU64,
+    resources: demo::resources::Resources,
 }
 
 impl Demo {
@@ -36,6 +37,7 @@ impl Demo {
             client_capabilities: Mutex::new(None),
             next_message: AtomicU64::new(0),
             next_tool: AtomicU64::new(0),
+            resources: demo::resources::Resources::default(),
         }
     }
 

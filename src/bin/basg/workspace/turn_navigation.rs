@@ -6,8 +6,7 @@ use super::*;
 
 pub(super) const RAIL_WIDTH: f32 = 24.;
 const TICK_WIDTH: f32 = 14.;
-const END_TICK_WIDTH: f32 = 18.;
-const HOVER_TICK_WIDTH: f32 = 20.;
+const ACTIVE_TICK_WIDTH: f32 = 20.;
 const MARKER_HEIGHT: f32 = 12.;
 const VISIBLE_PROMPTS: usize = 20;
 const PREVIEW_GRAPHEMES: usize = 72;
@@ -16,6 +15,27 @@ struct TurnTarget {
     item_index: usize,
     row: usize,
     preview: String,
+}
+
+fn marker_tick(
+    id: impl Into<gpui_kit::ElementId>,
+    group: SharedString,
+    active: bool,
+    cx: &App,
+) -> AnyElement {
+    gds_uim::el! {
+        #div { size_full; flex; items_center; justify_center; } [
+            #div {
+                id: id; test_support;
+                w: $(if active { ACTIVE_TICK_WIDTH } else { TICK_WIDTH }).px;
+                h: $(if active { 3. } else { 2. }).px; rounded_full;
+                bg: $(if active { cx.theme().primary } else { cx.theme().muted_foreground.opacity(0.7) });
+                group_hover: group, $gds_uim::m! {
+                    w: ACTIVE_TICK_WIDTH.px; h: 3.0.px; bg: $cx.theme().primary;
+                };
+            }
+        ]
+    }.into_any_element()
 }
 
 impl Workspace {
@@ -120,19 +140,12 @@ impl Workspace {
             let marker_id = SharedString::from(format!("turn-marker-{item_index}"));
             let group = marker_id.clone();
             let prompt: SharedString = target.preview.into();
-            let tick = gds_uim::el! {
-                #div { size_full; flex; items_center; justify_center; } [
-                    #div {
-                        id: $SharedString::from(format!("turn-marker-line-{item_index}"));
-                        test_support; w: $(if selected { HOVER_TICK_WIDTH } else { TICK_WIDTH }).px;
-                        h: 2.0.px; rounded_full;
-                        bg: $(if selected { cx.theme().primary } else { cx.theme().muted_foreground.opacity(0.7) });
-                        group_hover: $group.clone(), $gds_uim::m! {
-                            w: HOVER_TICK_WIDTH.px; h: 3.0.px; bg: $cx.theme().primary;
-                        };
-                    }
-                ]
-            };
+            let tick = marker_tick(
+                SharedString::from(format!("turn-marker-line-{item_index}")),
+                group.clone(),
+                selected,
+                cx,
+            );
             let marker = gds_uim::el! { #crate::ui::tooltip::bounded(
                 marker_id,
                 tick,
@@ -149,18 +162,7 @@ impl Workspace {
         }
 
         let group = SharedString::from("turn-marker-end");
-        let tick = gds_uim::el! {
-            #div { size_full; flex; items_center; justify_center; } [
-                #div {
-                    id: "turn-marker-line-end"; test_support;
-                    w: END_TICK_WIDTH.px; h: 3.0.px; rounded_full;
-                    bg: $(if at_end { cx.theme().primary } else { cx.theme().muted_foreground.opacity(0.7) });
-                    group_hover: $group.clone(), $gds_uim::m! {
-                        w: HOVER_TICK_WIDTH.px; h: 4.0.px; bg: $cx.theme().primary;
-                    };
-                }
-            ]
-        };
+        let tick = marker_tick("turn-marker-line-end", group.clone(), at_end, cx);
         let end = gds_uim::el! { #div {
             id: $group.clone();
             hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("conversation-end"), ScrollConversationToEnd);

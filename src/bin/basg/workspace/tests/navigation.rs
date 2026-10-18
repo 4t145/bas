@@ -185,7 +185,7 @@ fn ctrl_tab_respects_search_and_archive_filters_and_empty_lists(cx: &mut TestApp
     cx.update(|cx| assert_eq!(fixture.view.read(cx).selected.id, Some(first.id)));
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |view, cx| {
-            view.navigation.archived = true;
+            view.navigation.view = workspace_navigation::View::Archived;
             cx.notify();
         });
         window.render_frame(cx);

@@ -95,7 +95,14 @@ async fn run_turn(
         Command::Rich => run_rich(demo, connection, session_id)?,
         Command::Thought => run_thought(demo, connection, session_id)?,
         Command::Tool => run_tool(demo, connection, session_id, &cwd)?,
-        Command::Plan => run_plan(demo, connection, session_id)?,
+        Command::Plan { millis } => {
+            run_plan(demo, connection, session_id, millis, cancellation).await?
+        }
+        Command::ClearPlan => {
+            remove_plan(demo, connection, session_id)?;
+            send_text(demo, connection, session_id, "Plan cleared.")?;
+            Turn::end_turn()
+        }
         Command::Permission => run_permission(demo, connection, session_id).await?,
         Command::Elicitation => run_elicitation(demo, connection, session_id).await?,
         Command::ElicitationUrl => run_elicitation_url(demo, connection, session_id).await?,
@@ -219,6 +226,10 @@ fn run_rich(
     connection: &ConnectionTo<Client>,
     session_id: &acp::SessionId,
 ) -> Result<Turn, acp::Error> {
+    let resource_uri = demo
+        .resources
+        .sample_uri()
+        .map_err(acp::Error::into_internal_error)?;
     let text_id = demo.next_message_id("agent-message");
     demo.send_message_chunk(
         connection,
@@ -256,7 +267,7 @@ fn run_rich(
         session_id,
         acp::SessionUpdate::AgentMessageChunk(
             acp::ContentChunk::new(acp::ContentBlock::ResourceLink(
-                acp::ResourceLink::new("sample.md", "file:///acp-test-agent/sample.md")
+                acp::ResourceLink::new("sample.md", resource_uri.clone())
                     .mime_type("text/markdown"),
             ))
             .message_id(link_id),
@@ -269,11 +280,8 @@ fn run_rich(
         acp::SessionUpdate::AgentMessageChunk(
             acp::ContentChunk::new(acp::ContentBlock::Resource(acp::EmbeddedResource::new(
                 acp::EmbeddedResourceResource::TextResourceContents(
-                    acp::TextResourceContents::new(
-                        SAMPLE_RESOURCE,
-                        "file:///acp-test-agent/sample.md",
-                    )
-                    .mime_type("text/markdown"),
+                    acp::TextResourceContents::new(SAMPLE_RESOURCE, resource_uri)
+                        .mime_type("text/markdown"),
                 ),
             )))
             .message_id(resource_id),
@@ -760,12 +768,14 @@ fn run_stop(
     Ok(Turn::with(stop_reason))
 }
 
-fn run_plan(
+async fn run_plan(
     demo: &Demo,
     connection: &ConnectionTo<Client>,
     session_id: &acp::SessionId,
+    millis: u64,
+    cancellation: &agent_client_protocol::RequestCancellation,
 ) -> Result<Turn, acp::Error> {
-    let entries = vec![
+    let mut entries = vec![
         acp::PlanEntry::new(
             "Inspect the workspace",
             acp::PlanEntryPriority::High,
@@ -782,32 +792,63 @@ fn run_plan(
             acp::PlanEntryStatus::Pending,
         ),
     ];
-    demo.send_update(
-        connection,
-        session_id,
-        acp::SessionUpdate::Plan(acp::Plan::new(entries.clone())),
-    )?;
-    let plan_capable = demo
-        .client_capabilities()
-        .is_some_and(|capabilities| capabilities.plan.is_some());
-    if plan_capable {
-        demo.send_update(
-            connection,
-            session_id,
-            acp::SessionUpdate::PlanUpdate(acp::PlanUpdate::new(acp::PlanUpdateContent::Items(
-                acp::PlanItems::new("demo-plan", entries),
-            ))),
-        )?;
+    publish_plan(demo, connection, session_id, entries.clone())?;
+    for step in 1..entries.len() {
+        if wait_cancellable(demo, session_id, millis, cancellation).await {
+            remove_plan(demo, connection, session_id)?;
+            send_text(demo, connection, session_id, "Plan cancelled.")?;
+            return Ok(Turn::with(acp::StopReason::Cancelled));
+        }
+        entries[step].status = acp::PlanEntryStatus::Completed;
+        if let Some(next) = entries.get_mut(step + 1) {
+            next.status = acp::PlanEntryStatus::InProgress;
+        }
+        publish_plan(demo, connection, session_id, entries.clone())?;
     }
     send_text(
         demo,
         connection,
         session_id,
-        if plan_capable {
-            "Plan published; the client advertised plan updates, so an unstable plan_update was sent too."
-        } else {
-            "Plan published; the client did not advertise unstable plan updates."
-        },
+        "Plan complete. Use `/plan clear` to remove it.",
     )?;
     Ok(Turn::end_turn())
+}
+
+/// # Errors
+/// Returns a transport or session-storage error if the plan cannot be published.
+fn publish_plan(
+    demo: &Demo,
+    connection: &ConnectionTo<Client>,
+    session_id: &acp::SessionId,
+    entries: Vec<acp::PlanEntry>,
+) -> Result<(), acp::Error> {
+    let plan_capable = demo
+        .client_capabilities()
+        .is_some_and(|capabilities| capabilities.plan.is_some());
+    let update = if plan_capable {
+        acp::SessionUpdate::PlanUpdate(acp::PlanUpdate::new(acp::PlanUpdateContent::Items(
+            acp::PlanItems::new("demo-plan", entries),
+        )))
+    } else {
+        acp::SessionUpdate::Plan(acp::Plan::new(entries))
+    };
+    demo.send_update(connection, session_id, update)
+}
+
+/// # Errors
+/// Returns a transport or session-storage error if the removal cannot be published.
+fn remove_plan(
+    demo: &Demo,
+    connection: &ConnectionTo<Client>,
+    session_id: &acp::SessionId,
+) -> Result<(), acp::Error> {
+    let update = if demo
+        .client_capabilities()
+        .is_some_and(|capabilities| capabilities.plan.is_some())
+    {
+        acp::SessionUpdate::PlanRemoved(acp::PlanRemoved::new("demo-plan"))
+    } else {
+        acp::SessionUpdate::Plan(acp::Plan::new(Vec::new()))
+    };
+    demo.send_update(connection, session_id, update)
 }

@@ -188,7 +188,7 @@ async fn v2_lifecycle_and_feature_demos() -> Result<(), Box<dyn std::error::Erro
             let accepted = start_prompt(&cx, &session_id, "/help").await?;
             let (updates, reason) = wait_idle(&mut update_rx, &session_id).await;
             assert_eq!(reason, v2::StopReason::EndTurn);
-            assert!(messages(&updates).contains("ACP test agent demos"));
+            assert_eq!(messages(&updates), acp_test_agent::demo::help_text());
             assert!(updates.iter().any(|update| matches!(
                 update,
                 v2::SessionUpdate::UserMessage(message)
@@ -250,6 +250,18 @@ async fn v2_lifecycle_and_feature_demos() -> Result<(), Box<dyn std::error::Erro
                 v2::SessionUpdate::AgentMessage(message)
                     if matches!(&message.content, MaybeUndefined::Value(content) if content.len() == 5)
             )));
+            let uri = updates.iter().find_map(|update| match update {
+                v2::SessionUpdate::AgentMessage(message) => match &message.content {
+                    MaybeUndefined::Value(content) => content.iter().find_map(|block| match block {
+                        v2::ContentBlock::ResourceLink(resource) => Some(&resource.uri),
+                        _ => None,
+                    }),
+                    _ => None,
+                },
+                _ => None,
+            }).expect("resource link");
+            let path = url::Url::parse(uri).expect("resource URL").to_file_path().expect("local resource");
+            assert_eq!(std::fs::read_to_string(path).expect("open referenced file"), acp_test_agent::demo::SAMPLE_RESOURCE);
 
             start_prompt(&cx, &session_id, "/tool").await?;
             let (updates, reason) = wait_idle(&mut update_rx, &session_id).await;
@@ -264,13 +276,34 @@ async fn v2_lifecycle_and_feature_demos() -> Result<(), Box<dyn std::error::Erro
                     if update.status == MaybeUndefined::Value(v2::ToolCallStatus::Completed)
             )));
 
-            start_prompt(&cx, &session_id, "/plan").await?;
+            start_prompt(&cx, &session_id, "/plan 0").await?;
             let (updates, reason) = wait_idle(&mut update_rx, &session_id).await;
             assert_eq!(reason, v2::StopReason::EndTurn);
             assert!(updates.iter().any(|update| matches!(
                 update,
                 v2::SessionUpdate::PlanUpdate(_)
             )));
+            let completed: Vec<_> = updates.iter().filter_map(|update| match update {
+                v2::SessionUpdate::PlanUpdate(plan) => match &plan.plan {
+                    v2::PlanUpdateContent::Items(plan) => Some(plan.entries.iter().filter(|entry| entry.status == v2::PlanEntryStatus::Completed).count()),
+                    _ => None,
+                },
+                _ => None,
+            }).collect();
+            assert_eq!(completed, [1, 2, 3]);
+            start_prompt(&cx, &session_id, "/plan clear").await?;
+            let (updates, reason) = wait_idle(&mut update_rx, &session_id).await;
+            assert_eq!(reason, v2::StopReason::EndTurn);
+            assert!(updates.iter().any(|update| matches!(update, v2::SessionUpdate::PlanRemoved(_))));
+            start_prompt(&cx, &session_id, "/plan 5000").await?;
+            loop {
+                if matches!(next_update(&mut update_rx, &session_id).await, v2::SessionUpdate::PlanUpdate(_)) { break; }
+            }
+            cx.send_notification(v2::CancelSessionNotification::new(session_id.clone()))?;
+            let (updates, reason) = wait_idle(&mut update_rx, &session_id).await;
+            assert_eq!(reason, v2::StopReason::Cancelled);
+            assert!(updates.iter().any(|update| matches!(update, v2::SessionUpdate::PlanRemoved(_))));
+            assert!(!updates.iter().any(|update| matches!(update, v2::SessionUpdate::PlanUpdate(_))));
 
             start_prompt(&cx, &session_id, "/permission").await?;
             let (updates, reason) = wait_idle(&mut update_rx, &session_id).await;

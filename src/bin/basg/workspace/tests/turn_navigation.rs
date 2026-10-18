@@ -177,7 +177,7 @@ fn turn_shortcuts_stay_together_and_jump_to_grouped_rows(cx: &mut TestAppContext
         let end_line = window.find("turn-marker-line-end");
         assert!(end_line.visible());
         let end_line = end_line.bounds();
-        assert_eq!(end_line.size.width, px(18.));
+        assert_eq!(end_line.size, size(px(20.), px(3.)));
         assert!(end_line.left() >= end.left() && end_line.right() <= end.right());
 
         fixture
@@ -194,6 +194,19 @@ fn turn_shortcuts_stay_together_and_jump_to_grouped_rows(cx: &mut TestAppContext
         assert_eq!(scroll.item_ix, targets.user_rows[1]);
         assert_eq!(scroll.offset_in_item, px(0.));
         assert!(!list.is_following_tail());
+        window.hover("composer-editor", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window
+                .find(format!("turn-marker-line-{}", targets.user_items[1]))
+                .bounds()
+                .size,
+            size(px(20.), px(3.))
+        );
+        assert_eq!(
+            window.find("turn-marker-line-end").bounds().size,
+            size(px(14.), px(2.))
+        );
 
         window.click(format!("turn-marker-{}", targets.user_items[0]), cx);
         let scroll = list.logical_scroll_top();

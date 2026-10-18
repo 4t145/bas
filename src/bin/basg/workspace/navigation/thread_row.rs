@@ -13,6 +13,7 @@ impl Workspace {
         let id = session.id;
         let editing = self.renaming_thread(id);
         let pinned = self.navigation.pinned.contains(&id);
+        let bookmarked = self.navigation.bookmarks.contains(&id);
         let disabled = !self.backend.connected
             || self.sessions.pending.archiving.contains(&id)
             || self.sessions.pending.deleting.contains(&id);
@@ -38,6 +39,13 @@ impl Workspace {
         let pin = (pinned && !editing).then(|| {
             gds_uim::el! { Icon(IconName::Pin) { xsmall; flex_shrink_0; } }
         });
+        let bookmark = (bookmarked && !editing).then(|| {
+            gds_uim::el! {
+                #div { id: $format!("thread-bookmark-{id}"); test_support; flex_shrink_0; } [
+                    Icon(IconName::Bookmark) { xsmall; text_color: $cx.theme().primary; }
+                ]
+            }
+        });
         let title_row = gds_uim::el! {
             #div {
                 id: $SharedString::from(format!("thread-title-{id}"));
@@ -45,7 +53,7 @@ impl Workspace {
                 @$!editing => {
                     group_hover: $group.clone(), $gds_uim::m! { pr: $px(ACTIONS_WIDTH + ACTIONS_GAP); };
                 };
-            } [$title_content, ..pin]
+            } [$title_content, ..pin, ..bookmark]
         };
         let actions = gds_uim::el! {
             #div {
@@ -66,11 +74,16 @@ impl Workspace {
             ]
         };
         let details = gds_uim::el! {
-            #div { flex; items_center; justify_between; h: layout::ICON_BUTTON_SIZE.px; } [
+            #div { flex; items_center; justify_between; gap_2; min_w_0; h: layout::ICON_BUTTON_SIZE.px; } [
+                ..$self.navigation.view.flat().then(|| gds_uim::el! {
+                    #div { id: $format!("thread-workspace-{id}"); test_support; min_w_0; flex_1; truncate;
+                        text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                    } [$super::groups::name(session.cwd.as_deref())]
+                }),
                 #div {
                     id: $SharedString::from(format!("thread-time-{id}"));
-                    test_support; text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                } [$recent_time(session.agent_updated_at.unwrap_or(session.updated_at), Timestamp::now())],
+                    test_support; flex_shrink_0; text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                } [$recent_time(session.updated_at, Timestamp::now())],
                 #div {
                     id: $SharedString::from(format!("thread-rail-{id}"));
                     test_support; size: layout::ICON_BUTTON_SIZE.px; flex_shrink_0;
@@ -154,6 +167,7 @@ impl Workspace {
         let archived = session.archived;
         let draft = !archived && self.sessions.is_draft(id);
         let pinned = self.navigation.pinned.contains(&id);
+        let bookmarked = self.navigation.bookmarks.contains(&id);
         let disabled = !self.backend.connected
             || self.sessions.pending.archiving.contains(&id)
             || self.sessions.pending.deleting.contains(&id);
@@ -174,12 +188,13 @@ impl Workspace {
         let owner = cx.entity().downgrade();
         self.open_context_menu(
             position,
-            (if state == RowStatus::Unread { 6 } else { 5 }) - usize::from(draft)
+            (if state == RowStatus::Unread { 7 } else { 6 }) - usize::from(draft)
                 + usize::from(can_close)
                 + usize::from(stopped),
             std::rc::Rc::new(move |menu, window, _| {
                 let parent = window.window_handle();
                 let pin_owner = owner.clone();
+                let bookmark_owner = owner.clone();
                 let rename_owner = owner.clone();
                 let archive_owner = owner.clone();
                 let delete_owner = owner.clone();
@@ -199,6 +214,23 @@ impl Workspace {
                     .on_click(move |_, window, cx| {
                         menus::in_parent(parent, window, cx, |_, cx| {
                             let _ = pin_owner.update(cx, |this, cx| this.toggle_pinned(id, cx));
+                        });
+                    }),
+                )
+                .item(
+                    shortcuts::menu_item(
+                        if bookmarked {
+                            crate::i18n::tr!("session-unbookmark")
+                        } else {
+                            crate::i18n::tr!("session-bookmark")
+                        },
+                        Some(Box::new(shortcuts::ToggleThreadBookmark)),
+                    )
+                    .icon(IconName::Bookmark)
+                    .on_click(move |_, window, cx| {
+                        menus::in_parent(parent, window, cx, |_, cx| {
+                            let _ =
+                                bookmark_owner.update(cx, |this, cx| this.toggle_bookmark(id, cx));
                         });
                     }),
                 )

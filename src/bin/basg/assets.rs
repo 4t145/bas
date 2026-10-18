@@ -55,6 +55,7 @@ gpui_kit::assets::icon_assets!(
         Info,
         LogIn,
         LogOut,
+        Bookmark,
         Pin,
         PinOff,
         LoaderCircle,

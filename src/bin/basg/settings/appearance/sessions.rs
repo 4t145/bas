@@ -92,9 +92,6 @@ impl AppearancePage {
             ..$bool::then(!Self::matches_session_query(&self.query), || gds_uim::el! {
                 #div { id: "settings-no-results"; test_support; } [$crate::i18n::tr!("settings-no-results")]
             }),
-            ..$bool::then(!self.message.is_empty(), || gds_uim::el! {
-                #div { text_size: crate::ui::SMALL; } [$self.message.clone()]
-            }),
         ] }.into_any_element()
     }
 }
