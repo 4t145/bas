@@ -53,7 +53,7 @@ struct Args {
     #[arg(long, env = "BAS_SETTINGS_FILE")]
     settings_file: Option<PathBuf>,
     #[cfg(feature = "gui-tests")]
-    #[arg(long, hide = true, value_parser = ["empty", "startup", "agent-menu", "sample", "layout", "inline-wrap", "connecting", "disconnected", "menus", "files", "images", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "tool-details", "thread-feedback", "markdown-actions", "markdown-copy-hover", "subtle-actions", "turn-navigation", "turn-navigation-hover", "turn-navigation-many", "usage", "usage-details", "usage-hover", "agent-hover", "attachment-hint", "app-menu", "thread-menu", "clipboard", "settings", "settings-agents", "agent-onboarding"])]
+    #[arg(long, hide = true, value_parser = ["empty", "startup", "agent-menu", "sample", "layout", "inline-wrap", "connecting", "disconnected", "menus", "files", "images", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "tool-details", "activity-artifacts", "activity-artifacts-collapsed", "thread-feedback", "markdown-actions", "markdown-copy-hover", "subtle-actions", "turn-navigation", "turn-navigation-hover", "turn-navigation-many", "usage", "usage-details", "usage-hover", "agent-hover", "attachment-hint", "app-menu", "thread-menu", "clipboard", "settings", "settings-agents", "agent-onboarding"])]
     preview_panel: Option<String>,
     #[cfg(all(feature = "gui-tests", target_os = "linux"))]
     #[arg(long, hide = true)]

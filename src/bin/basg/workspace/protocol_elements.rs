@@ -409,15 +409,7 @@ impl Workspace {
             ),
         };
         let expanded = self.selected.timeline.expanded.contains(id);
-        let header = el! {
-            #div {
-                px_2; py_1;
-                on_prepaint: $self.track_content_header(id);
-            } [
-                #crate::ui::ContentRow::new(
-                    $format!("compaction-row-{id}"),
-                    $self.disclosure(id, crate::i18n::tr!("compaction-title"), expanded, index, Some(IconName::Archive), cx).w_full()
-                ) [
+        let status = el! {
                 Button($SharedString::from(format!("status-{id}"))) {
                     ghost; xsmall; cursor_default;
                     w: crate::ui::COMPACT_CONTROL.px; h: crate::ui::COMPACT_CONTROL.px;
@@ -430,14 +422,25 @@ impl Workspace {
                         matches!(compaction.status, acp2::CompactionStatus::InProgress),
                     ),
                 ],
-                ],
-            ]
-        };
+        }
+        .into_any_element();
+        let leading = status::activity_icon(
+            format!("compaction-kind-{id}"),
+            IconName::Archive,
+            cx.theme().muted_foreground,
+            false,
+        );
+        let disclosure = self.disclosure(
+            id,
+            crate::i18n::tr!("compaction-title"),
+            expanded,
+            index,
+            Some(leading),
+            cx,
+        );
+        let header = self.content_header(id, disclosure, Some(status));
         el! {
-            #div {
-                rounded_md; w_full; min_w_0; border_1; overflow_hidden;
-                border_color: $cx.theme().border;
-            } [
+            #content_header::frame(true, cx) [
                 $header,
                 ..$compaction.error.as_ref().map(|error| el! {
                     #div {
@@ -447,7 +450,7 @@ impl Workspace {
                 }),
             ].gds_uim::m! {
                 @expanded: $|panel| panel.child(el! {
-                    #div { flex; flex_col; gap_3; px_3; pb_3; } [..$
+                    #div { flex; flex_col; gap_3; px_3; pt_1; pb_3; } [..$
                     compaction_summary_blocks(&compaction.summary)
                         .iter()
                         .enumerate()

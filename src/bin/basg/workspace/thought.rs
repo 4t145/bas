@@ -68,7 +68,6 @@ impl Workspace {
             ));
         }
         let expanded = self.selected.timeline.expanded.contains(id);
-        let key = id.to_owned();
         let label = summary
             .iter()
             .map(|(_, _, label, _)| label.as_str())
@@ -84,7 +83,8 @@ impl Workspace {
                     flex;
                     items_center;
                     gap_1;
-                    text_size: $crate::ui::SMALL;
+                    text_size: $theme::content_font_size(cx);
+                    line_height: $content_header::line_height(cx);
                     text_color: $color;
                 } [
                     $status::activity_icon(
@@ -98,35 +98,23 @@ impl Workspace {
                 ]
             }
         });
-        let header = gds_uim::el! {
-            Button($SharedString::from(format!("expand-{id}"))) {
-                ghost;
-                small;
-                w_full;
-                h_auto;
-                min_h: $px(crate::ui::CONTROL);
-                py_1;
-                text_color: $muted;
-                icon: $(if expanded { IconName::ChevronDown } else { IconName::ChevronRight });
-                accessibility_label: $label;
-                on_prepaint: $self.track_content_header(id);
-            } [
-                #div {
+        let summary = gds_uim::el! {
+            #div {
                     flex_1;
                     min_w_0;
                     flex;
                     flex_wrap;
                     gap_x_3;
                     gap_y_1;
-                } [..summary]
-            ].gds_uim::m! {
-                on_click: $cx.listener(move |this, _, _, cx| {
-                    this.toggle_content(&key, index, cx);
-                });
-            }
-        };
-        gds_uim::el! {
-            #div { flex; flex_col; gap_2; px_2; py_1; } [
+            } [..summary]
+        }
+        .into_any_element();
+        let disclosure = self
+            .disclosure_content(id, &label, expanded, index, summary, cx)
+            .text_color(muted);
+        let header = self.content_header(id, disclosure, None);
+        let panel = gds_uim::el! {
+            #content_header::frame(false, cx) [
                 $header,
                 ..$expanded.then(|| {
                     let entries = items.iter().map(|item| {
@@ -145,13 +133,26 @@ impl Workspace {
                             border_color: $cx.theme().border;
                             flex;
                             flex_col;
-                            gap_2;
+                            pt_1;
+                            gap_1;
                         } [..entries, $self.render_content_actions(id, id, index, cx)]
                     }
                 }),
             ]
         }
-        .into_any_element()
+        .into_any_element();
+        let images = if expanded {
+            Vec::new()
+        } else {
+            items
+                .iter()
+                .flat_map(|item| match item {
+                    Item::Tool(tool) => self.render_tool_images(&item.id(), tool, index, cx),
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+        gds_uim::el! { #div { flex; flex_col; gap_2; } [$panel, ..images] }.into_any_element()
     }
 
     pub(super) fn render_thought(
@@ -162,7 +163,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let expanded = self.selected.timeline.expanded.contains(id);
-        let key = id.to_owned();
         let streaming = self
             .selected
             .timeline
@@ -173,37 +173,25 @@ impl Workspace {
                     |item| matches!(item, Item::Message { streaming: true, .. } if item.id() == id),
                 )
             });
-        let header = gds_uim::el! {
-            Button($SharedString::from(format!("expand-{id}"))) {
-                ghost;
-                small;
-                w_full;
-                h: $px(crate::ui::CONTROL);
-                text_color: $cx.theme().muted_foreground;
-                accessibility_label: $crate::i18n::tr!("thought-title");
-                on_prepaint: $self.track_content_header(id);
-                icon: $(if expanded { IconName::ChevronDown } else { IconName::ChevronRight });
-            } [
-                    $status::activity_icon(
-                        SharedString::from(format!("thought-status-{id}")),
-                        IconName::Lightbulb,
-                        cx.theme().muted_foreground,
-                        streaming,
-                    ),
-                    $(caption(crate::i18n::tr!("thought-title"), cx)).gds_uim::m! { flex_1; },
-            ].gds_uim::m! {
-                on_click: $cx.listener(move |this, _, _, cx| {
-                    this.toggle_content(&key, index, cx);
-                });
-            }
-        };
+        let leading = status::activity_icon(
+            SharedString::from(format!("thought-status-{id}")),
+            IconName::Lightbulb,
+            cx.theme().muted_foreground,
+            streaming,
+        );
+        let disclosure = self
+            .disclosure(
+                id,
+                crate::i18n::tr!("thought-title"),
+                expanded,
+                index,
+                Some(leading),
+                cx,
+            )
+            .text_color(cx.theme().muted_foreground);
+        let header = self.content_header(id, disclosure, None);
         gds_uim::el! {
-            #div {
-                px_3;
-                py_2;
-                flex;
-                flex_col;
-                gap_1;
+            #content_header::frame(false, cx) {
                 text_color: $cx.theme().muted_foreground;
             } [
                 $header,
@@ -215,6 +203,8 @@ impl Workspace {
                         #div {
                             ml_1p5;
                             pl_3p5;
+                            pt_1;
+                            pb_3;
                             border_l_1;
                             border_color: $cx.theme().border;
                             flex;

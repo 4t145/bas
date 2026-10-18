@@ -1,63 +1,17 @@
 //! Open supported resource references without interpreting Agent URIs as commands.
 
 use super::super::*;
-use url::Url;
 
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
 
-enum Target {
-    Web(Url),
-    File { uri: Url, path: PathBuf },
-}
-
-fn target(uri: &str, local_files: bool) -> Option<Target> {
-    let uri = Url::parse(uri).ok()?;
-    match uri.scheme() {
-        "http" | "https" => Some(Target::Web(uri)),
-        "file" if local_files => {
-            let path = uri.to_file_path().ok()?;
-            Some(Target::File { uri, path })
-        }
-        _ => None,
-    }
-}
-
-fn open(target: &Target, cx: &mut App) {
-    let uri = match target {
-        Target::Web(uri) => uri,
-        Target::File { uri, path } => {
-            let error = match path.try_exists() {
-                Ok(true) => None,
-                Ok(false) => Some(crate::i18n::tr!(
-                    "resource-file-missing",
-                    path = path.display().to_string()
-                )),
-                Err(error) => Some(error.to_string()),
-            };
-            if let Some(error) = error {
-                if let Err(error) = crate::application::open_message(
-                    crate::i18n::tr!("resource-open-error"),
-                    &error,
-                    cx,
-                ) {
-                    tracing::error!(%error, "cannot show resource error");
-                }
-                return;
-            }
-            uri
-        }
-    };
-    cx.open_url(uri.as_str());
-}
-
 pub(super) fn render(
     id: &str,
     resource: &bas::acp::ResourceLink,
-    local_files: bool,
+    links: &links::Context,
     cx: &App,
 ) -> AnyElement {
-    let target = target(&resource.uri, local_files);
+    let target = links.target(&resource.uri).ok();
     let hint = if target.is_some() {
         crate::i18n::tr!("resource-open")
     } else {
@@ -81,7 +35,7 @@ pub(super) fn render(
             #crate::ui::subtle_icon_button($format!("open-resource-{id}"), IconName::ExternalLink, cx) {
                 disabled: $target.is_none(); tooltip: hint;
                 accessibility_label: $crate::i18n::tr!("resource-open-name", name = resource.name.clone());
-                on_click: $move |_, _, cx| { if let Some(target) = &target { open(target, cx); } };
+                on_click: $move |_, _, cx| { if let Some(target) = &target { target.open(cx); } };
             },
             $message_actions::action_button(SharedString::from(id.to_owned()), IconName::Copy, cx) {
                 tooltip: $crate::i18n::tr!("action-copy-resource");

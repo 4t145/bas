@@ -36,7 +36,7 @@ pub(super) struct ReplyPreview {
     documents: Vec<Option<Entity<gpui_kit::component::text::TextViewState>>>,
     images: Vec<Entity<images::Cache>>,
     audio: Entity<crate::audio::Player>,
-    local_files: bool,
+    links: links::Context,
     _changed: Vec<Subscription>,
 }
 
@@ -336,7 +336,7 @@ impl Workspace {
                 message,
                 key,
                 audio: self.audio.clone(),
-                local_files: self.backend.server.ip().is_loopback(),
+                links: self.link_context(),
                 documents,
                 images,
                 _changed: changed,
@@ -508,13 +508,15 @@ impl Render for ReplyPreview {
                             &id,
                             images,
                             state,
-                            markdown::view(state, cx).into_any_element(),
+                            markdown::view(state, cx)
+                                .links(self.links.clone())
+                                .into_any_element(),
                             cx,
                         )
                     }),
                     images,
                     &self.audio,
-                    self.local_files,
+                    &self.links,
                     cx,
                 )
             })

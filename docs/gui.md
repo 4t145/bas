@@ -423,10 +423,15 @@ daemon 后可以重新读取。`BAS_STORAGE=memory` 仅保留本次 daemon 进�
 
 用户输入支持 Markdown 语法高亮，用户消息以细边框区分。消息不显示发送人标题行，复制按钮在悬停时出现。
 消息支持粗体、链接、列表、
-代码块、选择与复制，HTTP(S) 和邮件链接可打开。Markdown 解析状态随消息保留，解析更新后
+代码块、选择与复制，HTTP(S) 和邮件链接可打开。本机 Agent 的回复链接也支持绝对路径、
+相对当前会话工作目录的路径和 `file:` URI；回复预览保留原会话的目录，切换会话不会改变解析位置。
+文件不存在或地址不支持时显示错误，不再静默忽略；远端 Agent 的文件路径不会误开本机文件。
+Markdown 解析状态随消息保留，解析更新后
 重新测量对应行。工具调用在发起位置显示，后续结果原位更新，回答继续追加在工具之后；
 思考过程、工具参数与结果可展开。工具卡按“输入 → 输出”排列，输入默认收起，输出默认展开；
 两者可独立折叠，后续进度更新保留选择。长命令与参数归入输入。
+工具返回的原生 ACP 图片在活动组、工具或输出详情折叠时仍显示在正文区域；展开详情后在原位置显示，
+不重复展示，也不往会话历史中伪造一条 Agent 图片消息。仅依据实际图片内容块，不从工具名称或回答文字猜测图片。
 主动展开或收起暂停末尾跟随，保留当前阅读位置；侧边快捷入口的位置不随内容折叠而重新分布。
 输入对象中的字符串 `command` 按真实换行显示为命令代码，其余字段独立展示为参数，保留原始 ACP 数据。
 执行中的工具、思考、计划及上下文压缩使用旋转状态图标，完成后恢复静态状态；系统减少动态效果设置仍有效。
@@ -435,7 +440,9 @@ daemon 后可以重新读取。`BAS_STORAGE=memory` 仅保留本次 daemon 进�
 侧边快捷定位条对所有刻度（含末尾入口）使用同一规则：仅激活或悬停时加宽、加粗。
 音频、资源引用、工具和压缩卡的标题行共用 `ContentRow`：左侧图标、中间描述、右侧固定尺寸操作。
 该组件只负责布局，不绑定整行点击；各卡片保留自己的播放、展开和打开逻辑。
-ACP 资源引用仅通过右侧“打开”图标打开 HTTP(S) 地址或本机 Agent 的 `file:` 文件；
+思考、工具、活动组和压缩卡进一步共用折叠标题布局：统一箭头、图标、文字列、内容字号行高和内边距。
+无可见边框的思考行仍预留相同边框空间，活动组内相邻标题使用同一紧凑间距，不分别叠加空白。
+ACP 资源引用与 Markdown 链接共用地址解析规则，但仅通过右侧“打开”图标打开；
 点击名称、地址和空白区域不会打开资源，复制地址也不触发打开。
 文件缺失会明确报错；远端文件与不支持的 URI 仅提供地址复制，不误开同路径的本机文件。
 展开的工具、思考和活动组底部提供返回当前内容顶部及收起按钮，收起后回到对应标题；
@@ -814,6 +821,8 @@ nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-pane
 nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel files
 nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel thoughts
 nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel tool-details
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel activity-artifacts --window
+nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel activity-artifacts-collapsed --window
 nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel turn-navigation --window
 nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel turn-navigation-hover --window
 nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel turn-navigation-many

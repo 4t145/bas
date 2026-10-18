@@ -2,6 +2,8 @@ use super::*;
 use gpui_kit::{Bounds, TestAppContext, size, test::TestWindowExt};
 use std::sync::{Arc, Mutex};
 
+mod file_links;
+
 type CodeRegions = Arc<Mutex<HashMap<&'static str, Bounds<Pixels>>>>;
 
 const GLYPH_BACKGROUND: u32 = 0x20f0b0;

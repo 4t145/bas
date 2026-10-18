@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 use super::{navigation as workspace_navigation, *};
 
 mod activity;
+mod activity_layout;
 mod application;
 mod approval;
 mod archive;

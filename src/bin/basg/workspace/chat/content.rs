@@ -107,50 +107,9 @@ impl Workspace {
             markdown,
             &images,
             &self.audio,
-            self.backend.server.ip().is_loopback(),
+            &self.link_context(),
             cx,
         )
-    }
-
-    pub(in crate::workspace) fn disclosure(
-        &self,
-        id: &str,
-        label: &str,
-        expanded: bool,
-        index: usize,
-        icon: Option<IconName>,
-        cx: &mut Context<Self>,
-    ) -> Button {
-        let key = id.to_owned();
-        let line_height = (f32::from(theme::content_font_size(cx)) * 1.4).ceil();
-        gds_uim::el! {
-            Button($SharedString::from(format!("expand-{id}"))) {
-                ghost; small;
-                h: $px((line_height + 8.).max(24.));
-                icon: $(if expanded { IconName::ChevronDown } else { IconName::ChevronRight });
-                on_prepaint: $self.track_content_header(id);
-                accessibility_label: $label.to_owned();
-            } [
-                ..$icon.map(|icon| gds_uim::el! {
-                    Icon($icon) {
-                        size: $px(crate::ui::ICON);
-                        text_color: $cx.theme().muted_foreground;
-                        flex_shrink_0;
-                    }
-                }),
-                #div {
-                    id: $SharedString::from(format!("disclosure-label-{id}"));
-                    test_support; flex_1; min_w_0;
-                    text_size: $theme::content_font_size(cx);
-                    line_height: $px(line_height);
-                    truncate;
-                } [$label.to_owned()],
-            ].gds_uim::m! {
-                on_click: $cx.listener(move |this, _, _, cx| {
-                    this.toggle_content(&key, index, cx);
-                });
-            }
-        }
     }
 
     fn render_tool(
@@ -209,48 +168,39 @@ impl Workspace {
                     &title.split_whitespace().collect::<Vec<_>>().join(" "),
                     expanded,
                     index,
-                    Some(tool_icon(tool.kind)),
+                    Some(status::activity_icon(format!("tool-kind-{id}"), tool_icon(tool.kind), cx.theme().muted_foreground, false)),
                     cx,
                 ) { w_full; },
             ]
         };
-        gds_uim::el! {
-            #div {
-                rounded_md; w_full; min_w_0; border_1;
-                border_color: $cx.theme().border;
-                overflow_hidden;
+        let status = gds_uim::el! {
+            Button($SharedString::from(format!("status-{id}"))) {
+                ghost; xsmall; cursor_default;
+                w: $px(crate::ui::COMPACT_CONTROL); h: $px(crate::ui::COMPACT_CONTROL);
+                p_0; flex_none; tooltip: $label;
             } [
-                #div {
-                    px_2; py_1;
-                    on_prepaint: $self.track_content_header(id);
-                } [
-                    #crate::ui::ContentRow::new(
-                        $format!("tool-row-{id}"),
-                        $crate::ui::tooltip::bounded(
-                            SharedString::from(format!("tool-hint-{id}")),
-                            command,
-                            title.to_owned(),
-                        )
-                    ) [
-                        Button($SharedString::from(format!("status-{id}"))) {
-                            ghost; xsmall; cursor_default;
-                            w: $px(crate::ui::COMPACT_CONTROL);
-                            h: $px(crate::ui::COMPACT_CONTROL);
-                            p_0; flex_none;
-                            tooltip: $label;
-                        } [
-                            $status::activity_icon(
-                                SharedString::from(format!("tool-status-animation-{id}")),
-                                status_icon,
-                                color,
-                                tool.status == ToolCallStatus::InProgress,
-                            ),
-                        ],
-                    ],
-                ],
+                $status::activity_icon(
+                    SharedString::from(format!("tool-status-animation-{id}")),
+                    status_icon, color, tool.status == ToolCallStatus::InProgress,
+                ),
+            ]
+        }
+        .into_any_element();
+        let header = self.content_header(
+            id,
+            crate::ui::tooltip::bounded(
+                SharedString::from(format!("tool-hint-{id}")),
+                command,
+                title.to_owned(),
+            ),
+            Some(status),
+        );
+        let panel = gds_uim::el! {
+            #content_header::frame(true, cx) [
+                $header,
                 ..$expanded.then(|| {
                     gds_uim::el! {
-                        #div { flex; flex_col; gap_3; px_3; pb_3; } [
+                        #div { flex; flex_col; gap_3; px_3; pt_1; pb_3; } [
                             ..$self.tool_has_input(tool).then(|| gds_uim::el! {
                                 #div {
                                     id: $SharedString::from(format!("tool-input-section-{id}"));
@@ -286,7 +236,34 @@ impl Workspace {
                     }
                 }),
             ]
-        }.into_any_element()
+        };
+        let images = if !expanded || !output_open {
+            self.render_tool_images(id, tool, index, cx)
+        } else {
+            Vec::new()
+        };
+        gds_uim::el! { #div { flex; flex_col; gap_2; } [$panel, ..images] }.into_any_element()
+    }
+
+    pub(in crate::workspace) fn render_tool_images(
+        &self,
+        id: &str,
+        tool: &ToolCall,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        tool.content
+            .iter()
+            .enumerate()
+            .filter_map(|(part, content)| {
+                let acp::ToolCallContent::Content(content) = content else {
+                    return None;
+                };
+                matches!(content.content, ContentBlock::Image(_)).then(|| {
+                    self.render_block(format!("{id}-content-{part}"), &content.content, index, cx)
+                })
+            })
+            .collect()
     }
 
     fn tool_has_input(&self, tool: &ToolCall) -> bool {
@@ -674,12 +651,12 @@ pub(in crate::workspace) fn render_content(
     markdown: Option<AnyElement>,
     images: &Entity<images::Cache>,
     audio_player: &Entity<crate::audio::Player>,
-    local_files: bool,
+    links: &links::Context,
     cx: &App,
 ) -> AnyElement {
     match block {
         ContentBlock::Text(_) => gds_uim::el! { #div [..markdown] }.into_any_element(),
-        ContentBlock::ResourceLink(resource) => super::resource::render(&id, resource, local_files, cx),
+        ContentBlock::ResourceLink(resource) => super::resource::render(&id, resource, links, cx),
         ContentBlock::Image(image) => gds_uim::el! {
             #div { flex; flex_col; gap_2; } [
                 $caption(crate::i18n::tr!("resource-image", type = (image.mime_type).to_string()), cx),

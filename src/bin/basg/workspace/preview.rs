@@ -21,6 +21,7 @@ impl Workspace {
             "app-menu" | "thread-menu" => "tool-details",
             "markdown-copy-hover" | "subtle-actions" => "markdown-actions",
             "turn-navigation-hover" => "turn-navigation",
+            "activity-artifacts-collapsed" => "activity-artifacts",
             _ => fixture,
         };
         let (commands, mut requests) = mpsc::unbounded_channel();
@@ -53,6 +54,9 @@ impl Workspace {
         }
         if fixture == "images" {
             session.title = Some("图片显示".into());
+        }
+        if fixture == "activity-artifacts" {
+            session.title = Some("活动与图片展示".into());
         }
         session.acp = Some(
             acp::NewSessionResponse::new(session.id.to_string()).config_options(vec![
@@ -124,6 +128,49 @@ impl Workspace {
         view.selected.stream = StreamState::Live;
         view.selected.error = None;
         let mut conversation = Conversation::new(session.clone());
+        if fixture == "activity-artifacts" {
+            let image = acp::ImageContent::new(
+                base64::engine::general_purpose::STANDARD
+                    .encode(include_bytes!("images/assets/sample.png")),
+                "image/png",
+            );
+            for (index, update) in [
+                acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(
+                    "检查生成图片与思考、工具行的布局。".into(),
+                )),
+                acp::SessionUpdate::ToolCall(
+                    acp::ToolCall::new("generated", "Image generation")
+                        .status(acp::ToolCallStatus::Completed)
+                        .content(vec![acp::ToolCallContent::Content(acp::Content::new(
+                            acp::ContentBlock::Image(image),
+                        ))]),
+                ),
+                acp::SessionUpdate::AgentThoughtChunk(
+                    acp::ContentChunk::new("检查图片。".into()).message_id("first"),
+                ),
+                acp::SessionUpdate::AgentThoughtChunk(
+                    acp::ContentChunk::new("准备结果。".into()).message_id("second"),
+                ),
+                acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                    "图片来自工具返回的内容，折叠活动或工具后仍然可见。".into(),
+                )),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                conversation.apply(Event::new(
+                    session.id,
+                    Cursor::from_raw(index as u64 + 1),
+                    EventKind::Acp(update),
+                ));
+            }
+            if interaction == "activity-artifacts" {
+                view.selected
+                    .timeline
+                    .expanded
+                    .insert("activity-tool-generated".into());
+            }
+        }
         if matches!(fixture, "turn-navigation" | "turn-navigation-many") {
             navigation_turns(
                 &mut conversation,
@@ -398,6 +445,7 @@ impl Workspace {
                 | "multiline"
                 | "multiline-hover"
                 | "tool-details"
+                | "activity-artifacts"
                 | "thread-feedback"
                 | "markdown-actions"
                 | "turn-navigation"

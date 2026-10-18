@@ -62,7 +62,9 @@ impl Workspace {
             &id,
             &images,
             &document.state,
-            view(&document.state, cx).into_any_element(),
+            view(&document.state, cx)
+                .links(self.link_context())
+                .into_any_element(),
             cx,
         )
     }
@@ -71,11 +73,20 @@ impl Workspace {
 #[derive(IntoElement)]
 pub(super) struct MarkdownView {
     state: Entity<TextViewState>,
+    links: links::Context,
 }
 
 pub(super) fn view(state: &Entity<TextViewState>, _: &App) -> MarkdownView {
     MarkdownView {
         state: state.clone(),
+        links: links::Context::default(),
+    }
+}
+
+impl MarkdownView {
+    pub(super) fn links(mut self, links: links::Context) -> Self {
+        self.links = links;
+        self
     }
 }
 
@@ -86,7 +97,9 @@ impl RenderOnce for MarkdownView {
                 id: $("markdown", self.state.entity_id());
                 w_full;
                 min_w_0;
-            } [$text_view(&self.state, cx)]
+            } [$text_view(&self.state, cx).on_link_click(move |url, event, _, cx| {
+                if !event.is_right_click() { self.links.open(url, cx); }
+            })]
         }
     }
 }
@@ -105,14 +118,7 @@ fn text_view(state: &Entity<TextViewState>, cx: &App) -> TextView {
             w_full;
             code_block_actions: $actions::code;
             table_actions: $actions::table;
-            on_link_click: $|url, _, _, cx| on_markdown_link_click(url, cx);
         }
-    }
-}
-
-fn on_markdown_link_click(url: &str, cx: &mut App) {
-    if url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:") {
-        cx.open_url(url);
     }
 }
 

@@ -1,5 +1,6 @@
 use super::*;
 use gpui_kit::{TestAppContext, size, test::TestWindowExt};
+use url::Url;
 
 struct Card {
     uri: String,
@@ -10,7 +11,7 @@ impl Render for Card {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         gds_uim::el! {
             #div { p_4; w_full; } [
-                $super::render("sample", &bas::acp::ResourceLink::new("sample.md", self.uri.clone()), self.local, cx)
+                $super::render("sample", &bas::acp::ResourceLink::new("sample.md", self.uri.clone()), &links::Context::new(None, self.local), cx)
             ]
         }
     }
@@ -80,16 +81,27 @@ fn resource_cards_open_real_links_and_copy_without_opening(cx: &mut TestAppConte
 
 #[test]
 fn remote_files_and_non_openable_schemes_are_not_local_launch_targets() {
-    assert!(target("file:///tmp/sample.md", false).is_none());
+    assert!(
+        links::Context::default()
+            .target("file:///tmp/sample.md")
+            .is_err()
+    );
     for uri in [
         "javascript:alert(1)",
         "data:text/html,<script>",
         "mcp://resource/one",
         "not a URI",
     ] {
-        assert!(target(uri, true).is_none(), "{uri}");
+        assert!(
+            links::Context::new(None, true).target(uri).is_err(),
+            "{uri}"
+        );
     }
-    assert!(target("https://example.com/resource", false).is_some());
+    assert!(
+        links::Context::default()
+            .target("https://example.com/resource")
+            .is_ok()
+    );
 }
 
 #[gpui_kit::test]
@@ -102,7 +114,7 @@ fn missing_resource_files_report_the_problem_without_launching(cx: &mut TestAppC
     let uri = Url::from_file_path(directory.path().join("missing.md")).expect("file URI");
     let message = cx.update(|cx| {
         let before = cx.windows();
-        open(&target(uri.as_str(), true).expect("local target"), cx);
+        links::Context::new(None, true).open(uri.as_str(), cx);
         cx.windows()
             .into_iter()
             .find(|window| !before.contains(window))
