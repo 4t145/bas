@@ -65,25 +65,11 @@ impl Registry {
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(super) enum Filter {
-    #[default]
-    All,
-    Installed,
-    NotInstalled,
-}
-
-impl Filter {
-    fn matches(self, entry: &Entry) -> bool {
-        let installed = entry.spec.is_some()
-            || entry.installed_version.is_some()
-            || matches!(entry.status, Status::Installed | Status::Missing);
-        match self {
-            Self::All => true,
-            Self::Installed => installed,
-            Self::NotInstalled => !installed,
-        }
-    }
+fn offered(entry: &Entry) -> bool {
+    entry.source == Source::Registry
+        && entry.spec.is_none()
+        && entry.installed_version.is_none()
+        && !matches!(entry.status, Status::Installed | Status::Missing)
 }
 
 pub(super) struct Palette {
@@ -91,8 +77,6 @@ pub(super) struct Palette {
     card: Hsla,
     border: Hsla,
     accent: Hsla,
-    action_fill: Hsla,
-    action_foreground: Hsla,
 }
 
 impl Palette {
@@ -102,15 +86,13 @@ impl Palette {
             card: cx.theme().muted,
             border: cx.theme().border,
             accent: cx.theme().primary,
-            action_fill: cx.theme().primary,
-            action_foreground: cx.theme().primary_foreground,
         }
     }
 }
 
 pub(super) struct Operation {
     message: String,
-    busy: bool,
+    pub(super) busy: bool,
     _task: Option<Task<()>>,
 }
 
@@ -267,7 +249,7 @@ impl Agents {
         }
     }
 
-    fn managed_allowed(&self, cx: &App) -> bool {
+    pub(super) fn managed_allowed(&self, cx: &App) -> bool {
         self.registry.editable()
             && !self.dirty(cx)
             && self
@@ -323,6 +305,7 @@ impl Agents {
                         }
                         page.notify_agent_change(None, cx);
                         if let Some(spec) = operation.spec {
+                            page.saved = Some(spec.clone());
                             page.start_check(spec, true, cx);
                         }
                     }
@@ -367,7 +350,7 @@ impl Agents {
         cx.notify();
     }
 
-    fn remove_managed(&mut self, id: String, cx: &mut Context<Self>) {
+    pub(super) fn remove_managed(&mut self, id: String, cx: &mut Context<Self>) {
         if !self.managed_allowed(cx) || self.operations.values().any(|operation| operation.busy) {
             return;
         }
@@ -404,7 +387,11 @@ impl Agents {
         cx.notify();
     }
 
-    fn registry_actions(&self, entry: &Entry, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    pub(super) fn registry_actions(
+        &self,
+        entry: &Entry,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
         let busy = self
             .operations
             .get(&entry.id)
@@ -446,19 +433,13 @@ impl Agents {
                 }
             }.into_any_element())
         };
-        let remove = entry.id.clone();
         gds_uim::el! {
             #div { flex; items_center; gap_1; flex_shrink_0; } [
                 ..$entry.spec.as_ref().filter(|spec| !busy && spec.kind == bas::config::agent::Kind::Acp)
                     .map(|spec| self.check_button(format!("agents-registry-check-{}", entry.id), spec, cx)),
                 ..action,
                 ..$entry.spec.as_ref().filter(|_| !busy).map(|spec| self.account_actions(spec, cx)),
-                ..$bool::then(entry.installed_version.is_some() && !busy, || gds_uim::el! {
-                    #item::action($format!("agents-remove-{}", entry.id), $IconName::Trash, $crate::i18n::tr!("agent-mark-remove")) {
-                        disabled: $(!self.managed_allowed(cx) || any_busy);
-                        on_click: $cx.listener(move |this, _, _, cx| this.remove_managed(remove.clone(), cx));
-                    }
-                }),
+                ..$bool::then(!busy && (entry.installed_version.is_some() || matches!(entry.status, Status::Installed | Status::Missing)), || self.remove_button(&entry.id, cx)),
             ]
         }.into_any_element()
     }
@@ -500,25 +481,13 @@ impl Agents {
     }
 
     fn registry_card(&self, entry: &Entry, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        let content = entry
-            .spec
-            .as_ref()
-            .filter(|spec| self.authentications.contains_key(&spec.id))
-            .map(|spec| {
-                let index = self
-                    .display_catalog()
-                    .iter()
-                    .position(|configured| configured == spec)
-                    .unwrap_or(0);
-                self.authentication_content(spec, index, cx)
-            });
         let card = item::Item {
             entry: entry.clone(),
             status: self.item_status(entry),
             status_hint: status_label(entry).into(),
             feedback: self.item_feedback(entry),
             actions: self.registry_actions(entry, cx),
-            content,
+            content: None,
         };
         gds_uim::el! {
             #div {
@@ -536,33 +505,20 @@ impl Agents {
                 #div { flex; items_center; gap_3; } [
                     #div { text_size: $crate::ui::TITLE; } [ $crate::i18n::tr!("catalog-title") ],
                     Button("agents-registry-learn-more") {
-                        ghost; xsmall; label: $crate::i18n::tr!("action-learn-more");
+                        ghost; xsmall; label: $crate::i18n::tr!("agent-source-registry");
                         text_color: $palette.accent; icon: $IconName::ExternalLink;
                         on_click: $cx.listener(Self::on_registry_learn_more);
                     },
                 ],
+                Button("agents-add-custom") {
+                    small; icon: IconName::Plus; label: $crate::i18n::tr!("agent-add-custom");
+                    disabled: $(self.document.is_none() || !self.registry.editable() || self.dirty(cx));
+                    on_click: $cx.listener(Self::on_add_custom);
+                },
             ]
         };
-        let filters = [
-            ("agents-filter-all", crate::i18n::tr!("filter-all"), Filter::All),
-            ("agents-filter-installed", crate::i18n::tr!("agent-installed"), Filter::Installed),
-            ("agents-filter-not-installed", crate::i18n::tr!("agent-not-installed"), Filter::NotInstalled),
-        ].map(|(id, label, filter)| {
-            let selected = self.registry_filter == filter;
-            gds_uim::el! {
-                Button($id) {
-                    label: $label; selected: $selected;
-                    @selected => {
-                        bg: $palette.action_fill; text_color: $palette.action_foreground;
-                        border_color: $palette.action_fill;
-                    };
-                    on_click: $cx.listener(move |this, _, _, cx| this.set_registry_filter(filter, cx));
-                }
-            }
-        }).map(Button::into_component);
         let toolbar = gds_uim::el! {
-            #div { flex; items_center; justify_between; gap_3; } [
-                ButtonGroup("agents-registry-filters") { outline; small; } [ ..filters ],
+            #div { flex; items_center; justify_end; gap_3; } [
                 Button("agents-registry-refresh") {
                     ghost; xsmall; icon: $IconName::RefreshCw;
                     label: $(if self.registry.loading() {
@@ -602,11 +558,6 @@ impl Agents {
         cx.open_url(REGISTRY_URL);
     }
 
-    fn set_registry_filter(&mut self, filter: Filter, cx: &mut Context<Self>) {
-        self.registry_filter = filter;
-        cx.notify();
-    }
-
     fn on_refresh_registry(
         &mut self,
         _: &gpui_kit::ClickEvent,
@@ -618,22 +569,27 @@ impl Agents {
 
     pub(super) fn registry_content(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let query = format!("{} {}", self.query, self.registry_search.read(cx).value());
-        let entries: Vec<_> = self
-            .registry
-            .catalog
-            .as_ref()
-            .map(|catalog| {
-                catalog
-                    .entries
-                    .iter()
-                    .filter(|entry| {
-                        (entry.source == Source::Registry || !self.registry.editable())
-                            && self.registry_filter.matches(entry)
-                            && matches_query(entry, &query)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let entries: Vec<_> =
+            self.registry
+                .catalog
+                .as_ref()
+                .map(|catalog| {
+                    catalog
+                        .entries
+                        .iter()
+                        .filter(|entry| {
+                            offered(entry)
+                                && !(self.registry.editable()
+                                    && self.document.as_ref().is_some_and(|document| {
+                                        document.settings.daemon.agents.iter().any(|registration| {
+                                            registration.id().as_str() == entry.id
+                                        })
+                                    }))
+                                && matches_query(entry, &query)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
         let warning = self
             .registry
             .catalog

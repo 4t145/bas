@@ -100,6 +100,28 @@ pub(crate) fn open_agent(agent: &str, cx: &mut App) -> anyhow::Result<WindowHand
 }
 
 /// # Errors
+/// Returns an error if the settings window cannot be opened or updated.
+pub(crate) fn open_agent_management(
+    agent: &str,
+    cx: &mut App,
+) -> anyhow::Result<WindowHandle<Root>> {
+    let handle = open(cx)?;
+    let settings = cx.global::<OpenWindow>().settings.clone();
+    handle.update(cx, |_, window, cx| {
+        settings.update(cx, |settings, cx| {
+            let index = settings
+                .agents
+                .read(cx)
+                .configuration_entries()
+                .iter()
+                .position(|entry| entry.id == agent);
+            settings.select_agents(index, window, cx);
+        })
+    })??;
+    Ok(handle)
+}
+
+/// # Errors
 /// Returns an error if the independent agent onboarding window cannot be opened.
 pub(crate) fn open_catalog(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     super::agents::window::open_catalog(cx)

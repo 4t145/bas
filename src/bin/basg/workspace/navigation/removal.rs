@@ -26,6 +26,7 @@ impl Workspace {
                 path = groups::path_label(directory.as_deref())
             ),
             confirm_label: crate::i18n::tr!("workspace-remove").into(),
+            destructive: true,
         };
         if let Err(error) = crate::application::open_confirmation(
             request,

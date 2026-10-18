@@ -77,6 +77,7 @@ pub(crate) struct Confirmation {
     pub title: String,
     pub message: String,
     pub confirm_label: String,
+    pub destructive: bool,
 }
 
 /// Shows an error independently of any pending confirmation.
@@ -101,6 +102,7 @@ pub(crate) fn open_message(
             title: title.into(),
             message: message.into(),
             confirm_label: String::new(),
+            destructive: false,
             on_confirm: None,
             skip_delete_reminder: None,
         },
@@ -124,6 +126,7 @@ pub(crate) fn open_confirmation(
             title: request.title,
             message: request.message,
             confirm_label: request.confirm_label,
+            destructive: request.destructive,
             on_confirm: Some(Box::new(on_confirm)),
             skip_delete_reminder: None,
         },
@@ -148,6 +151,7 @@ pub(crate) fn open_delete_confirmation(
             title: request.title,
             message: request.message,
             confirm_label: request.confirm_label,
+            destructive: request.destructive,
             on_confirm: Some(Box::new(on_confirm)),
             skip_delete_reminder: Some(false),
         },
@@ -249,6 +253,7 @@ struct Host {
     title: String,
     message: String,
     confirm_label: String,
+    destructive: bool,
     on_confirm: Option<ConfirmCallback>,
     skip_delete_reminder: Option<bool>,
 }
@@ -260,6 +265,7 @@ impl Host {
             title: kind.title().into(),
             message: String::new(),
             confirm_label: String::new(),
+            destructive: false,
             on_confirm: None,
             skip_delete_reminder: None,
         }
@@ -324,6 +330,7 @@ impl Host {
                 ..$confirmation.then(|| el! {
                     #crate::ui::action_button("message-confirm") {
                         label: $self.confirm_label.clone();
+                        @$self.destructive => { text_color: $cx.theme().danger; };
                         on_click: $cx.listener(Self::on_confirm);
                     }
                 }),

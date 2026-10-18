@@ -4,9 +4,11 @@ use super::action_button as button;
 use crate::ui::Button;
 mod actions;
 mod authentication;
+mod feedback;
 mod item;
 mod logout;
 mod registry;
+mod removal;
 mod status;
 pub(super) mod window;
 
@@ -157,6 +159,7 @@ pub(super) struct Agents {
     /// Keep native draft inputs and their subscriptions alive across page navigation.
     form: Form<Entity<InputState>>,
     message: String,
+    saved: Option<AgentSpec>,
     registration_errors: String,
     /// Section the sidebar asked to reveal; consumed by the next render.
     pub(super) scroll_to: Option<usize>,
@@ -171,7 +174,6 @@ pub(super) struct Agents {
     operations: HashMap<String, registry::Operation>,
     logouts: HashMap<bas::model::AgentId, logout::State>,
     registry_search: Entity<InputState>,
-    registry_filter: registry::Filter,
     pub(super) query: String,
     _subscriptions: Vec<Subscription>,
 }
@@ -266,6 +268,7 @@ impl Agents {
             editor: Editor::Idle,
             form,
             message: String::new(),
+            saved: None,
             registration_errors: String::new(),
             scroll_to: None,
             scroll: ScrollHandle::new(),
@@ -279,7 +282,6 @@ impl Agents {
             operations: HashMap::new(),
             logouts: HashMap::new(),
             registry_search,
-            registry_filter: registry::Filter::All,
             query: String::new(),
             _subscriptions: subscriptions,
         };
@@ -321,32 +323,75 @@ impl Agents {
     }
 
     pub(super) fn display_catalog(&self) -> Vec<AgentSpec> {
-        if !self.registry.editable() {
-            return self
-                .registry
-                .catalog
-                .as_ref()
-                .map(|catalog| {
-                    catalog
-                        .entries
-                        .iter()
-                        .filter_map(|entry| entry.spec.clone())
-                        .collect()
+        self.configuration_entries()
+            .into_iter()
+            .filter_map(|entry| entry.spec)
+            .collect()
+    }
+
+    pub(super) fn configuration_entries(&self) -> Vec<bas::management::Entry> {
+        use bas::management::{Entry, Source, Status};
+        let mut entries: Vec<_> = if self.registry.editable() {
+            self.document
+                .iter()
+                .flat_map(|document| &document.settings.daemon.agents)
+                .map(|registration| match registration.resolve() {
+                    Ok(spec) => self.configured_entry(&spec),
+                    Err(error) => {
+                        let mut entry = self
+                            .registry
+                            .catalog
+                            .as_ref()
+                            .and_then(|catalog| {
+                                catalog
+                                    .entries
+                                    .iter()
+                                    .find(|entry| entry.id == registration.id().as_str())
+                            })
+                            .cloned()
+                            .unwrap_or_else(|| Entry {
+                                id: registration.id().to_string(),
+                                name: registration.id().to_string(),
+                                description: String::new(),
+                                version: String::new(),
+                                repository: String::new(),
+                                license: String::new(),
+                                license_url: String::new(),
+                                icon: String::new(),
+                                installed_version: None,
+                                source: Source::Registry,
+                                status: Status::Missing,
+                                message: String::new(),
+                                spec: None,
+                            });
+                        entry.source = Source::Registry;
+                        entry.status = Status::Missing;
+                        entry.spec = None;
+                        entry.message = error.to_string();
+                        entry
+                    }
                 })
-                .unwrap_or_default();
-        }
-        self.document
-            .as_ref()
-            .map(|document| {
-                document
-                    .settings
-                    .daemon
-                    .agents
-                    .iter()
-                    .filter_map(|registration| registration.resolve().ok())
-                    .collect()
-            })
-            .unwrap_or_default()
+                .collect()
+        } else {
+            self.registry
+                .catalog
+                .iter()
+                .flat_map(|catalog| &catalog.entries)
+                .filter(|entry| {
+                    entry.source != Source::Registry
+                        || entry.spec.is_some()
+                        || entry.installed_version.is_some()
+                        || matches!(entry.status, Status::Installed | Status::Missing)
+                })
+                .cloned()
+                .collect()
+        };
+        entries.sort_by_key(|entry| match entry.source {
+            bas::management::Source::Registry => 0,
+            bas::management::Source::Custom => 1,
+            bas::management::Source::Embedded => 2,
+        });
+        entries
     }
 
     pub(super) fn open_installation(&mut self, cx: &mut Context<Self>) {
@@ -385,9 +430,9 @@ impl Agents {
         });
         if let Some(managed) = managed {
             let index = self
-                .display_catalog()
+                .configuration_entries()
                 .iter()
-                .position(|spec| spec.id.as_str() == id)
+                .position(|entry| entry.id == id)
                 .unwrap_or(0);
             self.scroll_to = Some(index);
             if self.registry.catalog.is_none() && !self.registry.editable() {
@@ -412,9 +457,9 @@ impl Agents {
         }) {
             let spec = entry.spec.clone();
             let index = self
-                .display_catalog()
+                .configuration_entries()
                 .iter()
-                .position(|spec| spec.id.as_str() == id)
+                .position(|entry| entry.id == id)
                 .unwrap_or(0);
             self.scroll_to = Some(index);
             if let Some(spec) = spec {
@@ -424,13 +469,15 @@ impl Agents {
             return Some(index);
         }
         let entry = self
-            .display_catalog()
+            .configuration_entries()
             .into_iter()
             .enumerate()
-            .find(|(_, spec)| spec.id.as_str() == id);
-        if let Some((index, spec)) = entry {
+            .find(|(_, entry)| entry.id == id);
+        if let Some((index, entry)) = entry {
             self.scroll_to = Some(index);
-            self.start_check(spec, true, cx);
+            if let Some(spec) = entry.spec {
+                self.start_check(spec, true, cx);
+            }
             Some(index)
         } else if self.registry.awaiting_profile() {
             self.pending_reveal = Some(id.to_owned());
@@ -591,12 +638,12 @@ impl Agents {
 
     /// Sidebar entries contain configuration only.
     pub(super) fn sections(&self) -> Vec<Section> {
-        self.display_catalog()
+        self.configuration_entries()
             .iter()
             .enumerate()
-            .map(|(index, spec)| Section {
+            .map(|(index, entry)| Section {
                 id: format!("settings-agent-{index}"),
-                title: spec.id.to_string(),
+                title: entry.id.clone(),
             })
             .collect()
     }
@@ -658,6 +705,7 @@ impl Agents {
         } else if self.dirty(cx) {
             self.message = crate::i18n::tr!("agent-save-before-switch").into();
         } else {
+            self.saved = None;
             let form = values(&spec);
             for (input, value) in self.form.fields().into_iter().zip(form.fields()) {
                 input.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
@@ -666,11 +714,11 @@ impl Agents {
                 selected
                     .as_ref()
                     .and_then(|id| {
-                        self.display_catalog()
+                        self.configuration_entries()
                             .iter()
-                            .position(|spec| &spec.id == id)
+                            .position(|entry| entry.id == id.as_str())
                     })
-                    .unwrap_or_else(|| self.display_catalog().len()),
+                    .unwrap_or_else(|| self.configuration_entries().len()),
             );
             self.editor = if selected.is_some() {
                 Editor::Edit {
@@ -760,7 +808,8 @@ impl Agents {
         match result {
             Ok(()) => {
                 self.editor = Editor::Idle;
-                self.message = crate::i18n::tr!("settings-saved").into();
+                self.saved = None;
+                self.message.clear();
                 self.notify_agent_change(None, cx);
                 let catalog = self.catalog();
                 if let Some(document) = &self.document {
@@ -776,6 +825,7 @@ impl Agents {
                 if !deleting
                     && let Some(spec) = catalog.into_iter().find(|spec| spec.id == saved_id)
                 {
+                    self.saved = Some(spec.clone());
                     if connected {
                         // Changing an advanced value does not change the checked transport.
                         if let Some(check) = self.checks.get_mut(&spec.id) {
@@ -804,6 +854,39 @@ fn summary(spec: &AgentSpec) -> String {
 }
 
 impl Agents {
+    fn source(&self, spec: &AgentSpec) -> bas::management::Source {
+        use bas::management::Source;
+        if spec.kind == Kind::Embedded {
+            return Source::Embedded;
+        }
+        if self.registry.editable()
+            && let Some(registration) = self.document.as_ref().and_then(|document| {
+                document
+                    .settings
+                    .daemon
+                    .agents
+                    .iter()
+                    .find(|r| r.id() == &spec.id)
+            })
+        {
+            return if registration.managed().is_some() {
+                Source::Registry
+            } else {
+                Source::Custom
+            };
+        }
+        self.registry
+            .catalog
+            .as_ref()
+            .and_then(|catalog| {
+                catalog
+                    .entries
+                    .iter()
+                    .find(|entry| entry.id == spec.id.as_str())
+            })
+            .map_or(Source::Custom, |entry| entry.source)
+    }
+
     fn configured_entry(&self, spec: &AgentSpec) -> bas::management::Entry {
         if let Some(entry) = self.registry.catalog.as_ref().and_then(|catalog| {
             catalog
@@ -813,6 +896,7 @@ impl Agents {
         }) {
             let mut entry = entry.clone();
             entry.spec = Some(spec.clone());
+            entry.source = self.source(spec);
             return entry;
         }
         bas::management::Entry {
@@ -825,11 +909,7 @@ impl Agents {
             license_url: String::new(),
             icon: String::new(),
             installed_version: None,
-            source: if spec.kind == Kind::Embedded {
-                bas::management::Source::Embedded
-            } else {
-                bas::management::Source::Custom
-            },
+            source: self.source(spec),
             status: bas::management::Status::Installed,
             message: String::new(),
             spec: Some(spec.clone()),
@@ -839,11 +919,18 @@ impl Agents {
     fn configuration_actions(
         &self,
         index: usize,
-        spec: &AgentSpec,
+        entry: &bas::management::Entry,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
+        if entry.source == bas::management::Source::Registry || entry.spec.is_none() {
+            return self.registry_actions(entry, cx);
+        }
+        let spec = entry
+            .spec
+            .as_ref()
+            .expect("configured custom or embedded agent");
         let edit = spec.clone();
-        let custom = self.catalog().iter().any(|saved| saved.id == spec.id);
+        let custom = entry.source == bas::management::Source::Custom;
         gds_uim::el! {
             #div { flex; items_center; gap_1; } [
                 ..$bool::then(spec.kind == Kind::Acp, || self.check_button(format!("agents-check-{index}"), spec, cx)),
@@ -854,6 +941,7 @@ impl Agents {
                         this.edit(edit.clone(), Some(edit.id.clone()), window, cx)
                     });
                 } }),
+                ..$custom.then(|| self.remove_button(spec.id.as_str(), cx)),
             ]
         }.into_any_element()
     }
@@ -861,23 +949,23 @@ impl Agents {
     fn configuration_card(
         &self,
         index: usize,
-        spec: &AgentSpec,
+        entry: bas::management::Entry,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        let entry = self.configured_entry(spec);
-        let editing = self.registry.editable() && self.editor.selected() == Some(&spec.id);
+        let spec = entry.spec.as_ref();
+        let editing = self.registry.editable()
+            && spec.is_some_and(|spec| self.editor.selected() == Some(&spec.id));
         let content = if editing {
             Some(self.form_content(cx))
-        } else if self.authentications.contains_key(&spec.id) {
-            Some(self.authentication_content(spec, index, cx))
         } else {
-            None
+            spec.filter(|spec| self.authentications.contains_key(&spec.id))
+                .map(|spec| self.authentication_content(spec, index, cx))
         };
         let card = item::Item {
-            status: self.item_status(&entry),
-            status_hint: self.item_status(&entry).unwrap_or_default(),
+            status: None,
+            status_hint: String::new(),
             feedback: self.item_feedback(&entry),
-            actions: self.configuration_actions(index, spec, cx),
+            actions: self.configuration_actions(index, &entry, cx),
             entry,
             content,
         };
@@ -890,13 +978,10 @@ impl Agents {
         .into_any_element()
     }
 
-    fn back_button(&self, cx: &mut Context<Self>) -> crate::ui::Button {
-        item::action(
-            "agents-cancel",
-            gpui_kit::assets::IconName::ArrowLeft,
-            crate::i18n::tr!("agent-back"),
-        )
-        .on_click(cx.listener(Self::on_cancel_edit))
+    fn cancel_button(&self, cx: &mut Context<Self>) -> crate::ui::Button {
+        button("agents-cancel")
+            .label(crate::i18n::tr!("action-cancel"))
+            .on_click(cx.listener(Self::on_cancel_edit))
     }
 
     fn form_content(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
@@ -907,31 +992,17 @@ impl Agents {
         let connected = self.draft_connected(cx);
         let actions = gds_uim::el! {
             #div { id: "agents-form-actions"; test_support; w_full; flex; items_center; gap_2; } [
-                ..$self.editor.selected().is_some().then(|| gds_uim::el! {
-                    #item::action("agents-delete", $gpui_kit::assets::IconName::Trash, $crate::i18n::tr!("agent-mark-remove")) {
-                        disabled: $self.editor.deleting();
-                        on_click: $cx.listener(Self::on_mark_delete);
-                    }
-                }),
                 #div { flex_1; },
+                $self.cancel_button(cx),
                 $button("agents-save") {
                     disabled: $(!self.registry.editable() || self.document.is_none());
-                    label: $(if self.editor.deleting() {
-                        crate::i18n::tr!("agent-remove-confirm")
-                    } else if connected {
-                        crate::i18n::tr!("agent-save-config")
-                    } else {
-                        crate::i18n::tr!("agent-save-check")
-                    });
+                    label: $crate::i18n::tr!("agent-save");
                     on_click: $cx.listener(Self::on_save);
                 },
             ]
         };
         gds_uim::el! {
             #div { flex; flex_col; gap_4; } [
-                ..$self.editor.selected().is_some().then(|| gds_uim::el! {
-                    #div { flex; items_start; } [$self.back_button(cx)]
-                }),
                 ..$bool::then(!embedded && !connected, || gds_uim::el! {
                     #div {
                         id: "agents-connection-help"; test_support;
@@ -951,6 +1022,9 @@ impl Agents {
                         $crate::i18n::tr!("agent-remove-confirm-help")
                     ]
                 }),
+                ..$bool::then(!self.message.is_empty(), || gds_uim::el! {
+                    #div { id: "agents-form-message"; test_support; text_size: crate::ui::SMALL; text_color: $cx.theme().danger; } [$self.message.clone()]
+                }),
                 $actions,
             ]
         }.into_any_element()
@@ -968,11 +1042,6 @@ impl Agents {
             self.apply_catalog(catalog, service.local(), cx);
         }
         self.message = crate::i18n::tr!("agent-edit-cancelled").into();
-        cx.notify();
-    }
-
-    fn on_mark_delete(&mut self, _: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.editor.mark_delete();
         cx.notify();
     }
 
@@ -1019,13 +1088,9 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         self.rendering_window = Some(window.window_handle());
-        let installation_open =
-            window::current(cx).is_some_and(|handle| cx.windows().contains(&handle.into()));
-        if page == Page::Onboarding || !installation_open {
-            self.ensure_authentication_panels(window, cx);
-        }
+        self.ensure_authentication_panels(page, window, cx);
         let dirty = self.dirty(cx);
-        let catalog = self.display_catalog();
+        let catalog = self.configuration_entries();
         let drafting = matches!(self.editor, Editor::Add(_));
         let section_count = if page == Page::Onboarding {
             2
@@ -1041,7 +1106,6 @@ impl Agents {
         let header = if page == Page::Onboarding && drafting {
             gds_uim::el! {
                 #div { flex; items_center; gap_2; } [
-                    $self.back_button(cx),
                     #div { text_size: $crate::ui::HEADING; } [
                         $crate::i18n::tr!("agent-add-custom")
                     ],
@@ -1081,24 +1145,33 @@ impl Agents {
             if drafting {
                 content.push(self.form_content(cx));
             } else {
+                if let Some((index, spec)) = catalog
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, entry)| entry.spec.as_ref().map(|spec| (index, spec)))
+                    .find(|(_, spec)| {
+                        self.saved.as_ref() == Some(spec)
+                            && self.authentications.contains_key(&spec.id)
+                    })
+                {
+                    content.push(self.authentication_content(spec, index, cx));
+                }
                 content.push(self.registry_content(cx));
-                content.push(
-                    gds_uim::el! {
-                        #div { flex; justify_end; } [
-                            Button("agents-add-custom") {
-                                ghost; small; label: $crate::i18n::tr!("agent-add-custom");
-                                icon: gpui_kit::assets::IconName::Plus;
-                                disabled: $(self.document.is_none() || !self.registry.editable());
-                                on_click: $cx.listener(Self::on_add_custom);
-                            },
-                        ]
-                    }
-                    .into_any_element(),
-                );
             }
         } else {
-            for (index, spec) in catalog.iter().enumerate() {
-                content.push(self.configuration_card(index, spec, cx));
+            let mut previous = None;
+            for (index, entry) in catalog.into_iter().enumerate() {
+                let source = entry.source;
+                let heading = (previous != Some(source)).then(|| {
+                    let (id, label) = match source {
+                        bas::management::Source::Registry => ("agents-source-registry", crate::i18n::tr!("agent-source-registry")),
+                        bas::management::Source::Custom => ("agents-source-custom", crate::i18n::tr!("agent-source-custom")),
+                        bas::management::Source::Embedded => ("agents-source-embedded", crate::i18n::tr!("agent-builtin")),
+                    };
+                    gds_uim::el! { #div { id: id; test_support; role: gpui_kit::Role::Label; aria_label: label; py_2; text_size: crate::ui::HEADING; } [$label] }
+                });
+                previous = Some(source);
+                content.push(gds_uim::el! { #div { flex; flex_col; gap_2; } [..heading, $self.configuration_card(index, entry, cx)] }.into_any_element());
             }
         }
         let heading = gds_uim::el! {
@@ -1109,12 +1182,13 @@ impl Agents {
                         $crate::i18n::tr!("settings-unsaved")
                     ]
                 }),
-                ..$bool::then(!self.message.is_empty(), || gds_uim::el! {
+                ..$bool::then(!self.message.is_empty() && self.editor.spec().is_none(), || gds_uim::el! {
                     #div {
                         id: "agents-message"; test_support; text_size: $crate::ui::SMALL;
                         text_color: $cx.theme().muted_foreground;
                     } [ $self.message.clone() ]
                 }),
+                ..$self.saved_feedback(cx),
                 ..$bool::then(!self.registration_errors.is_empty(), || gds_uim::el! {
                     #div { id: "agents-registration-errors"; test_support; text_size: $crate::ui::SMALL; } [
                         $self.registration_errors.clone()

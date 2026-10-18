@@ -34,6 +34,43 @@ Nix 只将已编译程序、桌面入口和图形运行库封装为不可变包�
 卸载开发版使用 `nix profile remove basg-dev`，不会卸载正式版。
 正式发布继续使用下述 Nix release 安装流程。
 
+### 安装独立 ACP 测试 Agent
+
+```sh
+make install-acp-test-agent
+acp-test-agent --help
+```
+
+此目标只安装 `acp-test-agent`，使用它自己的锁文件和 Rust 工具链，在 Nix 构建中执行其测试，
+不构建 BasG、不安装服务，也不修改 Agent 配置。它不包含在 `make install` 的默认安装集合中。
+同样支持 `NIX_PROFILE_OPTIONS`；卸载使用 `nix profile remove acp-test-agent`。
+
+安装后，在 BasG 的“添加自定义智能体”中填写：
+
+- ID：`acp-test-agent`
+- 程序：安装输出中的 `/nix/store/.../bin/acp-test-agent` 绝对路径
+- 参数（JSON）：`["--protocol", "v1"]`
+
+也可用 `readlink -f "$(command -v acp-test-agent)"` 查询程序路径。固定 store 路径不依赖
+已运行 daemon 的 PATH；升级后应更新自定义 Agent 的程序路径。
+测试 Agent 由客户端按需以 stdio 启动，不应当单独作为常驻 systemd 服务运行。
+
+新建会话后发送 `/help`。建议先用 `/rich` 测试图片／音频等内容、`/tool` 测试工具卡、
+`/plan` 测试计划、`/permission` 和 `/elicit` 测试交互、`/sleep 10000` 测试取消。
+它目前没有 subagent 演示，不能用来验证子 Agent 角标；`/terminal` 会说明当前客户端
+未声明终端执行能力。命令与限制见 [测试 Agent 文档](../acp-test-agent/README.md)。
+`/rich` 的现有音频样本是 0 帧 WAV，占位内容可用于检查协议传输和音频卡片，
+不能用来验收实际发声；播放器听音验收需要另行提供含有效采样的音频。
+
+NixOS 声明式安装可添加到 `environment.systemPackages`：
+
+```nix
+inputs.bas.packages.${pkgs.stdenv.hostPlatform.system}.acp-test-agent
+```
+
+Home Manager 则放入 `home.packages`。Flake 同时提供 `#acp-test-agent` package、app 和 check，
+支持 `x86_64-linux`、`aarch64-linux`；测试工具包不依赖主项目的 GUI 或子模块。
+
 `make install-bas` 只安装 release 版 `bas` 和 `bast`，不安装、更新或卸载任何外部
 ACP 适配器及其 CLI，也不创建或修改用户配置。外部后端可通过运行中的 daemon 按需从 ACP Registry 安装，或由用户按官方文档独立管理。
 未配置后端时只提供 `embedded` echo 后端。

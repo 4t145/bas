@@ -30,7 +30,7 @@ fn click(window: &mut Window, id: &'static str, cx: &mut App) {
         if target.visible()
             && ((bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom())
                 || id == "agents-reload"
-                || id == "agents-cancel")
+                || id == "agents-add-custom")
         {
             window.click(id, cx);
             return;
@@ -98,18 +98,14 @@ fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
             window.try_find("agents-delete").is_none(),
             "unsaved agents cannot be deleted"
         );
-        let back = window.find("agents-cancel").bounds();
+        let cancel = window.find("agents-cancel").bounds();
         let form = window.find("agents-id").bounds();
         let save = window.find("agents-save").bounds();
         let actions = window.find("agents-form-actions").bounds();
-        assert!(back.bottom() < form.top());
-        assert_eq!(
-            back.size,
-            size(
-                px(crate::ui::COMPACT_CONTROL),
-                px(crate::ui::COMPACT_CONTROL)
-            )
-        );
+        assert!(cancel.top() > form.bottom());
+        assert_eq!(cancel.top(), save.top());
+        assert_eq!(cancel.size.height, save.size.height);
+        assert!(cancel.right() < save.left());
         assert_eq!(save.right(), actions.right());
         assert!(
             view.read(cx).candidate(cx).is_err(),
@@ -161,25 +157,32 @@ fn custom_acp_save_preserves_other_settings(cx: &mut TestAppContext) {
         "original"
     );
     assert_eq!(saved.settings.appearance, initial_settings.appearance);
-    cx.update_window(window.into(), |_, window, cx| {
-        click(window, "agents-edit-1", cx);
-        click(window, "agents-delete", cx);
+    let confirmation = cx
+        .update_window(window.into(), |_, window, cx| {
+            let before = cx.windows();
+            click(window, "agents-remove-custom", cx);
+            // Removing the saved agent requires a separate explicit confirmation.
+            assert_eq!(
+                Store::at(path.clone())
+                    .load()
+                    .expect("read before confirmation")
+                    .settings
+                    .daemon
+                    .agents
+                    .len(),
+                2
+            );
+            cx.windows()
+                .into_iter()
+                .find(|window| !before.contains(window))
+                .expect("confirmation")
+        })
+        .expect("request removal");
+    cx.update_window(confirmation, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("agents-save").label(), Some("移除配置"));
-        // Deletion, like command editing, requires explicit saving.
-        assert_eq!(
-            Store::at(path.clone())
-                .load()
-                .expect("read before deletion save")
-                .settings
-                .daemon
-                .agents
-                .len(),
-            2
-        );
-        click(window, "agents-save", cx);
+        window.click("message-confirm", cx);
     })
-    .expect("delete selected agent through UI");
+    .expect("confirm removal");
     let saved = Store::at(path.clone()).load().expect("load saved deletion");
     assert_eq!(saved.settings.daemon.agents.len(), 1);
     assert_eq!(
@@ -228,7 +231,7 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
     })
     .expect("reject invalid draft in installation window");
     cx.update_window(window.into(), |_, window, cx| {
-        click(window, "agents-edit-1", cx);
+        click(window, "agents-edit-0", cx);
         click(window, "agents-args", cx);
         window.press("ctrl-a", cx);
         window.input("[\"edited argument\"]", cx);
@@ -276,15 +279,15 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
     .expect("cancel installation draft");
     cx.update_window(window.into(), |_, window, cx| {
         click(window, "agents-reload", cx);
-        click(window, "agents-edit-0", cx);
-        click(window, "agents-delete", cx);
-        click(window, "agents-save", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("agents-edit-0").is_none());
+        assert!(window.try_find("agents-remove-embedded").is_none());
         assert_eq!(
-            std::fs::read(&path).expect("read rejected empty catalog bytes"),
+            std::fs::read(&path).expect("embedded is read-only"),
             external_bytes
         );
     })
-    .expect("preserve conflict draft and reject empty catalog through UI");
+    .expect("preserve conflict draft and keep embedded read-only");
 }
 
 #[gpui_kit::test]
@@ -398,6 +401,11 @@ fn managed_entries_have_no_advanced_editor_and_custom_edits_preserve_references(
         window.render_frame(cx);
         assert!(window.try_find("agents-edit-0").is_none());
         assert!(window.try_find("agents-delete").is_none());
+        let registry = window.find("agents-source-registry").bounds();
+        let custom = window.find("agents-source-custom").bounds();
+        assert!(registry.bottom() < window.find("agents-card-0").bounds().top());
+        assert!(custom.top() > window.find("agents-card-0").bounds().bottom());
+        assert!(custom.bottom() < window.find("agents-card-1").bounds().top());
         click(window, "agents-edit-1", cx);
         fill(window, "agents-program", "/custom/edited", cx);
         click(window, "agents-save", cx);
@@ -427,10 +435,22 @@ fn managed_entries_have_no_advanced_editor_and_custom_edits_preserve_references(
         click(window, "agents-cancel", cx);
     })
     .expect("reject custom collision with managed registration");
-    cx.update_window(window.into(), |_, window, cx| {
-        click(window, "agents-edit-1", cx);
-        click(window, "agents-delete", cx);
-        click(window, "agents-save", cx);
+    let confirmation = cx
+        .update_window(window.into(), |_, window, cx| {
+            let before = cx.windows();
+            click(window, "agents-remove-custom", cx);
+            cx.windows()
+                .into_iter()
+                .find(|window| !before.contains(window))
+                .expect("confirmation")
+        })
+        .expect("request custom removal");
+    cx.update_window(confirmation, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("message-confirm", cx);
+    })
+    .expect("confirm custom removal");
+    cx.update_window(window.into(), |_, _, cx| {
         assert_eq!(
             store.load().expect("deleted custom").settings.daemon.agents,
             vec![managed.clone()]

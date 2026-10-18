@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${1:-} = -h || ${1:-} = --help ]]; then
+    cat <<'USAGE'
+Usage: scripts/install-acp-test-agent [nix profile add options...]
+Build, test and install the standalone ACP test agent into your Nix profile.
+Does not install Bas/BasG, restart services, or change Agent configuration.
+Includes untracked source files; excludes .env files and build outputs.
+USAGE
+    exit 0
+fi
+
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+command -v nix >/dev/null || { echo 'Nix with flakes enabled is required.' >&2; exit 1; }
+[[ $(uname -s) = Linux ]] || { echo 'The ACP test agent Nix package currently requires Linux.' >&2; exit 1; }
+
+source_path=$("$root/scripts/nix-source")
+"$root/scripts/nix-profile-install" "$source_path" acp-test-agent -- "$@"
+package_path=$(nix eval --raw "$source_path#acp-test-agent.outPath")
+printf 'Installed: %s/bin/acp-test-agent\n' "$package_path"
+printf 'BasG custom Agent: use that program path with arguments ["--protocol","v1"].\n'
+printf 'Start a conversation and send /help. No Agent configuration was changed.\n'

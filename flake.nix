@@ -48,6 +48,18 @@
           };
         };
       windowPackageFor = system: (packageFor system).override { gui = true; };
+      testAgentFor =
+        system:
+        let
+          pkgs = pkgsFor system;
+          toolchain = pkgs.rust-bin.fromRustupToolchainFile ./acp-test-agent/rust-toolchain.toml;
+        in
+        pkgs.callPackage ./acp-test-agent/package.nix {
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = toolchain;
+            rustc = toolchain;
+          };
+        };
       testFor =
         system:
         nixpkgs.lib.nixos.runTest (
@@ -67,12 +79,14 @@
         default = packageFor system;
         bas = packageFor system;
         basg = windowPackageFor system;
+        acp-test-agent = testAgentFor system;
         system-test-driver = (testFor system).driverInteractive;
         system-test-shell = (shellFor system).driver;
       });
       checks = eachLinux (system: {
         package = packageFor system;
         basg = windowPackageFor system;
+        acp-test-agent = testAgentFor system;
         system = testFor system;
       });
       apps = eachLinux (system: {
@@ -87,6 +101,10 @@
         basg = {
           type = "app";
           program = "${windowPackageFor system}/bin/basg";
+        };
+        acp-test-agent = {
+          type = "app";
+          program = "${testAgentFor system}/bin/acp-test-agent";
         };
         system-test = {
           type = "app";

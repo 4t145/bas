@@ -9,7 +9,7 @@ fn native_installation_is_separate_reused_and_close_cancels_only_new_drafts(
     let path = directory.path().join("settings.json");
     std::fs::write(
         &path,
-        r#"{"daemon":{"agents":[{"id":"embedded","kind":"embedded"}]}}"#,
+        r#"{"daemon":{"agents":[{"id":"custom","kind":"acp","command":{"program":"/fixture/acp","args":[]}}]}}"#,
     )
     .expect("fixture");
     let before = std::fs::read(&path).expect("original bytes");
