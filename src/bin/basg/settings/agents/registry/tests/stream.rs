@@ -265,6 +265,13 @@ impl Fixture {
         // is the install action exercised below.
         cx.update(|cx| cx.set_global(Service::new(self.address, self.runtime.handle().clone())));
         let page = page.expect("fixture page");
+        // Installed agents are managed in Settings, not the add window.
+        if self.catalog.lock().expect("catalog").entries[0]
+            .spec
+            .is_some()
+        {
+            return (window.into(), page);
+        }
         let installation = cx.update(|cx| {
             super::super::super::window::open(page.clone(), cx).expect("native installation window")
         });
@@ -317,7 +324,10 @@ impl Fixture {
         let spec = AgentSpec::acp("codex", Command::new("/fixture/codex-acp", []));
         let mut document = self.store.load().expect("settings");
         let mut agents = document.settings.daemon.agents.clone();
-        agents.push(spec.clone().into());
+        agents.push(super::super::super::tests::managed_fixture(
+            self.store.path().parent().expect("settings directory"),
+            &spec,
+        ));
         self.store
             .save_agents(&mut document, agents)
             .expect("simulate successful daemon registration");
@@ -353,7 +363,13 @@ fn checking_and_login_are_independent_and_only_checking_records_a_probe_result(
     let mut document = fixture.store.load().expect("settings");
     fixture
         .store
-        .save_agents(&mut document, vec![spec.clone().into()])
+        .save_agents(
+            &mut document,
+            vec![super::super::super::tests::managed_fixture(
+                directory.path(),
+                &spec,
+            )],
+        )
         .expect("configured agent");
     {
         let mut catalog = fixture.catalog.lock().expect("catalog");
@@ -543,7 +559,10 @@ fn install_click_receives_later_grpc_progress_and_completion(cx: &mut TestAppCon
         window.render_frame(cx);
         assert_eq!(page.read(cx).checks[&spec.id].spec, spec);
         assert!(window.try_find("agents-install-cancel-codex").is_none());
-        assert!(window.try_find("agents-remove-codex").is_some());
+        assert!(window.try_find("agents-registry-codex").is_none());
+        assert!(window.find("agents-save-feedback").visible());
+        assert!(window.find("agents-saved-manage").visible());
+        assert!(window.find("agents-saved-chat").visible());
     })
     .expect("completed install refreshes catalog and starts readiness check");
 }

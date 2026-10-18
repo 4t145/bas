@@ -123,15 +123,12 @@ fn managed_registration_keeps_registry_actions_without_an_advanced_editor(
         crate::theme::init_default(cx);
     });
     let mut view = None;
-    let _configuration = cx.open_window(size(px(960.), px(900.)), |window, cx| {
+    let window = cx.open_window(size(px(960.), px(900.)), |window, cx| {
         let page = cx.new(|cx| Agents::new(store.clone(), window, cx));
         view = Some(page.clone());
         Root::new(page, window, cx)
     });
     let view = view.expect("page");
-    let window = cx.update(|cx| {
-        super::super::window::open(view.clone(), cx).expect("native installation window")
-    });
     cx.update_window(window.into(), |_, window, cx| {
         let mut registry = catalog(path.clone());
         registry.entries.truncate(1);
@@ -262,29 +259,26 @@ fn registry_search_matches_names_descriptions_and_ids() {
 }
 
 #[test]
-fn installed_filter_includes_missing_configured_agents_and_managed_versions() {
+fn installation_offers_only_unregistered_registry_entries() {
     let catalog = catalog("/fixture/settings.json".into());
     let mut entry = catalog.entries[0].clone();
     for status in [Status::NotInstalled, Status::Unsupported] {
         entry.status = status;
-        assert!(Filter::All.matches(&entry));
-        assert!(!Filter::Installed.matches(&entry));
-        assert!(Filter::NotInstalled.matches(&entry));
+        assert!(offered(&entry));
     }
     for status in [Status::Installed, Status::Missing] {
         entry.status = status;
-        assert!(Filter::All.matches(&entry));
-        assert!(Filter::Installed.matches(&entry));
-        assert!(!Filter::NotInstalled.matches(&entry));
+        assert!(!offered(&entry));
     }
     entry.status = Status::NotInstalled;
     entry.installed_version = Some("1.2.3".into());
-    assert!(Filter::Installed.matches(&entry));
-    assert!(!Filter::NotInstalled.matches(&entry));
+    assert!(!offered(&entry));
     entry.installed_version = None;
     entry.spec = Some(bas::config::AgentSpec::embedded());
-    assert!(Filter::Installed.matches(&entry));
-    assert!(!Filter::NotInstalled.matches(&entry));
+    assert!(!offered(&entry));
+    entry.spec = None;
+    entry.source = Source::Custom;
+    assert!(!offered(&entry));
 }
 
 #[cfg(feature = "gui-tests")]
@@ -358,7 +352,7 @@ fn registry_cards_are_searchable_and_leave_custom_configuration_intact(
             window.find("agents-icon-codex").visible(),
             "real agent icon has its own stable layout while loading"
         );
-        assert!(window.try_find("agents-registry-opencode").is_some());
+        assert!(window.try_find("agents-registry-opencode").is_none());
         assert!(window.try_find("agents-install-codex").is_some());
         assert!(
             window.try_find("agents-install-pi").is_none(),
@@ -375,26 +369,12 @@ fn registry_cards_are_searchable_and_leave_custom_configuration_intact(
             card.size.height <= px(110.),
             "idle catalog cards stay compact"
         );
-        assert!(view.read(cx).registry_filter == Filter::All);
-
-        window.click("agents-filter-installed", cx);
-        window.render_frame(cx);
-        assert!(view.read(cx).registry_filter == Filter::Installed);
-        assert!(window.try_find("agents-registry-opencode").is_some());
-        assert!(window.try_find("agents-registry-codex").is_none());
-        assert!(window.try_find("agents-registry-pi").is_none());
-        window.click("agents-filter-not-installed", cx);
-        window.render_frame(cx);
-        assert!(view.read(cx).registry_filter == Filter::NotInstalled);
+        assert!(window.try_find("agents-registry-filters").is_none());
         assert!(window.try_find("agents-registry-opencode").is_none());
         assert!(window.try_find("agents-registry-codex").is_some());
         assert!(window.try_find("agents-registry-pi").is_some());
-        window.click("agents-filter-all", cx);
-        window.render_frame(cx);
-        assert!(view.read(cx).registry_filter == Filter::All);
-        assert!(window.try_find("agents-registry-opencode").is_some());
-        assert!(window.try_find("agents-registry-codex").is_some());
-        assert!(window.try_find("agents-registry-pi").is_some());
+        let custom = window.find("agents-add-custom").bounds();
+        assert!(custom.bottom() < window.find("agents-sections").bounds().top());
 
         window.click("agents-registry-search", cx);
         window.input("Personal", cx);
@@ -441,14 +421,23 @@ fn registry_cards_are_searchable_and_leave_custom_configuration_intact(
         });
         window.render_frame(cx);
         assert!(
-            window.try_find("agents-registry-remote-custom").is_some(),
-            "remote custom metadata stays visible without a launch spec"
+            window.try_find("agents-registry-remote-custom").is_none(),
+            "custom agents are not Registry offers"
         );
         assert!(
             window
                 .try_find("agents-registry-check-remote-custom")
                 .is_none(),
             "remote launch commands remain unavailable"
+        );
+        assert!(
+            view.read(cx)
+                .configuration_entries()
+                .iter()
+                .any(|entry| entry.id == "remote-custom"
+                    && entry.source == Source::Custom
+                    && entry.spec.is_none()),
+            "remote installed metadata remains visible in management"
         );
     })
     .expect("fixture catalogue");
@@ -532,6 +521,7 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
             registry.entries[0].spec = Some(spec.clone());
             registry.entries[0].status = Status::Installed;
             page.apply_catalog(registry, true, cx);
+            page.saved = Some(spec.clone());
             page.apply_check(
                 &spec,
                 crate::agents::Status::AuthenticationRequired {
@@ -557,9 +547,11 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
         window.render_frame(cx);
         assert!(window.find("authentication-error").visible());
         assert_eq!(
-            window.find("agents-item-status-codex").label(),
-            Some("已安装")
+            window.find("agents-save-result").label(),
+            Some(crate::i18n::tr!("agent-saved-unavailable", agent = "codex").as_str())
         );
+        assert!(window.try_find("agents-save-error").is_none());
+        assert!(window.try_find("agents-item-codex").is_none());
         assert!(window.try_find("agents-operation-codex").is_none());
         assert!(matches!(
             view.read(cx).status(&spec),
@@ -581,23 +573,19 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
             );
             cx.notify();
         });
-        window.render_frame(cx);
-        assert!(
-            window.find("agents-operation-codex").visible(),
-            "independent installation errors remain visible alongside authentication"
-        );
     })
-    .expect("single authentication error in both settings views");
+    .expect("single authentication error in the saved result");
     cx.update_window(configuration.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("agents-authentication-open-0").visible());
         assert!(window.try_find("authentication-error").is_none());
-        assert_eq!(
-            window.find("agents-item-status-codex").label(),
-            Some("已安装")
+        assert!(window.try_find("agents-item-status-codex").is_none());
+        assert!(
+            window.find("agents-operation-codex").visible(),
+            "independent installation errors remain visible in management"
         );
     })
-    .expect("configuration owns its authentication feedback");
+    .expect("configuration points to the authentication owner");
     cx.update_window(window.into(), |_, window, cx| {
         window.press(
             if cfg!(target_os = "macos") {
@@ -623,3 +611,62 @@ fn authentication_failure_has_one_owner_in_catalog_and_advanced_configuration(
 }
 #[cfg(feature = "gui-tests")]
 mod backend;
+
+#[cfg(feature = "gui-tests")]
+#[gpui_kit::test]
+fn unavailable_installed_agents_stay_in_management_for_repair_or_removal(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use bas::config::{AgentSpec, Store, agent::Command};
+    use gpui_kit::{component::Root, size, test::TestWindowExt};
+    let directory = tempfile::tempdir().expect("profile");
+    let path = directory.path().join("settings.json");
+    let store = Store::at(path.clone());
+    let spec = AgentSpec::acp("codex", Command::new("/missing/acp", []));
+    let registration = super::super::tests::managed_fixture(directory.path(), &spec);
+    let mut document = store.load().expect("document");
+    store
+        .save_agents(&mut document, vec![registration])
+        .expect("registered");
+    std::fs::write(
+        directory.path().join(bas::config::INSTALLATION_FILE),
+        "broken descriptor",
+    )
+    .expect("simulate unavailable installation");
+    cx.update(super::super::tests::init);
+    let mut page = None;
+    let configuration = cx.open_window(size(px(900.), px(720.)), |window, cx| {
+        let view = cx.new(|cx| Agents::new(store, window, cx));
+        page = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let page = page.expect("page");
+    cx.update_window(configuration.into(), |_, window, cx| {
+        page.update(cx, |page, cx| {
+            let mut catalog = catalog(path);
+            catalog.entries[0].status = Status::Missing;
+            catalog.entries[0].installed_version = Some("1.2.3".into());
+            page.apply_catalog(catalog, true, cx);
+            assert!(
+                page.display_catalog().is_empty(),
+                "no executable spec is fabricated"
+            );
+            assert_eq!(page.sections()[0].title, "codex");
+        });
+        window.render_frame(cx);
+        assert!(window.find("agents-item-codex").visible());
+        assert!(window.find("agents-install-codex").visible());
+        assert!(window.find("agents-remove-codex").visible());
+        assert!(window.try_find("agents-registry-check-codex").is_none());
+    })
+    .expect("missing installation remains manageable");
+    let installation = cx.update(|cx| super::super::window::open(page, cx).expect("add window"));
+    cx.update_window(installation.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("agents-item-codex").is_none(),
+            "registered agents are not new offers"
+        );
+    })
+    .expect("no duplicate installation offer");
+}

@@ -14,6 +14,7 @@ fn invalid(error: SessionError) -> acp::Error {
 /// Handle `session/new`.
 pub(super) fn new_session(
     demo: &Demo,
+    connection: &ConnectionTo<Client>,
     request: acp::NewSessionRequest,
     responder: Responder<acp::NewSessionResponse>,
 ) -> Result<(), acp::Error> {
@@ -32,7 +33,24 @@ pub(super) fn new_session(
             .modes(updates::modes(&session.mode))
             .config_options(config_options(&session.config))
     };
+    announce_commands(demo, connection, &session_id)?;
     responder.respond(response)
+}
+
+/// # Errors
+/// Returns a transport or session-storage error if the command catalog cannot be published.
+fn announce_commands(
+    demo: &Demo,
+    connection: &ConnectionTo<Client>,
+    session_id: &str,
+) -> Result<(), acp::Error> {
+    demo.send_update(
+        connection,
+        &acp::SessionId::new(session_id),
+        acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(
+            updates::available_commands(),
+        )),
+    )
 }
 
 /// Handle `session/load`: replay recorded updates, then restore the session.
@@ -69,6 +87,7 @@ pub(super) fn load_session(
         let session = store.get(&session_id).map_err(invalid)?;
         (session.mode.clone(), session.config.clone())
     };
+    announce_commands(demo, connection, &session_id)?;
     responder.respond(
         acp::LoadSessionResponse::new()
             .modes(updates::modes(&mode))
@@ -112,6 +131,7 @@ pub(super) fn delete_session(
 /// Handle `session/resume`.
 pub(super) fn resume_session(
     demo: &Demo,
+    connection: &ConnectionTo<Client>,
     request: acp::ResumeSessionRequest,
     responder: Responder<acp::ResumeSessionResponse>,
 ) -> Result<(), acp::Error> {
@@ -129,6 +149,7 @@ pub(super) fn resume_session(
         let session = store.get(session_id).map_err(invalid)?;
         (session.mode.clone(), session.config.clone())
     };
+    announce_commands(demo, connection, session_id)?;
     responder.respond(
         acp::ResumeSessionResponse::new()
             .modes(updates::modes(&mode))
@@ -151,6 +172,7 @@ pub(super) fn close_session(
 /// Handle `session/fork`.
 pub(super) fn fork_session(
     demo: &Demo,
+    connection: &ConnectionTo<Client>,
     request: acp::ForkSessionRequest,
     responder: Responder<acp::ForkSessionResponse>,
 ) -> Result<(), acp::Error> {
@@ -168,6 +190,7 @@ pub(super) fn fork_session(
         let session = store.get(&fork_id).map_err(invalid)?;
         (session.mode.clone(), session.config.clone())
     };
+    announce_commands(demo, connection, &fork_id)?;
     responder.respond(
         acp::ForkSessionResponse::new(fork_id)
             .modes(updates::modes(&mode))

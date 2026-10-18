@@ -39,6 +39,7 @@ impl Agents {
             title: crate::i18n::tr!("agent-logout").into(),
             message: crate::i18n::tr!("agent-logout-confirm", agent = spec.id.to_string()),
             confirm_label: crate::i18n::tr!("agent-logout").into(),
+            destructive: false,
         };
         let owner = cx.entity().downgrade();
         if let Err(error) = crate::application::open_confirmation(

@@ -127,6 +127,7 @@ impl Workspace {
             title: crate::i18n::tr!("session-delete-title").into(),
             message: crate::i18n::tr!("session-delete-confirm", title = (title(meta)).to_string()),
             confirm_label: crate::i18n::tr!("action-delete-permanently").into(),
+            destructive: true,
         };
         let view = cx.entity().downgrade();
         if let Err(error) = crate::application::open_delete_confirmation(

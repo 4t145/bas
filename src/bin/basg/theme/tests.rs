@@ -45,6 +45,7 @@ fn native_windows_share_root_typography_and_live_updates(cx: &mut TestAppContext
                     title: "Confirm".into(),
                     message: "Message".into(),
                     confirm_label: "OK".into(),
+                    destructive: false,
                 },
                 |_| {},
                 cx,

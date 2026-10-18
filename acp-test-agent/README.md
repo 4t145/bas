@@ -32,7 +32,37 @@ cargo run
 }
 ```
 
-启动后在会话中发送 `/help`，会列出全部脚本命令。普通文本按 `/echo <text>` 处理。
+创建或恢复会话时会主动发布命令列表；在 BasG 输入 `/` 即可看到补全提示，
+无需先发送消息。发送 `/help` 可查看全部脚本命令。普通文本按 `/echo <text>` 处理。
+
+### Linux / NixOS 安装与 BasG 测试
+
+在当前仓库根目录执行：
+
+```sh
+make install-acp-test-agent
+acp-test-agent --help
+readlink -f "$(command -v acp-test-agent)"
+```
+
+安装程序使用源码快照，包含未提交文件；只安装测试 Agent，不修改 Bas 配置或重启 daemon。
+`package.nix` 只打包此目录的源码、测试和独立 `Cargo.lock`，不引入主程序、GUI 或子模块。
+仓库 flake 提供 package、app 和 check `acp-test-agent`；源码已经加入 Git 时也可执行：
+
+```sh
+nix build .#acp-test-agent
+nix run .#acp-test-agent -- --help
+```
+
+在 BasG 中“添加自定义智能体”，ID 填 `acp-test-agent`，程序填上面得到的绝对路径，
+参数填 `["--protocol", "v1"]`。Bas 当前协商 v1，不要选 `--protocol v2`。
+保存后新建会话，先输入 `/` 检查命令补全，再依次尝试 `/help`、`/rich`、`/tool`、`/plan`、`/usage`、
+`/permission`、`/elicit` 和 `/sleep 10000`（测试停止按钮）。
+无需模型或 API key。若要测试登录／退出登录，可另建配置增加 `--require-auth`。
+
+会话仅在此进程内存中保存；客户端重启 Agent 进程后不能恢复之前的测试会话。
+本工具尚未实现 subagent 演示，不应用普通工具调用验收子 Agent 角标。
+声明式 NixOS／Home Manager 安装和卸载方法见 [安装文档](../docs/install.md#安装独立-acp-测试-agent)。
 
 ### 启动参数
 

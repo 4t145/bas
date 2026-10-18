@@ -124,6 +124,7 @@ fn request() -> Confirmation {
         title: "永久删除线程？".into(),
         message: "此操作不可撤销。".into(),
         confirm_label: "永久删除".into(),
+        destructive: true,
     }
 }
 

@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -123,6 +124,20 @@ class NixSourceTests(unittest.TestCase):
                         (source / relative).exists(),
                         f"Snapshot leaked excluded metadata/environment/output: {relative}",
                     )
+
+    def test_acp_test_agent_package_has_an_independent_source(self):
+        source = Path(run("nix", "eval", "--raw", f"{self.source}#acp-test-agent.src"))
+        manifest = tomllib.loads((source / "Cargo.toml").read_text())
+        self.assertEqual(manifest["package"]["name"], "acp-test-agent")
+        self.assertIn("workspace", manifest)
+        for relative in ["Cargo.lock", "src/main.rs", "tests/v1.rs", "tests/v2.rs", "LICENSE"]:
+            self.assertTrue((source / relative).is_file(), relative)
+        for relative in ["src/bin/basg", "vendor", "target", "proto", ".git"]:
+            self.assertFalse((source / relative).exists(), relative)
+        self.assertEqual(
+            (source / "Cargo.lock").read_bytes(),
+            (ROOT / "acp-test-agent/Cargo.lock").read_bytes(),
+        )
 
 
 if __name__ == "__main__":

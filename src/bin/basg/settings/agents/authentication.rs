@@ -13,6 +13,7 @@ pub(super) struct Owner {
 impl Agents {
     pub(super) fn ensure_authentication_panels(
         &mut self,
+        page: super::Page,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -35,6 +36,18 @@ impl Agents {
             .checks
             .values()
             .filter(|check| matches!(check.status, Status::AuthenticationRequired { .. }))
+            .filter(|check| {
+                let added_here = self
+                    .saved
+                    .as_ref()
+                    .is_some_and(|saved| saved == &check.spec)
+                    && super::window::current(cx)
+                        .is_some_and(|handle| cx.windows().contains(&handle.into()));
+                match page {
+                    super::Page::Onboarding => added_here,
+                    super::Page::Configuration => !added_here,
+                }
+            })
             .map(|check| (check.spec.clone(), check.status.clone()))
             .collect();
         for (spec, status) in pending {

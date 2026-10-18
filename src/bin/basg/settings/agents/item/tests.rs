@@ -77,7 +77,7 @@ fn item_actions_use_one_compact_scale_and_accessible_hover_names(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
-fn configuration_and_installation_share_agent_identity_and_geometry(cx: &mut TestAppContext) {
+fn installed_agents_are_managed_in_settings_not_offered_for_installation(cx: &mut TestAppContext) {
     use super::super::{Check, window as onboarding};
     use bas::config::{AgentSpec, Store, agent::Command};
     use gpui_kit::component::Root;
@@ -128,50 +128,41 @@ fn configuration_and_installation_share_agent_identity_and_geometry(cx: &mut Tes
         });
         onboarding::open(agents.clone(), cx).expect("installation surface")
     });
-    let mut baseline = None;
-    for surface in [configuration, installation] {
-        let measurements = cx
-            .update_window(surface.into(), |_, window, cx| {
-                window.render_frame(cx);
-                assert!(window.try_find("agents-operation-codex").is_none());
-                assert_eq!(
-                    window.find("agents-item-version-codex").label(),
-                    Some("1.0")
-                );
-                assert_eq!(
-                    window.find("agents-item-status-codex").label(),
-                    Some("已安装")
-                );
-                assert!(window.find("agent-logout-codex").visible());
-                assert!(window.find("agents-registry-start-chat-codex").visible());
-                let check = if surface == configuration {
-                    "agents-check-0"
-                } else {
-                    "agents-registry-check-codex"
-                };
-                window.hover("agents-item-name-codex", cx);
-                assert_eq!(window.find(format!("{check}-result")).label(), Some("可用"));
-                assert!(window.find(format!("{check}-result")).visible());
-                assert!(!window.find(format!("{check}-retry")).visible());
-                window.hover(check, cx);
-                assert!(!window.find(format!("{check}-result")).visible());
-                assert!(window.find(format!("{check}-retry")).visible());
-                [
-                    "agents-item-name-codex",
-                    "agents-item-version-codex",
-                    "agents-item-status-codex",
-                ]
-                .map(|id| {
-                    let element = window.find(id);
-                    (element.label().map(str::to_owned), element.bounds().size)
-                })
-            })
-            .expect("same agent item on each surface");
-        if let Some(baseline) = &baseline {
-            assert_eq!(&measurements, baseline);
-        } else {
-            baseline = Some(measurements);
-        }
-    }
+    cx.update_window(configuration.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("agents-source-registry").label(),
+            Some("ACP 注册目录")
+        );
+        assert!(window.try_find("agents-operation-codex").is_none());
+        assert_eq!(
+            window.find("agents-item-version-codex").label(),
+            Some("1.0")
+        );
+        assert!(window.try_find("agents-item-status-codex").is_none());
+        assert!(window.find("agent-logout-codex").visible());
+        assert!(window.find("agents-registry-start-chat-codex").visible());
+        let check = "agents-registry-check-codex";
+        window.hover("agents-item-name-codex", cx);
+        assert_eq!(window.find(format!("{check}-result")).label(), Some("可用"));
+        assert!(window.find(format!("{check}-result")).visible());
+        assert!(!window.find(format!("{check}-retry")).visible());
+        window.hover(check, cx);
+        assert!(!window.find(format!("{check}-result")).visible());
+        assert!(window.find(format!("{check}-retry")).visible());
+        let remove = window.find("agents-remove-codex").bounds();
+        let chat = window.find("agents-registry-start-chat-codex").bounds();
+        assert_eq!(remove.size, chat.size);
+        assert_eq!(remove.top(), chat.top());
+        assert!(remove.left() > chat.right());
+    })
+    .expect("installed management actions");
+    cx.update_window(installation.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("agents-item-codex").is_none());
+        assert!(window.try_find("agents-remove-codex").is_none());
+        assert!(window.find("agents-add-custom").visible());
+    })
+    .expect("installation only offers new agents");
     assert!(agents.read_with(cx, |agents, _| agents.registry.verified_local()));
 }

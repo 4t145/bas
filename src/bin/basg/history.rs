@@ -570,6 +570,7 @@ impl Browser {
                     .unwrap_or(crate::i18n::tr!("agent-history-untitled"))
             ),
             confirm_label: crate::i18n::tr!("agent-history-delete").into(),
+            destructive: true,
         };
         let owner = cx.entity().downgrade();
         if let Err(error) = crate::application::open_delete_confirmation(

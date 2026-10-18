@@ -216,6 +216,15 @@ async fn v1_lifecycle_and_feature_demos() -> Result<(), Box<dyn std::error::Erro
             assert_eq!(modes.available_modes.len(), 3);
             assert_eq!(created.config_options.as_ref().map(Vec::len), Some(2));
 
+            let initial = drain(&mut update_rx).await;
+            assert!(
+                initial.iter().any(|update| matches!(update,
+                    v1::SessionUpdate::AvailableCommandsUpdate(commands)
+                        if commands.available_commands.len() == COMMANDS.len()
+                )),
+                "a fresh session advertises commands before its first prompt"
+            );
+
             let response = prompt(&cx, &session_id, "/help").await?;
             assert_eq!(response.stop_reason, v1::StopReason::EndTurn);
             let updates = drain(&mut update_rx).await;
@@ -429,10 +438,20 @@ async fn v1_lifecycle_and_feature_demos() -> Result<(), Box<dyn std::error::Erro
             assert!(loaded.modes.is_some());
             let replayed = drain(&mut update_rx).await;
             assert!(messages(&replayed).contains("history"));
+            assert!(matches!(
+                replayed.last(),
+                Some(v1::SessionUpdate::AvailableCommandsUpdate(_))
+            ));
 
             cx.send_request(v1::ResumeSessionRequest::new(session_id.clone(), cwd()))
                 .block_task()
                 .await?;
+            assert!(
+                drain(&mut update_rx)
+                    .await
+                    .iter()
+                    .any(|update| matches!(update, v1::SessionUpdate::AvailableCommandsUpdate(_)))
+            );
             let response = prompt(&cx, &session_id, "/echo resumed").await?;
             assert_eq!(response.stop_reason, v1::StopReason::EndTurn);
             let _ = drain(&mut update_rx).await;
@@ -444,6 +463,12 @@ async fn v1_lifecycle_and_feature_demos() -> Result<(), Box<dyn std::error::Erro
             assert_ne!(fork.session_id, session_id);
             assert!(fork.modes.is_some());
             assert_eq!(fork.config_options.as_ref().map(Vec::len), Some(2));
+            assert!(
+                drain(&mut update_rx)
+                    .await
+                    .iter()
+                    .any(|update| matches!(update, v1::SessionUpdate::AvailableCommandsUpdate(_)))
+            );
 
             // Pagination: page size 1, two sessions exist after the fork.
             let first_page = cx

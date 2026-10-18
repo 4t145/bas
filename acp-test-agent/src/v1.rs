@@ -193,8 +193,8 @@ pub fn component(options: Options) -> impl ConnectTo<Client> {
                 let demo = demo.clone();
                 async move |request: acp::NewSessionRequest,
                             responder: Responder<acp::NewSessionResponse>,
-                            _connection: ConnectionTo<Client>| {
-                    sessions::new_session(&demo, request, responder)
+                            connection: ConnectionTo<Client>| {
+                    sessions::new_session(&demo, &connection, request, responder)
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -237,8 +237,8 @@ pub fn component(options: Options) -> impl ConnectTo<Client> {
                 let demo = demo.clone();
                 async move |request: acp::ResumeSessionRequest,
                             responder: Responder<acp::ResumeSessionResponse>,
-                            _connection: ConnectionTo<Client>| {
-                    sessions::resume_session(&demo, request, responder)
+                            connection: ConnectionTo<Client>| {
+                    sessions::resume_session(&demo, &connection, request, responder)
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -259,8 +259,8 @@ pub fn component(options: Options) -> impl ConnectTo<Client> {
                 let demo = demo.clone();
                 async move |request: acp::ForkSessionRequest,
                             responder: Responder<acp::ForkSessionResponse>,
-                            _connection: ConnectionTo<Client>| {
-                    sessions::fork_session(&demo, request, responder)
+                            connection: ConnectionTo<Client>| {
+                    sessions::fork_session(&demo, &connection, request, responder)
                 }
             },
             agent_client_protocol::on_receive_request!(),
