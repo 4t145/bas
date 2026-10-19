@@ -10,6 +10,14 @@ impl Workspace {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if !cx.global::<theme::Appearance>().auto_collapse_activity {
+            return gds_uim::el! {
+                #div { flex; flex_col; gap_1; } [
+                    ..$self.render_activity_entries(items, index, cx),
+                ]
+            }
+            .into_any_element();
+        }
         let mut thoughts = 0;
         let mut tools = 0;
         let mut running = 0;
@@ -113,18 +121,11 @@ impl Workspace {
             .disclosure_content(id, &label, expanded, index, summary, cx)
             .text_color(muted);
         let header = self.content_header(id, disclosure, None);
-        let panel = gds_uim::el! {
+        gds_uim::el! {
             #content_header::frame(false, cx) [
                 $header,
                 ..$expanded.then(|| {
-                    let entries = items.iter().map(|item| {
-                        gds_uim::el! {
-                            #div {
-                                id: $SharedString::from(item.id());
-                                test_support;
-                            } [$self.render_entry(item, index, cx)]
-                        }
-                    }).collect::<Vec<_>>();
+                    let entries = self.render_activity_entries(items, index, cx);
                     gds_uim::el! {
                         #div {
                             ml_2;
@@ -140,19 +141,27 @@ impl Workspace {
                 }),
             ]
         }
-        .into_any_element();
-        let images = if expanded {
-            Vec::new()
-        } else {
-            items
-                .iter()
-                .flat_map(|item| match item {
-                    Item::Tool(tool) => self.render_tool_images(&item.id(), tool, index, cx),
-                    _ => Vec::new(),
-                })
-                .collect()
-        };
-        gds_uim::el! { #div { flex; flex_col; gap_2; } [$panel, ..images] }.into_any_element()
+        .into_any_element()
+    }
+
+    fn render_activity_entries(
+        &self,
+        items: &[Item],
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        items
+            .iter()
+            .map(|item| {
+                gds_uim::el! {
+                    #div {
+                        id: $SharedString::from(item.id());
+                        test_support;
+                    } [$self.render_entry(item, index, cx)]
+                }
+                .into_any_element()
+            })
+            .collect()
     }
 
     pub(super) fn render_thought(

@@ -2,6 +2,24 @@ use super::*;
 use crate::theme::source::Files;
 
 #[test]
+fn activity_folding_defaults_to_grouped_and_preserves_explicit_choices() {
+    for (json, grouped) in [
+        ("{}", true),
+        (r#"{"auto_collapse_activity":true}"#, true),
+        (r#"{"auto_collapse_activity":false}"#, false),
+    ] {
+        let preferences = Preferences::from_json(json).expect("session preference");
+        let result = resolve(&preferences, source::fallback(true)).expect("effective preference");
+        assert_eq!(result.auto_collapse_activity, grouped);
+        let serialized = serde_json::to_string(&preferences).expect("serialized preference");
+        assert_eq!(
+            Preferences::from_json(&serialized).expect("reopened preference"),
+            preferences
+        );
+    }
+}
+
+#[test]
 fn defaults_keep_desktop_fonts_and_frosted_surface() {
     let desktop = source::resolve(
         &Files {

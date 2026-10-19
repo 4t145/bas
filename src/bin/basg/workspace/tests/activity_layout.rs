@@ -57,7 +57,8 @@ fn thoughts_and_tools_share_header_columns_height_and_compact_gaps(cx: &mut Test
     attach(&fixture, session(), cx);
     cx.update_window(fixture.window.into(), |_, window, cx| {
         let activity = populate(&fixture, false, window, cx);
-        for compact in [false, true] {
+        for (compact, grouped) in [(false, true), (false, false), (true, true), (true, false)] {
+            cx.global_mut::<theme::Appearance>().auto_collapse_activity = grouped;
             for font_size in [14., 22., 28.] {
                 cx.global_mut::<theme::Appearance>().content_font_size = font_size;
                 fixture.view.update(cx, |view, cx| {
@@ -116,9 +117,7 @@ fn thoughts_and_tools_share_header_columns_height_and_compact_gaps(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn tool_images_remain_visible_when_groups_tools_and_output_details_are_collapsed(
-    cx: &mut TestAppContext,
-) {
+fn tool_images_are_only_shown_inside_expanded_tool_output(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
     attach(&fixture, session(), cx);
     let activity = cx
@@ -156,17 +155,136 @@ fn tool_images_remain_visible_when_groups_tools_and_output_details_are_collapsed
         .expect("set disclosure state");
         cx.run_until_parked();
         cx.update_window(fixture.window.into(), |_, window, cx| {
-            window.render_frame(cx);
-            let image = window.find("image-tool-generated-content-1");
-            assert!(
-                image.visible(),
-                "image is not hidden by disclosure state {group_open}/{tool_open}/{output_open}"
-            );
-            assert!(image.bounds().size.height > px(0.));
-            if !group_open {
-                assert!(window.try_find("expand-tool-generated").is_none());
+            for grouped in [true, false] {
+                cx.global_mut::<theme::Appearance>().auto_collapse_activity = grouped;
+                fixture.view.update(cx, |_, cx| cx.notify());
+                window.render_frame(cx);
+                if (!grouped || group_open) && tool_open && output_open {
+                    let image = window.find("image-tool-generated-content-1");
+                    assert!(image.visible());
+                    assert!(image.bounds().size.height > px(0.));
+                } else {
+                    assert!(
+                        window.try_find("image-tool-generated-content-1").is_none(),
+                        "images follow the same collapse rules as other output"
+                    );
+                }
+                if grouped && !group_open {
+                    assert!(window.try_find("expand-tool-generated").is_none());
+                }
             }
         })
-        .expect("native image stays available outside hidden details");
+        .expect("native images stay in tool output");
     }
+}
+
+#[gpui_kit::test]
+fn session_setting_switches_live_activity_without_losing_individual_expansion_or_drafts(
+    cx: &mut TestAppContext,
+) {
+    let mut fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    let activity = cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            let activity = populate(&fixture, false, window, cx);
+            window.render_frame(cx);
+            assert!(window.find(format!("expand-{}", activity.group)).visible());
+            assert!(window.try_find("expand-tool-generated").is_none());
+            fixture.view.update(cx, |view, cx| {
+                view.composer
+                    .input
+                    .update(cx, |input, cx| input.set_value("keep draft", window, cx));
+                view.open_settings(window, cx);
+            });
+            activity
+        })
+        .expect("default grouped presentation");
+    let settings = cx.update(|cx| crate::settings::window::current(cx).expect("settings"));
+    cx.update_window(settings.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("settings-sessions", cx);
+    })
+    .expect("open session settings");
+    while fixture.commands.try_recv().is_ok() {}
+    for grouped in [false, true, false] {
+        cx.update_window(settings.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.click("settings-auto-collapse-activity", cx);
+            assert_eq!(
+                cx.global::<theme::Appearance>().auto_collapse_activity,
+                grouped
+            );
+        })
+        .expect("toggle grouping from another window");
+        cx.run_until_parked();
+        cx.update_window(fixture.window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            if grouped {
+                assert!(window.find(format!("expand-{}", activity.group)).visible());
+                assert!(window.try_find("expand-tool-generated").is_none());
+            } else {
+                assert!(
+                    window
+                        .try_find(format!("expand-{}", activity.group))
+                        .is_none()
+                );
+                assert!(window.find("expand-tool-generated").visible());
+                assert!(
+                    window
+                        .try_find("tool-output-section-tool-generated")
+                        .is_none()
+                );
+                for thought in &activity.thoughts {
+                    assert!(window.find(format!("expand-{thought}")).visible());
+                }
+                let first = &activity.thoughts[0];
+                if !fixture
+                    .view
+                    .read(cx)
+                    .selected
+                    .timeline
+                    .expanded
+                    .contains(first)
+                {
+                    window.click(format!("expand-{first}"), cx);
+                }
+            }
+            let view = fixture.view.read(cx);
+            assert!(
+                view.selected
+                    .timeline
+                    .expanded
+                    .contains(&activity.thoughts[0])
+            );
+            assert!(
+                !view
+                    .selected
+                    .timeline
+                    .expanded
+                    .contains(&activity.thoughts[1])
+            );
+            assert!(!view.selected.timeline.expanded.contains("tool-generated"));
+            assert_eq!(view.selected.id, Some(meta.id));
+            assert_eq!(view.composer.input.read(cx).value(), "keep draft");
+            assert_eq!(
+                view.selected
+                    .timeline
+                    .conversation
+                    .as_ref()
+                    .expect("conversation")
+                    .items
+                    .len(),
+                6
+            );
+        })
+        .expect("live regrouping preserves content and per-item choices");
+    }
+    assert!(
+        !std::iter::from_fn(|| fixture.commands.try_recv().ok()).any(|command| matches!(
+            command,
+            Command::Create(_) | Command::Prompt { .. } | Command::Cancel(_)
+        )),
+        "a display preference does not change the Agent conversation"
+    );
 }

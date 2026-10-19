@@ -19,6 +19,8 @@ pub struct Appearance {
     pub default_agent: Option<String>,
     /// None inherits the safe default: ask before deleting a conversation.
     pub confirm_session_delete: Option<bool>,
+    /// None groups consecutive thoughts and tool calls into a collapsed activity block.
+    pub auto_collapse_activity: Option<bool>,
     pub background: Background,
     pub theme_source: ThemeSource,
     pub theme_mode: ThemeMode,

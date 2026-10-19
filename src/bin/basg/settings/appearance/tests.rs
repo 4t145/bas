@@ -64,6 +64,7 @@ fn default_agent_persists_and_appearance_reset_does_not_change_session_preferenc
         cx,
         Preferences {
             default_agent: Some("codex-acp".into()),
+            auto_collapse_activity: Some(false),
             ..builtin()
         },
     );
@@ -88,6 +89,7 @@ fn default_agent_persists_and_appearance_reset_does_not_change_session_preferenc
     })
     .expect("default agent preference");
     assert_eq!(read(&fixture).default_agent.as_deref(), Some("qwen"));
+    assert_eq!(read(&fixture).auto_collapse_activity, Some(false));
     cx.update_window(fixture.window.into(), |_, window, cx| {
         fixture.view.update(cx, |page, cx| {
             page.form.default_agent.update(cx, |select, cx| {
@@ -532,6 +534,7 @@ fn all_fields_round_trip_and_default_is_applied_immediately(cx: &mut TestAppCont
         composer_enter_behavior: ComposerEnterBehavior::Newline,
         default_agent: None,
         confirm_session_delete: Some(true),
+        auto_collapse_activity: Some(false),
         theme_file: Some("theme.json".into()),
         theme_source: ThemeSource::Builtin,
         theme_mode: ThemeMode::Dark,
@@ -558,6 +561,7 @@ fn all_fields_round_trip_and_default_is_applied_immediately(cx: &mut TestAppCont
         read(&fixture),
         Preferences {
             confirm_session_delete: expected.confirm_session_delete,
+            auto_collapse_activity: expected.auto_collapse_activity,
             ..Preferences::default()
         }
     );

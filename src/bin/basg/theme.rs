@@ -111,6 +111,7 @@ pub(super) struct Appearance {
     pub composer_enter_behavior: preferences::ComposerEnterBehavior,
     pub default_agent: Option<String>,
     pub confirm_session_delete: bool,
+    pub auto_collapse_activity: bool,
     pub font_fallbacks: gpui_kit::FontFallbacks,
 }
 impl Global for Appearance {}
@@ -242,6 +243,7 @@ fn apply(effective: Effective, window: Option<&mut Window>, cx: &mut App) {
         composer_enter_behavior: effective.composer_enter_behavior,
         default_agent: effective.default_agent,
         confirm_session_delete: effective.confirm_session_delete,
+        auto_collapse_activity: effective.auto_collapse_activity,
         font_fallbacks: gpui_kit::FontFallbacks::from_fonts(resolved.font_fallbacks),
     });
     if let Some(window) = window {

@@ -482,6 +482,7 @@ impl AppearancePage {
         self.replace_form(
             &Preferences {
                 confirm_session_delete: self.form.confirm_delete,
+                auto_collapse_activity: self.form.auto_collapse_activity,
                 default_agent: self
                     .form
                     .default_agent

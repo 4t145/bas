@@ -152,7 +152,7 @@ impl Workspace {
                     acp::ContentChunk::new("准备结果。".into()).message_id("second"),
                 ),
                 acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-                    "图片来自工具返回的内容，折叠活动或工具后仍然可见。".into(),
+                    "图片保留在工具调用结果中，展开工具输出即可查看。".into(),
                 )),
             ]
             .into_iter()

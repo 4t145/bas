@@ -6,9 +6,11 @@
 
 delete-dont-ask = Don't ask again when deleting conversations
 settings-sessions = Conversations
-settings-sessions-help = Conversation actions and confirmations.
+settings-sessions-help = Conversation display, actions and confirmations.
 settings-confirm-delete = Don't ask again when deleting conversations
 settings-confirm-delete-help = Applies to local conversations and Agent session history.
+settings-auto-collapse-activity = Auto-collapse thoughts and tool calls
+settings-auto-collapse-activity-help = Group consecutive thoughts and tool calls into a collapsed block. When off, show each as a separate expandable item.
 appearance-font-default = Default
 appearance-value-decrease = Decrease { $field }
 appearance-value-increase = Increase { $field }

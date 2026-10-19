@@ -195,7 +195,7 @@ impl Workspace {
             ),
             Some(status),
         );
-        let panel = gds_uim::el! {
+        gds_uim::el! {
             #content_header::frame(true, cx) [
                 $header,
                 ..$expanded.then(|| {
@@ -236,34 +236,7 @@ impl Workspace {
                     }
                 }),
             ]
-        };
-        let images = if !expanded || !output_open {
-            self.render_tool_images(id, tool, index, cx)
-        } else {
-            Vec::new()
-        };
-        gds_uim::el! { #div { flex; flex_col; gap_2; } [$panel, ..images] }.into_any_element()
-    }
-
-    pub(in crate::workspace) fn render_tool_images(
-        &self,
-        id: &str,
-        tool: &ToolCall,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        tool.content
-            .iter()
-            .enumerate()
-            .filter_map(|(part, content)| {
-                let acp::ToolCallContent::Content(content) = content else {
-                    return None;
-                };
-                matches!(content.content, ContentBlock::Image(_)).then(|| {
-                    self.render_block(format!("{id}-content-{part}"), &content.content, index, cx)
-                })
-            })
-            .collect()
+        }.into_any_element()
     }
 
     fn tool_has_input(&self, tool: &ToolCall) -> bool {

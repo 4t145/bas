@@ -2,6 +2,79 @@ use super::*;
 use gpui_kit::{TestAppContext, size, test::TestWindowExt};
 
 #[gpui_kit::test]
+fn activity_folding_is_searchable_saved_and_restored_in_session_settings(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("settings fixture");
+    let path = directory.path().join("settings.json");
+    std::fs::write(&path, r#"{"appearance":{"theme_source":"builtin"}}"#).expect("settings");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::configuration::init(Some(path.clone()), cx);
+        crate::theme::init(None, cx);
+    });
+    let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        Root::new(cx.new(|cx| Settings::new(window, cx)), window, cx)
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("settings-search", cx);
+        window.input("折叠", cx);
+    })
+    .expect("find session display preference");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let checkbox = window.find("settings-auto-collapse-activity");
+        assert_eq!(checkbox.checked(), Some(true));
+        assert_eq!(
+            checkbox.bounds().size,
+            window.find("settings-confirm-delete").bounds().size
+        );
+        window.click("settings-auto-collapse-activity", cx);
+        assert!(
+            !cx.global::<crate::theme::Appearance>()
+                .auto_collapse_activity
+        );
+    })
+    .expect("save ungrouped activity");
+    assert_eq!(
+        bas::config::Store::at(path.clone())
+            .load()
+            .expect("saved settings")
+            .settings
+            .appearance
+            .auto_collapse_activity,
+        Some(false)
+    );
+    let reopened = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        Root::new(cx.new(|cx| Settings::new(window, cx)), window, cx)
+    });
+    cx.update_window(reopened.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("settings-sessions", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("settings-auto-collapse-activity").checked(),
+            Some(false)
+        );
+        window.click("settings-auto-collapse-activity", cx);
+        assert!(
+            cx.global::<crate::theme::Appearance>()
+                .auto_collapse_activity
+        );
+    })
+    .expect("reopen the saved preference and enable grouping");
+    assert_eq!(
+        bas::config::Store::at(path)
+            .load()
+            .expect("saved settings")
+            .settings
+            .appearance
+            .auto_collapse_activity,
+        Some(true)
+    );
+}
+
+#[gpui_kit::test]
 fn session_preferences_have_their_own_category_and_remain_searchable(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("settings fixture");
     let path = directory.path().join("settings.json");

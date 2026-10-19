@@ -6,9 +6,11 @@
 
 delete-dont-ask = 删除会话时不再提醒
 settings-sessions = 会话
-settings-sessions-help = 会话操作与确认。
+settings-sessions-help = 会话显示、操作与确认。
 settings-confirm-delete = 删除会话时不再提醒
 settings-confirm-delete-help = 适用于本地会话和 Agent 历史会话。
+settings-auto-collapse-activity = 自动折叠思考与工具调用
+settings-auto-collapse-activity-help = 开启时将连续的思考与工具调用合并为折叠块；关闭时逐项显示，仍可分别展开。
 appearance-font-default = 默认
 appearance-value-decrease = 减小{ $field }
 appearance-value-increase = 增大{ $field }

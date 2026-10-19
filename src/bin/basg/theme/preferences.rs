@@ -25,6 +25,7 @@ pub(super) struct Effective {
     pub composer_enter_behavior: ComposerEnterBehavior,
     pub default_agent: Option<String>,
     pub confirm_session_delete: bool,
+    pub auto_collapse_activity: bool,
 }
 
 /// # Errors
@@ -74,5 +75,6 @@ pub(super) fn resolve(
         composer_enter_behavior: preferences.composer_enter_behavior,
         default_agent: preferences.default_agent.clone(),
         confirm_session_delete: preferences.confirm_session_delete.unwrap_or(true),
+        auto_collapse_activity: preferences.auto_collapse_activity.unwrap_or(true),
     })
 }

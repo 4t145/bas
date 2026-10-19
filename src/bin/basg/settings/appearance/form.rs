@@ -12,6 +12,7 @@ use gpui_kit::{
 
 pub(super) struct Form {
     pub confirm_delete: Option<bool>,
+    pub auto_collapse_activity: Option<bool>,
     pub default_agent: Entity<SelectState<Vec<Choice<Option<String>>>>>,
     pub default_agent_choices: Vec<Option<String>>,
     pub language: Entity<SelectState<Vec<Choice<Language>>>>,
@@ -171,6 +172,7 @@ impl Form {
         };
         Self {
             confirm_delete: p.confirm_session_delete,
+            auto_collapse_activity: p.auto_collapse_activity,
             default_agent,
             default_agent_choices,
             fallbacks: input(
@@ -262,6 +264,7 @@ impl Form {
         };
         let p = Preferences {
             confirm_session_delete: self.confirm_delete,
+            auto_collapse_activity: self.auto_collapse_activity,
             default_agent: self
                 .default_agent
                 .read(cx)

@@ -11,6 +11,8 @@ impl AppearancePage {
             crate::i18n::tr!("settings-sessions-help"),
             crate::i18n::tr!("settings-confirm-delete"),
             crate::i18n::tr!("settings-default-agent"),
+            crate::i18n::tr!("settings-auto-collapse-activity"),
+            crate::i18n::tr!("settings-auto-collapse-activity-help"),
         ]
         .iter()
         .any(|text| text.to_lowercase().contains(&query))
@@ -57,6 +59,25 @@ impl AppearancePage {
             reset: None,
             last: false,
         };
+        let auto_collapse_activity = Row {
+            id: "settings-auto-collapse-activity".into(),
+            label: crate::i18n::tr!("settings-auto-collapse-activity"),
+            help: crate::i18n::tr!("settings-auto-collapse-activity-help"),
+            control: gds_uim::el! {
+                #crate::ui::checkbox("settings-auto-collapse-activity") {
+                    accessibility_label: $crate::i18n::tr!("settings-auto-collapse-activity");
+                    checked: $self.form.auto_collapse_activity.unwrap_or(true);
+                    disabled: $self.document.is_none();
+                    on_click: $cx.listener(|this, checked: &bool, window, cx| {
+                        this.form.auto_collapse_activity = Some(*checked);
+                        this.flush_pending(window, cx);
+                    });
+                }
+            }
+            .into_any_element(),
+            reset: None,
+            last: false,
+        };
         let confirm_delete = Row {
             id: "settings-confirm-delete".into(),
             label: crate::i18n::tr!("settings-confirm-delete"),
@@ -87,7 +108,9 @@ impl AppearancePage {
                 ],
             ],
             ..$bool::then(Self::matches_session_query(&self.query), || gds_uim::el! {
-                #div { border_t_1; border_color: $cx.theme().border; flex; flex_col; } [$default_agent, $confirm_delete]
+                #div { border_t_1; border_color: $cx.theme().border; flex; flex_col; } [
+                    $default_agent, $auto_collapse_activity, $confirm_delete,
+                ]
             }),
             ..$bool::then(!Self::matches_session_query(&self.query), || gds_uim::el! {
                 #div { id: "settings-no-results"; test_support; } [$crate::i18n::tr!("settings-no-results")]
