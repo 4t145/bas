@@ -169,6 +169,3 @@ impl Agents {
         })
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

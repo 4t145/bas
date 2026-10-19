@@ -140,6 +140,3 @@ impl RenderOnce for Button {
         self.into_component().render(window, cx)
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

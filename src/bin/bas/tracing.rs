@@ -113,18 +113,6 @@ impl Config {
         self
     }
 
-    #[cfg(test)]
-    pub fn with_ansi(mut self, enabled: bool) -> Self {
-        self.ansi = enabled;
-        self
-    }
-
-    #[cfg(test)]
-    pub fn with_target(mut self, enabled: bool) -> Self {
-        self.include_target = enabled;
-        self
-    }
-
     pub fn with_syslog_identifier(mut self, identifier: impl Into<String>) -> Self {
         self.syslog_identifier = Some(identifier.into());
         self

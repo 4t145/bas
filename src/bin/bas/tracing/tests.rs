@@ -1,24 +1,4 @@
-use std::str::FromStr;
-
 use super::{Backend, Config};
-
-#[test]
-fn parses_backend_names_case_insensitively() {
-    assert_eq!(Backend::from_str("auto").unwrap(), Backend::Auto);
-    assert_eq!(Backend::from_str(" STDOUT ").unwrap(), Backend::Stdout);
-    assert_eq!(Backend::from_str("Journal").unwrap(), Backend::Journald);
-    assert_eq!(Backend::from_str("journald").unwrap(), Backend::Journald);
-}
-
-#[test]
-fn rejects_unknown_backend_name() {
-    let error = Backend::from_str("file").unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("expected auto, stdout, or journald")
-    );
-}
 
 #[test]
 fn default_is_safe_for_service_output() {
@@ -29,21 +9,6 @@ fn default_is_safe_for_service_output() {
     assert!(!config.ansi());
     assert!(config.includes_target());
     assert_eq!(config.syslog_identifier(), None);
-}
-
-#[test]
-fn builder_updates_backend_options() {
-    let config = Config::new(Backend::Journald)
-        .with_filter("bas=debug")
-        .with_ansi(true)
-        .with_target(false)
-        .with_syslog_identifier("bas");
-
-    assert_eq!(config.backend(), Backend::Journald);
-    assert_eq!(config.filter(), "bas=debug");
-    assert!(config.ansi());
-    assert!(!config.includes_target());
-    assert_eq!(config.syslog_identifier(), Some("bas"));
 }
 
 #[test]

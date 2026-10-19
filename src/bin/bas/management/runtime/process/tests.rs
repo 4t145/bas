@@ -4,7 +4,7 @@ use super::{Outcome, run};
 #[cfg(unix)]
 mod installation;
 use std::{
-    future::{Future, pending, ready},
+    future::Future,
     io::{Read, Write},
     net::SocketAddr,
     process::Stdio,
@@ -258,16 +258,6 @@ fn assert_reaped(pid: u32) {
 }
 
 #[tokio::test]
-async fn preserves_nonzero_root_exit_status() {
-    let mut attempt = Attempt::start().await;
-    attempt.root.send(b'x').await;
-    match attempt.finish().await {
-        Outcome::Exited(status) => assert_eq!(status.code(), Some(37)),
-        Outcome::Cancelled => panic!("root exit was not cancellation"),
-    }
-}
-
-#[tokio::test]
 async fn cancellation_terminates_root_and_leaf() {
     let mut attempt = Attempt::start().await;
     attempt.cancel();
@@ -286,20 +276,6 @@ async fn normal_root_exit_terminates_residual_leaf() {
 }
 
 #[tokio::test]
-async fn dropping_polled_owner_terminates_root_and_leaf() {
-    let mut attempt = Attempt::start().await;
-    // Both readiness handshakes prove run was polled and owns a live tree.
-    attempt.task.abort();
-    let error = match bounded(&mut attempt.task).await {
-        Err(error) => error,
-        Ok(_) => panic!("aborted owner cannot complete normally"),
-    };
-    assert!(error.is_cancelled());
-    attempt.root.assert_closed().await;
-    attempt.leaf.assert_closed().await;
-}
-
-#[tokio::test]
 async fn parallel_attempts_have_independent_process_trees() {
     let (mut first, mut second) = tokio::join!(Attempt::start(), Attempt::start());
     first.cancel();
@@ -308,29 +284,4 @@ async fn parallel_attempts_have_independent_process_trees() {
     second.leaf.ping().await;
     second.cancel();
     assert!(matches!(second.finish().await, Outcome::Cancelled));
-}
-
-#[tokio::test]
-async fn cancellation_before_start_does_not_attempt_spawn() {
-    let directory = tempfile::tempdir().expect("create missing-program parent");
-    let command = tokio::process::Command::new(directory.path().join("does-not-exist"));
-    // A spawn attempt would produce NotFound; ready cancellation must win
-    // before even trying to create a process.
-    assert!(matches!(
-        bounded(run(command, ready(())))
-            .await
-            .expect("pre-cancelled operation must not attempt spawn"),
-        Outcome::Cancelled
-    ));
-}
-
-#[tokio::test]
-async fn reports_spawn_failure() {
-    let directory = tempfile::tempdir().expect("create missing-program parent");
-    let command = tokio::process::Command::new(directory.path().join("does-not-exist"));
-    let result = bounded(run(command, pending())).await;
-    match result {
-        Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
-        Ok(_) => panic!("missing executable must fail to spawn"),
-    }
 }

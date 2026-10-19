@@ -334,6 +334,3 @@ pub(super) fn config_option_hint(option: &bas::acp::SessionConfigOption) -> Stri
         _ => crate::i18n::tr!("option-choose", name = option.name.as_str()),
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

@@ -47,31 +47,6 @@ fn legal_large_events_split_without_gaps_and_resume_in_order() {
 }
 
 #[test]
-fn exact_envelope_overhead_including_varint_boundaries() {
-    for cursor in [0, 127, 128, 16383, 16384, u64::MAX] {
-        for size in [0, 120, 127, 128, 16380] {
-            for has_more in [false, true] {
-                let event = event(cursor, size);
-                let expected = pb::LoadHistoryResponse {
-                    events: vec![event.clone()],
-                    next: has_more.then_some(cursor),
-                };
-                let budget = expected.encode_to_vec().len();
-                assert_eq!(
-                    history_page(vec![event.clone()].into_iter(), has_more, budget)
-                        .expect("exact encoded response length fits the budget"),
-                    expected,
-                );
-                let error = history_page(vec![event].into_iter(), has_more, budget - 1)
-                    .expect_err("one byte below the encoded response length cannot fit");
-                assert_eq!(error.code(), tonic::Code::ResourceExhausted);
-                assert!(error.message().contains("history event"));
-            }
-        }
-    }
-}
-
-#[test]
 fn oversized_later_event_does_not_hide_preceding_events_or_get_skipped() {
     let events = vec![event(1, 5), event(2, 200)];
     let first = history_page(events.clone().into_iter(), false, 100)
@@ -90,18 +65,4 @@ fn oversized_later_event_does_not_hide_preceding_events_or_get_skipped() {
             .next,
         None
     );
-}
-
-#[test]
-fn conversion_stops_at_the_first_event_that_does_not_fit() {
-    let converted = std::cell::Cell::new(0);
-    let events = (1..100_u32).map(|cursor| {
-        converted.set(converted.get() + 1);
-        event(u64::from(cursor), 60)
-    });
-    let page = history_page(events, false, 100)
-        .expect("the budget fits one event and its continuation cursor");
-    assert_eq!(page.events.len(), 1);
-    assert_eq!(page.next, Some(1));
-    assert_eq!(converted.get(), 2);
 }

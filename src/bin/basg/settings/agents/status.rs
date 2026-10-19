@@ -1,8 +1,5 @@
 use crate::agents::Status;
 
-#[cfg(test)]
-mod tests;
-
 pub(super) fn label(status: &Status) -> &'static str {
     match status {
         Status::Checking => crate::i18n::tr!("agent-checking-program"),

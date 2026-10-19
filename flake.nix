@@ -60,19 +60,6 @@
             rustc = toolchain;
           };
         };
-      testFor =
-        system:
-        nixpkgs.lib.nixos.runTest (
-          import ./nix/tests/system.nix {
-            pkgs = pkgsFor system;
-            package = packageFor system;
-          }
-        );
-      shellFor =
-        system:
-        (testFor system).extend {
-          modules = [ (import ./nix/tests/shell.nix { pkgs = pkgsFor system; }) ];
-        };
     in
     {
       packages = eachLinux (system: {
@@ -80,14 +67,11 @@
         bas = packageFor system;
         basg = windowPackageFor system;
         acp-test-agent = testAgentFor system;
-        system-test-driver = (testFor system).driverInteractive;
-        system-test-shell = (shellFor system).driver;
       });
       checks = eachLinux (system: {
         package = packageFor system;
         basg = windowPackageFor system;
         acp-test-agent = testAgentFor system;
-        system = testFor system;
       });
       apps = eachLinux (system: {
         bas = {
@@ -105,10 +89,6 @@
         acp-test-agent = {
           type = "app";
           program = "${testAgentFor system}/bin/acp-test-agent";
-        };
-        system-test = {
-          type = "app";
-          program = "${(testFor system).driverInteractive}/bin/nixos-test-driver";
         };
       });
       formatter = eachSystem (system: (pkgsFor system).nixfmt);

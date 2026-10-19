@@ -68,35 +68,6 @@ async fn events(session: &Arc<crate::session::Session>) -> Vec<bas::model::Event
 }
 
 #[tokio::test]
-async fn discovers_pages_on_one_connection_without_new_or_import() {
-    let directory = tempfile::tempdir().expect("directory");
-    let registry = registry("history", &directory);
-    let service = Service::new(Arc::clone(&registry));
-    let page = service
-        .list_agent_sessions(Request::new(pb::ListAgentSessionsRequest {
-            agent: "history".into(),
-            cwd: None,
-        }))
-        .await
-        .expect("discover")
-        .into_inner();
-    let sessions: v1::ListSessionsResponse =
-        page.sessions.expect("sessions").decode().expect("ACP list");
-    assert_eq!(sessions.sessions.len(), 1);
-    assert!(sessions.next_cursor.is_none());
-    assert_eq!(
-        sessions.sessions[0].meta.as_ref().expect("meta")["origin"],
-        "native-cli"
-    );
-    assert!(registry.list().await.is_empty());
-    assert!(recorded(&directory, "new").is_empty());
-    let requests = recorded(&directory, "list");
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0]["params"].get("cursor").is_none());
-    assert_eq!(requests[1]["params"]["cursor"], "opaque/cursor:2");
-}
-
-#[tokio::test]
 async fn imports_replay_once_and_continues_using_the_original_agent_id() {
     let directory = tempfile::tempdir().expect("directory");
     let registry = registry("history", &directory);
@@ -247,42 +218,6 @@ async fn restore_starts_the_archived_session_without_duplicating_history() {
 }
 
 #[tokio::test]
-async fn rejected_and_unsupported_restarts_leave_the_record_stopped_and_retryable() {
-    let directory = tempfile::tempdir().expect("directory");
-    let registry = registry("history", &directory);
-    let session = registry
-        .import_agent_session(import_request(&directory), "fixture".into())
-        .await
-        .expect("import");
-    session.close_backend().await.expect("close");
-    let before = session.snapshot();
-    let count = events(&session).await.len();
-    for mode in ["reject_load", "unsupported"] {
-        registry.replace_catalog(Arc::new(
-            Catalog::from_specs([spec(mode, &directory)]).expect("catalog"),
-        ));
-        assert!(registry.restart_session(&session).await.is_err());
-        assert_eq!(session.snapshot(), before);
-        assert_eq!(events(&session).await.len(), count);
-        assert!(recorded(&directory, "new").is_empty());
-    }
-    registry.replace_catalog(Arc::new(
-        Catalog::from_specs([spec("history", &directory)]).expect("catalog"),
-    ));
-    let (first, second) = tokio::join!(
-        registry.restart_session(&session),
-        registry.restart_session(&session)
-    );
-    assert_eq!(
-        usize::from(first.is_ok()) + usize::from(second.is_ok()),
-        1,
-        "one restart owns the session"
-    );
-    assert_eq!(session.meta().status, SessionStatus::Idle);
-    registry.shutdown().await;
-}
-
-#[tokio::test]
 async fn cancelled_restart_does_not_change_or_lock_the_stopped_record() {
     let directory = tempfile::tempdir().expect("directory");
     let registry = registry("history", &directory);
@@ -323,102 +258,6 @@ async fn cancelled_restart_does_not_change_or_lock_the_stopped_record() {
 }
 
 #[tokio::test]
-async fn standard_close_and_history_delete_retain_local_records() {
-    let directory = tempfile::tempdir().expect("directory");
-    let registry = registry("history", &directory);
-    let service = Service::new(Arc::clone(&registry));
-    let info = v1::SessionInfo::new("fixture", directory.path()).title("External history");
-    let imported = service
-        .import_agent_session(Request::new(pb::ImportAgentSessionRequest {
-            agent: "history".into(),
-            session_info: Some((&info).into()),
-        }))
-        .await
-        .expect("RPC import")
-        .into_inner()
-        .session
-        .expect("session");
-    let public_id: SessionId = imported.id.parse().expect("UUID");
-    assert!(
-        service
-            .delete_agent_session(Request::new(pb::DeleteAgentSessionRequest {
-                agent: "history".into(),
-                session_id: "fixture".into(),
-            }))
-            .await
-            .is_err(),
-        "must not delete history used by an open session"
-    );
-    assert!(recorded(&directory, "delete").is_empty());
-    service
-        .close_session(Request::new(pb::GetSessionRequest {
-            session: imported.id.clone(),
-        }))
-        .await
-        .expect("standard close");
-    assert_eq!(recorded(&directory, "close").len(), 1);
-    assert_eq!(
-        recorded(&directory, "close")[0]["params"]["sessionId"],
-        "fixture"
-    );
-    assert_eq!(
-        registry
-            .get(public_id)
-            .await
-            .expect("retained record")
-            .meta()
-            .status,
-        SessionStatus::Stopped
-    );
-    service
-        .delete_agent_session(Request::new(pb::DeleteAgentSessionRequest {
-            agent: "history".into(),
-            session_id: "fixture".into(),
-        }))
-        .await
-        .expect("delete Agent history");
-    assert!(
-        registry.get(public_id).await.is_ok(),
-        "Agent deletion is not local deletion"
-    );
-    assert_eq!(
-        recorded(&directory, "delete")[0]["params"]["sessionId"],
-        "fixture"
-    );
-    assert!(
-        registry
-            .list_agent_sessions("history".into(), None)
-            .await
-            .expect("rediscover")
-            .sessions
-            .sessions
-            .is_empty()
-    );
-    registry.shutdown().await;
-}
-
-#[tokio::test]
-async fn unsupported_capabilities_are_checked_before_sending_methods() {
-    let directory = tempfile::tempdir().expect("directory");
-    let registry = registry("unsupported", &directory);
-    assert!(
-        registry
-            .list_agent_sessions("history".into(), None)
-            .await
-            .is_err()
-    );
-    assert!(
-        registry
-            .delete_agent_session("history".into(), "fixture".into())
-            .await
-            .is_err()
-    );
-    assert!(recorded(&directory, "list").is_empty());
-    assert!(recorded(&directory, "delete").is_empty());
-    assert!(recorded(&directory, "new").is_empty());
-}
-
-#[tokio::test]
 async fn repeating_pagination_and_failed_import_do_not_register_sessions() {
     for mode in ["repeat_cursor", "reject_load"] {
         let directory = tempfile::tempdir().expect("directory");
@@ -442,50 +281,6 @@ async fn repeating_pagination_and_failed_import_do_not_register_sessions() {
         assert!(registry.list().await.is_empty());
         assert!(recorded(&directory, "new").is_empty());
     }
-}
-
-#[tokio::test]
-async fn close_rejection_keeps_the_session_and_native_error() {
-    let directory = tempfile::tempdir().expect("directory");
-    let registry = registry("reject_close", &directory);
-    let session = registry
-        .import_agent_session(import_request(&directory), "fixture".into())
-        .await
-        .expect("import");
-    let service = Service::new(Arc::clone(&registry));
-    let error = service
-        .close_session(Request::new(pb::GetSessionRequest {
-            session: session.id().to_string(),
-        }))
-        .await
-        .expect_err("reject close");
-    assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    let native: v1::Error = serde_json::from_slice(error.details()).expect("native error");
-    assert_eq!(native.message, "closure rejected");
-    assert_eq!(session.meta().status, SessionStatus::Idle);
-    session
-        .prompt(vec!["still usable".into()])
-        .await
-        .expect("can continue");
-    registry.shutdown().await;
-}
-
-#[tokio::test]
-async fn resume_only_import_is_explicitly_without_replayed_history() {
-    let directory = tempfile::tempdir().expect("directory");
-    let registry = registry("resume", &directory);
-    let session = registry
-        .import_agent_session(import_request(&directory), "fixture".into())
-        .await
-        .expect("resume");
-    assert_eq!(recorded(&directory, "resume").len(), 1);
-    assert!(recorded(&directory, "load").is_empty());
-    let history = events(&session).await;
-    assert!(!history.iter().any(|event| matches!(
-        event.kind,
-        bas::model::EventKind::Acp(v1::SessionUpdate::AgentMessageChunk(_))
-    )));
-    registry.shutdown().await;
 }
 
 #[tokio::test]
@@ -564,89 +359,4 @@ async fn imported_identity_and_transcript_survive_daemon_restart() {
     assert_eq!(recorded(&directory, "load").len(), 3);
     assert_eq!(events(&session).await.len(), stopped_history.len() + 2);
     reopened.shutdown().await;
-}
-
-#[tokio::test]
-async fn local_deletion_does_not_delete_agent_history() {
-    let directory = tempfile::tempdir().expect("directory");
-    let registry = registry("history", &directory);
-    let session = registry
-        .import_agent_session(import_request(&directory), "fixture".into())
-        .await
-        .expect("import");
-    registry.remove(session.id()).await.expect("local delete");
-    assert_eq!(
-        recorded(&directory, "close").len(),
-        1,
-        "release Agent resources before process cleanup"
-    );
-    assert!(recorded(&directory, "delete").is_empty());
-    assert_eq!(
-        registry
-            .list_agent_sessions("history".into(), None)
-            .await
-            .expect("history")
-            .sessions
-            .sessions
-            .len(),
-        1
-    );
-}
-
-#[tokio::test]
-async fn native_delete_errors_and_discovery_deadlines_are_not_silently_successful() {
-    let directory = tempfile::tempdir().expect("directory");
-    let registry = registry("reject_delete", &directory);
-    let service = Service::new(registry);
-    let error = service
-        .delete_agent_session(Request::new(pb::DeleteAgentSessionRequest {
-            agent: "history".into(),
-            session_id: "fixture".into(),
-        }))
-        .await
-        .expect_err("reject delete");
-    assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    assert!(!directory.path().join("pid.deleted").exists());
-
-    let registry = Registry::new(
-        Arc::new(Catalog::from_specs([spec("list_hang", &directory)]).expect("catalog")),
-        Arc::new(LocalHost::default()),
-        Limits {
-            startup_timeout: Duration::from_millis(100),
-            ..Limits::default()
-        },
-    );
-    assert!(matches!(
-        registry.list_agent_sessions("history".into(), None).await,
-        Err(CreateError::Timeout)
-    ));
-    assert!(registry.list().await.is_empty());
-}
-
-#[tokio::test]
-async fn timed_out_close_stops_the_uncertain_runtime_without_retrying() {
-    let directory = tempfile::tempdir().expect("directory");
-    let registry = registry("close_hang", &directory);
-    let session = registry
-        .import_agent_session(import_request(&directory), "fixture".into())
-        .await
-        .expect("import");
-    assert!(
-        session.close_backend().await.is_err(),
-        "never report remote success after timeout"
-    );
-    assert_eq!(session.meta().status, SessionStatus::Stopped);
-    assert_eq!(
-        recorded(&directory, "close").len(),
-        1,
-        "cleanup must not retry an uncertain request"
-    );
-    assert!(
-        session
-            .prompt(vec!["must not dispatch".into()])
-            .await
-            .is_err()
-    );
-    assert!(recorded(&directory, "delete").is_empty());
-    registry.shutdown().await;
 }

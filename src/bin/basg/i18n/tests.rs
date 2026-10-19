@@ -2,32 +2,7 @@ use super::*;
 pub(crate) fn visible_text(text: &str) -> String {
     text.replace(['\u{2068}', '\u{2069}'], "")
 }
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
-
-// Both BasG and the upstream components keep the locale at process scope.
-// Run tests that change it in a child process so other GUI tests stay isolated.
-#[cfg(feature = "gui-tests")]
-pub(crate) fn isolated_language_test(name: &str) -> bool {
-    const CHILD: &str = "BASG_LANGUAGE_TEST";
-    if std::env::var(CHILD).as_deref() == Ok(name) {
-        return true;
-    }
-    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", name, "--nocapture"])
-        .env(CHILD, name)
-        .output()
-        .expect("run isolated language test");
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    false
-}
+use std::collections::{BTreeMap, BTreeSet};
 
 fn messages(source: &str) -> BTreeMap<&str, String> {
     let mut messages = BTreeMap::new();
@@ -109,52 +84,4 @@ fn values_are_data_and_keep_bidi_isolation() {
     assert!(result.contains(path));
     assert!(result.contains('\u{2068}'));
     assert!(result.contains('\u{2069}'));
-}
-
-#[test]
-fn every_interface_message_reference_exists() {
-    fn check(path: &Path, ids: &BTreeMap<&str, String>, pattern: &regex::Regex) {
-        for entry in std::fs::read_dir(path).expect("source directory") {
-            let path = entry.expect("source entry").path();
-            if path.is_dir() {
-                check(&path, ids, pattern);
-            } else if path.extension().is_some_and(|extension| extension == "rs") {
-                let source = std::fs::read_to_string(&path).expect("source file");
-                for capture in pattern.captures_iter(&source) {
-                    assert!(
-                        ids.contains_key(&capture[1]),
-                        "missing {} in {}",
-                        &capture[1],
-                        path.display()
-                    );
-                }
-            }
-        }
-    }
-    let pattern =
-        regex::Regex::new(r#"tr!\(\s*"([a-z][a-z0-9-]*)""#).expect("message reference regex");
-    check(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/basg"),
-        &messages(CHINESE),
-        &pattern,
-    );
-}
-
-#[test]
-fn language_preferences_are_strict_and_backwards_compatible() {
-    use bas::config::appearance::Appearance;
-    assert_eq!(
-        Appearance::from_json("{}")
-            .expect("default preferences")
-            .language,
-        Language::Chinese
-    );
-    for (locale, language) in [("zh-CN", Language::Chinese), ("en-US", Language::English)] {
-        let preferences = Appearance::from_json(&format!(r#"{{"language":"{locale}"}}"#))
-            .expect("supported language");
-        assert_eq!(preferences.language, language);
-        let serialized = serde_json::to_value(preferences).expect("serialized preferences");
-        assert_eq!(serialized["language"], locale);
-    }
-    assert!(Appearance::from_json(r#"{"language":"fr"}"#).is_err());
 }

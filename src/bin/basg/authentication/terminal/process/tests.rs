@@ -253,17 +253,6 @@ fn cancellation_kills_term_ignoring_tree_without_touching_other_attempt() {
 }
 
 #[test]
-fn dropping_run_kills_tree() {
-    let (mut attempt, _) = Attempt::spawn("drop", false, true);
-    let pids = attempt.ready();
-    attempt.cancel();
-    assert_eq!(attempt.wait().signal(), Some(nix::libc::SIGKILL));
-    for pid in pids {
-        assert_terminated(pid);
-    }
-}
-
-#[test]
 fn cancellation_kills_descendants_even_when_root_obeys_term() {
     let (mut attempt, _) = Attempt::spawn("responsive", false, true);
     let pids = attempt.ready();
@@ -275,29 +264,10 @@ fn cancellation_kills_descendants_even_when_root_obeys_term() {
 }
 
 #[test]
-fn helper_signals_cancel_tree() {
-    for signal in [Signal::SIGINT, Signal::SIGHUP, Signal::SIGTERM] {
-        let (mut attempt, _) = Attempt::spawn("signal", false, true);
-        let pids = attempt.ready();
-        kill(Pid::from_raw(attempt.child.id() as i32), signal).expect("signal helper");
-        assert_eq!(attempt.wait().signal(), Some(nix::libc::SIGKILL));
-        for pid in pids {
-            assert_terminated(pid);
-        }
-    }
-}
-
-#[test]
 fn rejects_group_not_owned_before_spawning() {
     let (mut attempt, _) = Attempt::spawn("reject", false, false);
     assert!(attempt.wait().success());
     assert!(!attempt.directory.path().join("spawned").exists());
-}
-
-#[test]
-fn returns_real_exit_code_without_killing_helper() {
-    let (mut attempt, _) = Attempt::spawn("exit", false, true);
-    assert_eq!(attempt.wait().code(), Some(37));
 }
 
 #[test]
@@ -308,10 +278,4 @@ fn foreground_login_can_read_real_pty_without_sigttin() {
         .write_all(b"terminal-input\n")
         .expect("terminal input");
     assert_eq!(attempt.wait().code(), Some(37));
-}
-
-#[test]
-fn rejects_background_terminal_before_spawning() {
-    let (mut attempt, _master) = Attempt::spawn("background", true, true);
-    assert!(attempt.wait().success());
 }

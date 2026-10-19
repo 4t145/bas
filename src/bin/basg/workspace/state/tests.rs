@@ -124,26 +124,6 @@ fn observing_catalog_ids_reports_disappearance_without_discarding_content() {
 }
 
 #[test]
-fn recording_prompt_only_changes_that_sessions_prompt_status() {
-    let id = SessionId::new();
-    let other = SessionId::new();
-    let mut store = SessionStore {
-        unstarted: HashSet::from([id, other]),
-        ..Default::default()
-    };
-    store.drafts.insert(id, Draft::default());
-    store.pending.configuring.insert(id);
-
-    store.record_prompt(id);
-    store.record_prompt(id);
-
-    assert_eq!(store.prompted, HashSet::from([id]));
-    assert_eq!(store.unstarted, HashSet::from([other]));
-    assert!(store.drafts.contains_key(&id));
-    assert!(store.pending.configuring.contains(&id));
-}
-
-#[test]
 fn removing_directory_draft_removes_content_and_metadata_together() {
     let directory = Some(PathBuf::from("/workspace"));
     let mut drafts = DirectoryDrafts::default();

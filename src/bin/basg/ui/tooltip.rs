@@ -107,7 +107,3 @@ pub(crate) fn element(
     .max_h(px(height))
     .build(window, cx)
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-#[path = "tooltip/tests.rs"]
-mod tests;

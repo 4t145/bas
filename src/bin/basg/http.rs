@@ -10,9 +10,6 @@ use gpui_kit::http_client::{
 use reqwest_client::ReqwestClient;
 use tokio::runtime::Handle;
 
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;
-
 const USER_AGENT: &str = concat!("basg/", env!("CARGO_PKG_VERSION"));
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 

@@ -201,12 +201,6 @@ impl Storage for LocalDb {
 
 #[cfg(test)]
 pub(in crate::storage) enum TestSql {
-    DropMigrationHistory,
-    InsertDuplicate {
-        session: SessionId,
-        cursor: Cursor,
-        payload: Vec<u8>,
-    },
     RejectThirdEvent,
 }
 
@@ -217,29 +211,6 @@ impl TestSql {
 
         let mut db = store.db.clone();
         match self {
-            Self::DropMigrationHistory => {
-                sql::statement("DROP TABLE __toasty_migrations")
-                    .exec(&mut db)
-                    .await?;
-                sql::statement("DROP TABLE accepted_prompts")
-                    .exec(&mut db)
-                    .await?;
-                sql::statement("PRAGMA user_version = 1")
-                    .exec(&mut db)
-                    .await?;
-            }
-            Self::InsertDuplicate {
-                session,
-                cursor,
-                payload,
-            } => {
-                sql::statement("INSERT INTO events(session_id,cursor,payload) VALUES (?1,?2,?3)")
-                    .bind(session.to_string())
-                    .bind(super::raw(cursor)?)
-                    .bind(payload)
-                    .exec(&mut db)
-                    .await?;
-            }
             Self::RejectThirdEvent => {
                 sql::statement("CREATE TRIGGER fail_third BEFORE INSERT ON events WHEN NEW.cursor = 3 BEGIN SELECT RAISE(ABORT, 'failure'); END")
                     .exec(&mut db)

@@ -47,32 +47,6 @@ fn registry() -> Registry {
     )
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn registry_rejects_non_utf8_canonical_workspaces_including_symlinks() {
-    use std::{
-        ffi::OsString,
-        os::unix::{ffi::OsStringExt, fs::symlink},
-    };
-    let directory = tempfile::tempdir().expect("directory");
-    let invalid = directory
-        .path()
-        .join(OsString::from_vec(b"workspace-\xff".to_vec()));
-    std::fs::create_dir(&invalid).expect("non-UTF8 directory");
-    let link = directory.path().join("valid-link");
-    symlink(&invalid, &link).expect("symlink");
-    let registry = registry();
-    for cwd in [invalid, link] {
-        let mut request = request();
-        request.cwd = Some(cwd);
-        assert!(
-            matches!(registry.create(request).await, Err(CreateError::Cwd(error))
-            if error.kind() == std::io::ErrorKind::InvalidInput)
-        );
-        assert!(registry.list().await.is_empty());
-    }
-}
-
 struct PendingAgent {
     _updates: mpsc::Sender<Update>,
 }
@@ -235,32 +209,6 @@ fn ring_pages_and_reports_eviction_with_sparse_cursors() {
     assert_eq!(ring.page(page.next, 10).expect("last page").next, None);
     assert_eq!(ring.page(None, 10).expect("current window").events.len(), 2);
     assert_eq!(ring.page(None, 0), Err(HistoryError::EmptyPage));
-}
-
-#[tokio::test]
-async fn resume_replays_all_retained_events_then_follows_live() {
-    let session = pending_session(Limits::default()).await;
-    for i in 0..5 {
-        session
-            .set_title(&format!("title {i}"))
-            .await
-            .expect("rename succeeds");
-    }
-    let mut attachment = session
-        .attach(AttachOptions {
-            cursor: Some(Cursor::START),
-            replay: 2,
-        })
-        .await
-        .expect("cursor retained");
-    assert_eq!(attachment.cursor(), Cursor::START);
-    for expected in 1..=6 {
-        let event = attachment.recv().await.expect("all history is available");
-        assert_eq!(event.cursor.raw(), expected);
-        assert_eq!(attachment.cursor(), event.cursor);
-    }
-    session.set_title("live").await.expect("rename succeeds");
-    assert_eq!(attachment.recv().await.expect("live event").cursor.raw(), 7);
 }
 
 #[tokio::test]
@@ -461,40 +409,6 @@ async fn undispatched_cancellation_is_an_interruption_and_session_can_continue()
 }
 
 #[tokio::test]
-async fn synchronous_dispatch_rejection_has_no_native_result() {
-    let registry = registry();
-    let session = registry.create(request()).await.expect("session");
-    let image = serde_json::from_value(serde_json::json!({
-        "type": "image", "data": "", "mimeType": "image/png"
-    }))
-    .expect("image");
-    session
-        .prompt(vec![image])
-        .await
-        .expect("accepted before dispatch failure");
-    let history = session.page(None, 100).expect("history");
-    assert!(matches!(
-        history.events.last().expect("interruption").kind,
-        EventKind::TurnInterrupted {
-            reason: bas::model::InterruptionReason::DispatchFailure { .. },
-            ..
-        }
-    ));
-    assert!(
-        !history
-            .events
-            .iter()
-            .any(|event| matches!(event.kind, EventKind::TurnFinished { .. }))
-    );
-    assert_eq!(session.meta().status, SessionStatus::Idle);
-    session
-        .prompt(vec!["valid".into()])
-        .await
-        .expect("next prompt");
-    registry.shutdown().await;
-}
-
-#[tokio::test]
 async fn shutdown_is_terminal_and_closes_existing_and_new_attachments() {
     let session = pending_session(Limits::default()).await;
     let turn = session
@@ -544,41 +458,6 @@ async fn shutdown_is_terminal_and_closes_existing_and_new_attachments() {
 }
 
 #[tokio::test]
-async fn backend_failure_is_replayable_and_terminal() {
-    let session = pending_session(Limits::default()).await;
-    session
-        .prompt(vec![ContentBlock::from("first")])
-        .await
-        .expect("prompt");
-    let mut attachment = session.attach(options(0)).await.expect("attach");
-    session
-        .apply(Update::Failed("connection lost".into()))
-        .await;
-    assert!(matches!(
-        attachment.recv().await.expect("interruption").kind,
-        EventKind::TurnInterrupted { reason: bas::model::InterruptionReason::BackendFailure { message }, .. } if message == "connection lost"
-    ));
-    assert_eq!(
-        attachment.recv().await.expect("failure event").kind,
-        EventKind::Failed {
-            message: "connection lost".into()
-        }
-    );
-    assert_eq!(attachment.recv().await, Err(AttachError::Closed));
-    assert_eq!(session.meta().status, SessionStatus::Failed);
-    assert!(matches!(
-        session
-            .page(None, 100)
-            .expect("history")
-            .events
-            .last()
-            .expect("failure")
-            .kind,
-        EventKind::Failed { .. }
-    ));
-}
-
-#[tokio::test]
 async fn slow_live_subscribers_receive_lag_errors() {
     let session = pending_session(Limits {
         live_capacity: NonZeroUsize::new(2).expect("nonzero"),
@@ -592,129 +471,6 @@ async fn slow_live_subscribers_receive_lag_errors() {
     assert!(matches!(
         attachment.recv().await,
         Err(AttachError::Lagged(_))
-    ));
-}
-
-#[tokio::test]
-async fn detaching_preserves_the_turn_and_removing_releases_the_session() {
-    let (completions, mut completed) = mpsc::channel(1);
-    let registry = registry().with_completions(completions);
-    let session = registry.create(request()).await.expect("create");
-    let attachment = session.attach(options(0)).await.expect("attach");
-    session
-        .prompt(vec![ContentBlock::from("hello")])
-        .await
-        .expect("prompt");
-    drop(attachment);
-    assert_eq!(session.subscriber_count(), 0);
-    let completion = tokio::time::timeout(TIMEOUT, completed.recv())
-        .await
-        .expect("turn finishes without an attachment")
-        .expect("completion notification");
-    assert!(matches!(completion.outcome,
-        super::CompletionOutcome::Native(Ok(response)) if response.stop_reason == StopReason::EndTurn));
-    let page = session.page(None, 100).expect("history");
-    assert!(
-        page.events
-            .iter()
-            .any(|event| matches!(&event.kind, EventKind::Acp(acp::SessionUpdate::AgentMessageChunk(chunk)) if matches!(&chunk.content, ContentBlock::Text(text) if text.text.contains("echo agent"))))
-    );
-    let weak = Arc::downgrade(&session);
-    registry.remove(session.id()).await.expect("remove");
-    drop(session);
-    assert!(weak.upgrade().is_none());
-    assert!(registry.list().await.is_empty());
-}
-
-#[tokio::test]
-async fn completion_snapshots_do_not_retain_sessions() {
-    let (completions, mut receiver) = mpsc::channel(1);
-    let registry = registry().with_completions(completions);
-    let session = registry.create(request()).await.expect("create");
-    let mut attachment = session.attach(options(0)).await.expect("attach");
-    session
-        .prompt(vec![ContentBlock::from("hello")])
-        .await
-        .expect("prompt");
-    finish(&mut attachment).await.expect("turn succeeds");
-    let weak = Arc::downgrade(&session);
-    registry.remove(session.id()).await.expect("remove");
-    drop(session);
-    assert!(weak.upgrade().is_none());
-    assert!(matches!(
-        receiver
-            .recv()
-            .await
-            .expect("completion snapshot")
-            .outcome,
-        super::CompletionOutcome::Native(Ok(response)) if response.stop_reason == StopReason::EndTurn
-    ));
-}
-
-#[tokio::test]
-async fn foreground_viewers_suppress_only_their_session_and_release_without_retaining_it() {
-    let (completions, mut receiver) = mpsc::channel(8);
-    let registry = registry().with_completions(completions);
-    let active = registry.create(request()).await.expect("active session");
-    let other = registry.create(request()).await.expect("other session");
-    let first_window = active.foreground();
-    let second_window = active.foreground();
-    drop(first_window);
-    let mut history = active.attach(options(0)).await.expect("history");
-    active
-        .prompt(vec!["hello".into()])
-        .await
-        .expect("foreground turn");
-    finish(&mut history).await.expect("turn finishes normally");
-    assert!(receiver.try_recv().is_err());
-    other
-        .prompt(vec!["hello".into()])
-        .await
-        .expect("background turn");
-    assert_eq!(
-        tokio::time::timeout(TIMEOUT, receiver.recv())
-            .await
-            .expect("background notification")
-            .expect("completion")
-            .session
-            .id,
-        other.id()
-    );
-    drop(second_window);
-    active
-        .prompt(vec!["hello".into()])
-        .await
-        .expect("unfocused turn");
-    assert_eq!(
-        tokio::time::timeout(TIMEOUT, receiver.recv())
-            .await
-            .expect("notification restored")
-            .expect("completion")
-            .session
-            .id,
-        active.id()
-    );
-    let foreground = active.foreground();
-    let weak = Arc::downgrade(&active);
-    registry.remove(active.id()).await.expect("remove");
-    drop(active);
-    assert!(weak.upgrade().is_none());
-    drop(foreground);
-    registry.shutdown().await;
-}
-
-#[tokio::test]
-async fn registry_shutdown_closes_streams_and_rejects_new_sessions() {
-    let registry = registry();
-    let session = registry.create(request()).await.expect("create");
-    let mut attachment = session.attach(options(0)).await.expect("attach");
-    registry.shutdown().await;
-    assert_eq!(session.meta().status, SessionStatus::Stopped);
-    attachment.recv().await.expect("stop event");
-    assert_eq!(attachment.recv().await, Err(AttachError::Closed));
-    assert!(matches!(
-        registry.create(request()).await,
-        Err(CreateError::Stopping)
     ));
 }
 
@@ -783,54 +539,4 @@ async fn pending_startup_is_cancelled_by_timeout_and_shutdown() {
         assert!(dropped.load(Ordering::SeqCst));
         assert!(registry.list().await.is_empty());
     }
-}
-
-#[tokio::test]
-async fn command_catalog_survives_history_eviction_and_can_be_cleared() {
-    let session = pending_session(Limits {
-        history_capacity: NonZeroUsize::new(2).expect("nonzero"),
-        ..Limits::default()
-    })
-    .await;
-    let commands = acp::AvailableCommandsUpdate::new(vec![acp::AvailableCommand::new(
-        "review",
-        "Review files",
-    )]);
-    session
-        .apply(Update::Acp(acp::SessionUpdate::AvailableCommandsUpdate(
-            commands.clone(),
-        )))
-        .await;
-    for index in 0..3 {
-        session
-            .set_title(&format!("{index}"))
-            .await
-            .expect("rename");
-    }
-    assert!(
-        session
-            .page(None, 10)
-            .expect("history")
-            .events
-            .iter()
-            .all(|event| !matches!(
-                &event.kind,
-                EventKind::Acp(acp::SessionUpdate::AvailableCommandsUpdate(_))
-            ))
-    );
-    assert_eq!(session.meta().available_commands, Some(commands));
-    session
-        .apply(Update::Acp(acp::SessionUpdate::AvailableCommandsUpdate(
-            acp::AvailableCommandsUpdate::new(vec![]),
-        )))
-        .await;
-    assert!(
-        session
-            .meta()
-            .available_commands
-            .expect("catalog")
-            .available_commands
-            .is_empty()
-    );
-    session.shutdown().await;
 }

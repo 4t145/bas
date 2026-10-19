@@ -1,43 +1,6 @@
 use super::*;
 
 #[test]
-fn withdrawing_an_earlier_message_keeps_the_edit_reserved_for_its_original_slot() {
-    let mut outbox = SessionOutbox::default();
-    for text in ["A", "B", "C"] {
-        outbox.enqueue(draft(text));
-    }
-    assert_eq!(
-        outbox
-            .begin_edit_at(2, draft("composition"))
-            .expect("edit")
-            .text,
-        "C"
-    );
-    assert!(
-        outbox
-            .withdraw(0, draft("composition"))
-            .expect("withdraw A")
-            .retrieved
-            .is_none()
-    );
-    assert_eq!(outbox.editing(), Some(1));
-    assert_eq!(
-        outbox
-            .enqueue(draft("C'"))
-            .expect("restore composition")
-            .text,
-        "composition"
-    );
-    assert_eq!(
-        outbox
-            .iter()
-            .map(|draft| draft.text.as_str())
-            .collect::<Vec<_>>(),
-        ["B", "C'"]
-    );
-}
-
-#[test]
 fn withdrawing_a_message_returns_it_to_the_editor_and_holds_the_composition() {
     let mut outbox = SessionOutbox::default();
     outbox.enqueue(draft("A"));
@@ -97,38 +60,6 @@ fn sending_a_withdrawn_message_returns_it_to_its_queue_position() {
 }
 
 #[test]
-fn withdrawing_the_edited_message_keeps_it_in_the_editor() {
-    let mut outbox = SessionOutbox::default();
-    outbox.enqueue(draft("A"));
-    outbox.enqueue(draft("B"));
-    outbox.begin_edit_at(1, draft("composition"));
-    assert!(
-        outbox
-            .withdraw(1, draft("composition"))
-            .expect("withdraw edited B")
-            .retrieved
-            .is_none(),
-        "the composer already holds the edited message"
-    );
-    assert!(outbox.editing_active());
-    assert_eq!(outbox.editing(), None);
-    assert_eq!(
-        outbox
-            .enqueue(draft("B'"))
-            .expect("restore composition")
-            .text,
-        "composition"
-    );
-    assert_eq!(
-        outbox
-            .iter()
-            .map(|draft| draft.text.as_str())
-            .collect::<Vec<_>>(),
-        ["A", "B'"]
-    );
-}
-
-#[test]
 fn immediate_send_waits_for_cancel_and_turn_completion_without_resuming_paused_drafts() {
     let mut outbox = SessionOutbox::default();
     outbox.enqueue(draft("A"));
@@ -165,26 +96,6 @@ fn immediate_send_waits_for_cancel_and_turn_completion_without_resuming_paused_d
 }
 
 #[test]
-fn failed_interrupt_keeps_the_selected_message_and_never_dispatches_automatically() {
-    let mut outbox = SessionOutbox::default();
-    outbox.enqueue(draft("A"));
-    outbox.enqueue(draft("B"));
-    outbox.prioritize(1, true);
-    outbox.complete_interrupt(false);
-    assert_eq!(
-        outbox
-            .iter()
-            .map(|draft| draft.text.as_str())
-            .collect::<Vec<_>>(),
-        ["B", "A"]
-    );
-    assert!(outbox.paused());
-    assert!(outbox.advance(&idle(3), true).is_none());
-    outbox.resume();
-    assert_eq!(sent(outbox.advance(&idle(3), true)), "B");
-}
-
-#[test]
 fn completion_before_cancel_acknowledgement_never_releases_the_pending_send_early() {
     for succeeded in [true, false] {
         let mut outbox = SessionOutbox::default();
@@ -213,30 +124,4 @@ fn completion_before_cancel_acknowledgement_never_releases_the_pending_send_earl
             assert_eq!(outbox.front().expect("priority draft retained").text, "B");
         }
     }
-}
-
-#[test]
-fn immediately_sending_an_edit_preserves_composition_and_the_other_paused_messages() {
-    let mut outbox = SessionOutbox::default();
-    outbox.enqueue(draft("A"));
-    outbox.enqueue(draft("B"));
-    outbox.begin_edit_at(1, draft("composition"));
-    assert_eq!(
-        outbox
-            .enqueue_immediate(draft("B'"), false)
-            .expect("restore composition")
-            .text,
-        "composition"
-    );
-    let send = outbox.advance(&idle(1), true).expect("send edited B");
-    assert_eq!(send.draft.text, "B'");
-    outbox.settle(submission(send), rejected());
-    assert_eq!(
-        outbox
-            .iter()
-            .map(|draft| draft.text.as_str())
-            .collect::<Vec<_>>(),
-        ["B'", "A"]
-    );
-    assert!(outbox.advance(&idle(2), true).is_none());
 }

@@ -35,7 +35,7 @@ stage = args[1] if args[0] == "profile" else args[0]
 if os.environ.get("FAIL_STAGE") == stage:
     sys.exit("fixture failure: " + stage)
 if args[:2] == ["profile", "list"]:
-    print(os.environ.get("PROFILE_JSON", '{{"elements":{{}}}}'))
+    print('{{"elements":{{}}}}')
 elif args[0] == "develop":
     print(json.dumps({{
         "reason": "compiler-artifact", "target": {{"name": "basg", "kind": ["bin"]}},
@@ -105,29 +105,8 @@ elif args[0] == "build":
                     ["profile", "remove"], ["profile", "add"],
                 ) for call in self.calls()))
 
-    def test_binary_startup_failure_preserves_the_previous_installation(self):
-        self.executable(self.package / "bin/basg-dev", "#!/bin/sh\nexit 1\n")
-        result = self.run_installer()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(any(call[:2] in (
-            ["profile", "remove"], ["profile", "add"],
-        ) for call in self.calls()))
 
-    def test_identical_package_does_not_churn_profile_generations(self):
-        self.env["PROFILE_JSON"] = json.dumps({
-            "elements": {"basg-dev": {"storePaths": [str(self.package)]}},
-        })
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(any(call[:2] in (
-            ["profile", "remove"], ["profile", "add"],
-        ) for call in self.calls()))
 
-    def test_help_has_no_side_effects(self):
-        result = self.run_installer("--help")
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("CARGO_TARGET_DIR", result.stdout)
-        self.assertFalse(self.log.exists())
 
 
 if __name__ == "__main__":

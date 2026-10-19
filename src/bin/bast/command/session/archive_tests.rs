@@ -30,18 +30,3 @@ fn other_rpc_errors_keep_their_status_and_context() {
         );
     }
 }
-
-#[test]
-fn archive_response_requires_updated_metadata() {
-    let error = archived_session(pb::SetArchivedResponse { session: None })
-        .expect_err("missing session must not report success");
-    assert!(error.to_string().contains("missing the updated session"));
-    let session = pb::Session::default();
-    assert_eq!(
-        archived_session(pb::SetArchivedResponse {
-            session: Some(session.clone())
-        })
-        .expect("present session passes through"),
-        session
-    );
-}

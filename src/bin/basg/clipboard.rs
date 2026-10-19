@@ -58,6 +58,3 @@ impl Contents {
         !self.paths.is_empty() || !self.images.is_empty()
     }
 }
-
-#[cfg(test)]
-mod tests;

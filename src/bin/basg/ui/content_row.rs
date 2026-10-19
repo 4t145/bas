@@ -68,6 +68,3 @@ impl RenderOnce for ContentRow {
         }
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

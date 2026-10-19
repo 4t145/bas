@@ -39,19 +39,17 @@ shell 内提供 `rustc`、`cargo`、`clippy`、`rustfmt`、`rust-analyzer` 与 `
 
 ```sh
 nix develop -c cargo test --all-targets  # 日常 Rust 测试
-./scripts/test-system check             # 构建、Rust 测试、QEMU 系统测试
-./scripts/test-system shell             # 进入虚拟机 shell，自动启动 bas
-./scripts/test-system driver            # Python 测试驱动控制台
+nix develop .#gui -c cargo test --features gui-tests --bin basg
+python3 tests/install_bas.py -v
+python3 tests/nix_source.py -v
 ```
 
-系统测试使用 Linux + Nix，在 QEMU 中运行独立的 NixOS 系统，覆盖 systemd、
-journald、D-Bus 通知、CLI 和 ACP 进程。首次运行需要下载构建依赖及系统组件，
-没有 KVM 时使用较慢的软件模拟。成功报告位于 `.test-results/system/`。
+安装器和 Nix source 测试使用临时目录与模拟环境，不修改真实 profile。
+GUI 测试通过受控 ACP fixture 运行，不预装外部 Agent、不读取凭据，也不调用真实模型。
 
-虚拟机使用 embedded echo 和受控 ACP fixture，不预装外部 Agent、不读取凭据，
-也不调用真实模型。Pi 等后端通过产品内的 ACP Registry 按需安装。
+QEMU/NixOS 系统测试目前不在仓库中，后续统一补全。
 
-操作步骤、日志位置和新增测试的方法见 [测试环境说明](docs/testing.md)。
+操作步骤和新增测试的方法见 [测试环境说明](docs/testing.md)。
 
 ## 目录结构
 

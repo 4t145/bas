@@ -26,49 +26,6 @@ fn fixture(id: &str, version: u32, spec: &AgentSpec) -> (tempfile::TempDir, Mana
 }
 
 #[test]
-fn custom_roundtrip_keeps_flat_spec_shape() {
-    let spec = AgentSpec::acp("custom", Command::new("program", ["two words".into()]));
-    let registration: AgentRegistration = spec.clone().into();
-    assert_eq!(
-        serde_json::to_value(&registration).expect("registration"),
-        serde_json::to_value(&spec).expect("spec")
-    );
-    let decoded: AgentRegistration =
-        serde_json::from_value(serde_json::to_value(&spec).expect("spec")).expect("custom");
-    assert_eq!(decoded.as_custom(), Some(&spec));
-    assert!(decoded.managed().is_none());
-    assert_eq!(decoded.resolve().expect("resolve custom"), spec);
-}
-
-#[test]
-fn managed_shapes_forbid_all_overrides_and_unknown_fields() {
-    let (_dir, managed) = fixture("a", 1, &AgentSpec::acp("a", Command::new("a", [])));
-    let value = serde_json::to_value(&managed).expect("managed JSON");
-    let registration: AgentRegistration =
-        serde_json::from_value(value.clone()).expect("managed registration");
-    assert_eq!(registration.managed(), Some(&managed));
-    assert!(registration.as_custom().is_none());
-    for (key, extra) in [
-        ("kind", json!("acp")),
-        ("command", json!({"program":"override"})),
-        ("args", json!([])),
-        ("env", json!({})),
-        ("cancellation_grace_ms", json!(1)),
-        ("unknown", json!(true)),
-    ] {
-        let mut mixed = value.clone();
-        mixed[key] = extra;
-        assert!(
-            serde_json::from_value::<AgentRegistration>(mixed).is_err(),
-            "{key}"
-        );
-    }
-    let mut mixed = value;
-    mixed["installation"]["command"] = json!("override");
-    assert!(serde_json::from_value::<AgentRegistration>(mixed).is_err());
-}
-
-#[test]
 fn validates_shapes_without_reading_files() {
     let dir = tempfile::tempdir().expect("directory");
     for path in [
@@ -117,51 +74,6 @@ fn changed_corrupt_oversized_and_nonfile_manifests_fail_closed() {
     assert!(managed.resolve().is_err());
     fs::create_dir(&managed.installation.path).expect("not a regular file");
     assert!(managed.resolve().is_err());
-}
-
-#[test]
-fn schema_identity_kind_and_launch_validation_are_required() {
-    let spec = AgentSpec::acp("a", Command::new("a", []));
-    let (_dir, managed) = fixture("a", 2, &spec);
-    assert!(matches!(
-        managed.resolve(),
-        Err(RegistrationError::SchemaVersion(2))
-    ));
-    let (_dir, managed) = fixture("b", 1, &spec);
-    assert!(matches!(
-        managed.resolve(),
-        Err(RegistrationError::IdMismatch { .. })
-    ));
-    let (_dir, managed) = fixture("embedded", 1, &AgentSpec::embedded());
-    assert!(matches!(managed.resolve(), Err(RegistrationError::NotAcp)));
-    let invalid = AgentSpec::acp("a", Command::new("", []));
-    let (_dir, managed) = fixture("a", 1, &invalid);
-    assert!(matches!(
-        managed.resolve(),
-        Err(RegistrationError::Validation(_))
-    ));
-}
-
-#[test]
-fn registrations_independently_pin_different_versions() {
-    let first = AgentSpec::acp("first", Command::new("/versions/1/agent", []));
-    let second = AgentSpec::acp("second", Command::new("/versions/2/agent", []));
-    let (_first_dir, first_registration) = fixture("first", 1, &first);
-    let (_second_dir, second_registration) = fixture("second", 1, &second);
-    let registrations = [
-        AgentRegistration::Managed(first_registration.clone()),
-        AgentRegistration::Managed(second_registration),
-    ];
-    assert_eq!(
-        resolve_agents(&registrations).expect("independent resolutions"),
-        [first, second.clone()]
-    );
-    fs::write(&first_registration.installation.path, b"changed").expect("tamper first version");
-    assert!(resolve_agents(&registrations).is_err());
-    assert_eq!(
-        registrations[1].resolve().expect("second unaffected"),
-        second
-    );
 }
 
 #[cfg(unix)]

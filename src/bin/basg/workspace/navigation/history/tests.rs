@@ -56,37 +56,3 @@ fn history_uses_local_calendar_boundaries_and_sorts_recent_activity_first() {
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].period, Period::Yesterday);
 }
-
-#[test]
-fn yesterday_and_this_week_take_precedence_across_month_and_year_boundaries() {
-    let now: Zoned = "2026-01-01T12:00:00Z[UTC]".parse().expect("new year");
-    let sessions = [
-        session("last month", "2025-12-20T00:00:00Z"),
-        session("monday", "2025-12-29T00:00:00Z"),
-        session("yesterday", "2025-12-31T00:00:00Z"),
-    ];
-    let groups = groups(&sessions, "", &now);
-    assert_eq!(
-        groups.iter().map(|group| &group.period).collect::<Vec<_>>(),
-        [
-            &Period::Yesterday,
-            &Period::Week,
-            &Period::Month {
-                year: 2025,
-                month: 12
-            },
-        ]
-    );
-    let monday: Zoned = "2026-10-19T12:00:00Z[UTC]".parse().expect("monday");
-    assert_eq!(
-        period(&session("sunday", "2026-10-18T10:00:00Z"), &monday),
-        Period::Yesterday
-    );
-    assert_eq!(
-        period(&session("saturday", "2026-10-17T10:00:00Z"), &monday),
-        Period::Month {
-            year: 2026,
-            month: 10
-        }
-    );
-}

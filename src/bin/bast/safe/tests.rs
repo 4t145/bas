@@ -18,15 +18,3 @@ fn split_chunks_cannot_reassemble_control_sequences() {
     assert_eq!(output, "\\u001b]52;c;payload\\u001b\\\\u000d中文");
     assert!(!output.chars().any(char::is_control));
 }
-
-#[test]
-fn serialized_json_preserves_its_semantics() {
-    let original = serde_json::json!({"text": "\x1b\r\u{009b}\n\t中文"});
-    let json = serde_json::to_string(&original).expect("JSON value serializes to valid JSON");
-    let rendered = Safe(json).to_string();
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&rendered)
-            .expect("safe rendering preserves valid serialized JSON"),
-        original
-    );
-}

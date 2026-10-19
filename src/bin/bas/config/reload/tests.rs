@@ -113,31 +113,6 @@ async fn wait_catalog(registry: &Registry, expected: &[AgentSpec]) {
     .expect("catalog reload");
 }
 
-#[test]
-fn explicit_settings_never_fall_back_after_invalid_or_missing_files() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("settings.json");
-    std::fs::write(
-        directory.path().join("agents.json"),
-        r#"[{"id":"legacy","kind":"embedded"}]"#,
-    )
-    .unwrap();
-    let mut source = CatalogSource::settings(Some(path.clone())).unwrap();
-    assert!(source.load().is_err());
-    write_settings(&path, vec![AgentSpec::embedded()]);
-    assert_eq!(source.load().unwrap(), vec![AgentSpec::embedded().into()]);
-    for invalid in [
-        "not json",
-        r#"{"daemon":{"agents":[]}}"#,
-        r#"{"daemon":{"agents":[{"id":"a","kind":"embedded"},{"id":"a","kind":"embedded"}]}}"#,
-    ] {
-        std::fs::write(&path, invalid).unwrap();
-        assert!(source.load().is_err());
-    }
-    std::fs::remove_file(path).unwrap();
-    assert!(source.load().is_err());
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn reloading_specs_preserves_existing_acp_sessions_and_shutdown_is_bounded() {

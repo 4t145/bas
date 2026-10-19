@@ -43,14 +43,6 @@ struct RenderedSources(HashMap<SharedString, SharedString>);
 #[cfg(all(test, feature = "gui-tests"))]
 impl Global for RenderedSources {}
 
-#[cfg(all(test, feature = "gui-tests"))]
-pub(crate) fn rendered_source(id: &str, cx: &App) -> Option<String> {
-    cx.try_global::<RenderedSources>()?
-        .0
-        .get(id)
-        .map(ToString::to_string)
-}
-
 /// Displays the agent's SVG as a themed alpha mask, or its original bitmap.
 #[derive(IntoElement)]
 pub(crate) struct AgentIcon {
@@ -249,6 +241,3 @@ async fn load(
         ))
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

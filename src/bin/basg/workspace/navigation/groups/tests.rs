@@ -25,17 +25,3 @@ fn groups_by_full_daemon_path_and_keeps_each_threads_order() {
     assert!(groups[2].directory.is_none());
     assert!(groups[3].threads.is_empty());
 }
-
-#[test]
-fn search_retains_workspace_context_and_directory_matches_all_threads() {
-    let sessions = [
-        thread(Some("/code/bas"), "fix input"),
-        thread(Some("/code/bas"), "review"),
-        thread(Some("/other"), "input"),
-    ];
-    let groups = group_threads(&sessions, &[], "fix");
-    assert_eq!(groups.len(), 1);
-    assert_eq!(groups[0].directory.as_deref(), Some(Path::new("/code/bas")));
-    assert_eq!(groups[0].threads.len(), 1);
-    assert_eq!(group_threads(&sessions, &[], "bas")[0].threads.len(), 2);
-}

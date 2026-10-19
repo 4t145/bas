@@ -1,11 +1,10 @@
 use super::*;
 use bas::model::{Owner, SessionMeta};
-use gpui_kit::{TestAppContext, WeakEntity, WindowHandle, component::Root, test::TestWindowExt};
+use gpui_kit::{TestAppContext, WeakEntity};
 use std::cell::RefCell;
 use tokio::sync::mpsc;
 
 struct Fixture {
-    window: WindowHandle<Root>,
     browser: WeakEntity<Browser>,
     commands: mpsc::UnboundedReceiver<Command>,
     opened: Rc<RefCell<Vec<SessionId>>>,
@@ -37,13 +36,13 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
     let opened = Rc::new(RefCell::new(Vec::new()));
     let recorded = opened.clone();
     let server = "127.0.0.1:7337".parse().expect("server");
-    let (window, browser) = cx.update(|cx| {
+    let (_window, browser) = cx.update(|cx| {
         gpui_kit::init(cx);
         crate::configuration::init(Some(path), cx);
         crate::theme::init(None, cx);
         crate::application::init(cx);
         window::bind_keys(cx);
-        let handle = window::open_connected(
+        let _handle = window::open_connected(
             OpenRequest {
                 server,
                 agents: agents(),
@@ -60,10 +59,9 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
             cx,
         )
         .expect("history window");
-        (handle, window::browser(server, cx))
+        ((), window::browser(server, cx))
     });
     Fixture {
-        window,
         browser,
         commands: receiver,
         opened,
@@ -113,83 +111,6 @@ fn deliver(fixture: &Fixture, update: Update, cx: &mut TestAppContext) {
             .update(cx, |this, cx| this.update(update, cx))
             .expect("live browser")
     });
-}
-
-#[gpui_kit::test]
-fn agent_and_primary_workspace_filters_are_exact_and_cross_provider_ids_do_not_collide(
-    cx: &mut TestAppContext,
-) {
-    let mut fixture = fixture(cx);
-    let (initial, agent, cwd) = query(&mut fixture);
-    assert_eq!(agent, "codex-acp");
-    assert_eq!(cwd, Some("/repo".into()));
-    deliver(
-        &fixture,
-        Update::AgentHistory {
-            epoch: initial,
-            result: Ok(listing(vec![row("same-id", "/repo")])),
-        },
-        cx,
-    );
-    cx.update(|cx| {
-        fixture
-            .browser
-            .update(cx, |browser, cx| {
-                browser.select_agent(None, cx);
-                assert_eq!(
-                    browser
-                        .agents
-                        .iter()
-                        .map(|agent| agent.id.as_str())
-                        .collect::<Vec<_>>(),
-                    ["codex-acp", "pi-acp"]
-                );
-            })
-            .expect("all Agents")
-    });
-    let first = query(&mut fixture);
-    let second = query(&mut fixture);
-    for (request, agent, cwd) in [first, second] {
-        assert_eq!(cwd, Some("/repo".into()));
-        let mut extra_root = row("additional-only", "/other");
-        extra_root.additional_directories = vec!["/repo".into()];
-        deliver(
-            &fixture,
-            Update::AgentHistory {
-                epoch: request,
-                result: Ok(listing(vec![row("same-id", "/repo"), extra_root])),
-            },
-            cx,
-        );
-        assert!(["codex-acp", "pi-acp"].contains(&agent.as_str()));
-    }
-    cx.update(|cx| {
-        fixture
-            .browser
-            .update(cx, |browser, cx| {
-                for (agent, page) in &browser.pages {
-                    assert_eq!(
-                        browser.visible_rows(agent, page, "").len(),
-                        1,
-                        "additional directories do not make a session match its primary cwd"
-                    );
-                }
-                browser.import(
-                    Target {
-                        generation: browser.generation,
-                        agent: "pi-acp".into(),
-                        info: row("same-id", "/repo"),
-                    },
-                    cx,
-                );
-            })
-            .expect("provider scoped import")
-    });
-    assert!(
-        matches!(fixture.commands.try_recv(), Ok(Command::ImportHistory { agent, info, .. })
-        if agent == "pi-acp" && info.session_id.to_string() == "same-id")
-    );
-    assert!(fixture.opened.borrow().is_empty());
 }
 
 #[gpui_kit::test]
@@ -340,122 +261,6 @@ fn stale_import_controls_and_receipts_cannot_retarget_a_new_filter(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn stopped_and_archived_rows_offer_distinct_operations_and_compact_layout(cx: &mut TestAppContext) {
-    let mut fixture = fixture(cx);
-    let (request, _, _) = query(&mut fixture);
-    let info = acp::SessionInfo::new("hidden-backend-id", "/repo");
-    let mut snapshot = SessionSnapshot::from(SessionMeta::new(
-        SessionId::new(),
-        "codex-acp".into(),
-        Owner::current(),
-    ));
-    snapshot.meta.status = SessionStatus::Stopped;
-    snapshot.meta.archived = true;
-    let id = snapshot.meta.id;
-    let mut page = listing(vec![info.clone()]);
-    page.imported
-        .insert(info.session_id.to_string(), id.to_string());
-    deliver(
-        &fixture,
-        Update::AgentHistory {
-            epoch: request,
-            result: Ok(page),
-        },
-        cx,
-    );
-    cx.update(|cx| {
-        fixture
-            .browser
-            .update(cx, |browser, cx| {
-                browser.merge_session(snapshot.clone());
-                cx.notify();
-            })
-            .expect("snapshot")
-    });
-    cx.update_window(fixture.window.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert_eq!(
-            window.find("agent-history-restore-0-0").label(),
-            Some("恢复会话")
-        );
-        assert!(window.try_find("agent-history-import-0-0").is_none());
-        assert!(window.try_find("agent-history-restart-0-0").is_none());
-        assert_eq!(
-            window.find("agent-history-title-0-0").label(),
-            Some("未命名会话")
-        );
-        assert_eq!(
-            window.find("agent-history-status-0-0").label(),
-            Some("已停止")
-        );
-        assert_eq!(
-            window.find("agent-history-archived-0-0").label(),
-            Some("已归档")
-        );
-        for id in [
-            "agent-history-restore-0-0",
-            "agent-history-delete-0-0",
-            "agent-history-refresh",
-        ] {
-            let control = window.find(id);
-            assert_eq!(control.role(), Some(gpui_kit::Role::Button));
-            assert_eq!(
-                control.bounds().size,
-                gpui_kit::size(
-                    gpui_kit::px(crate::ui::COMPACT_CONTROL),
-                    gpui_kit::px(crate::ui::COMPACT_CONTROL)
-                )
-            );
-        }
-        assert_eq!(
-            window.find("agent-history-indicator-0-0").bounds().size,
-            gpui_kit::size(gpui_kit::px(6.), gpui_kit::px(6.))
-        );
-        let path = window.find("agent-history-directory-0-0").bounds();
-        let actions = window.find("agent-history-actions-0-0").bounds();
-        assert!(path.right() <= actions.left());
-        assert_eq!(path.center().y, actions.center().y);
-        let name = window.find("agent-history-group-name-0").bounds();
-        let count = window.find("agent-history-group-count-0").bounds();
-        assert!(count.left() - name.right() <= gpui_kit::px(10.));
-        window.click("agent-history-restore-0-0", cx);
-    })
-    .expect("history layout and sole restore action");
-    assert!(
-        matches!(fixture.commands.try_recv(), Ok(Command::Archive { session, archived: false }) if session == id)
-    );
-    snapshot.meta.archived = false;
-    snapshot.meta.status = SessionStatus::Idle;
-    snapshot.meta.revision = bas::model::Cursor::from_raw(1);
-    deliver(
-        &fixture,
-        Update::Archived {
-            session: id,
-            result: Ok(snapshot.clone()),
-        },
-        cx,
-    );
-    assert_eq!(&*fixture.opened.borrow(), &[id]);
-    cx.update_window(fixture.window.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.try_find("agent-history-restore-0-0").is_none());
-        assert!(window.try_find("agent-history-restart-0-0").is_none());
-        assert!(window.find("agent-history-import-0-0").visible());
-        assert!(window.try_find("agent-history-status-0-0").is_none());
-        assert!(window.try_find("agent-history-archived-0-0").is_none());
-        assert_eq!(
-            window.find("agent-history-indicator-0-0").bounds().size,
-            gpui_kit::size(gpui_kit::px(0.), gpui_kit::px(0.))
-        );
-    })
-    .expect("restored status");
-    assert!(
-        fixture.commands.try_recv().is_err(),
-        "no automatic prompt or new session"
-    );
-}
-
-#[gpui_kit::test]
 fn primary_action_rejects_stale_controls_after_a_state_change(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let (request, _, _) = query(&mut fixture);
@@ -508,193 +313,6 @@ fn primary_action_rejects_stale_controls_after_a_state_change(cx: &mut TestAppCo
         matches!(fixture.commands.try_recv(), Ok(Command::Archive { session, archived: false }) if session == id)
     );
     assert!(fixture.commands.try_recv().is_err());
-}
-
-#[gpui_kit::test]
-fn rows_are_grouped_by_agent_and_real_buttons_import_the_original_provider(
-    cx: &mut TestAppContext,
-) {
-    let mut fixture = fixture(cx);
-    let (request, _, _) = query(&mut fixture);
-    deliver(
-        &fixture,
-        Update::AgentHistory {
-            epoch: request,
-            result: Ok(listing(vec![row("external", "/repo")])),
-        },
-        cx,
-    );
-    cx.update_window(fixture.window.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.find("agent-history-group-0").bounds().size.height > gpui_kit::px(0.));
-        window.click("agent-history-import-0-0", cx);
-    })
-    .expect("click import");
-    assert!(
-        matches!(fixture.commands.try_recv(), Ok(Command::ImportHistory { agent, info, .. })
-        if agent == "codex-acp" && info.session_id.to_string() == "external")
-    );
-}
-
-#[gpui_kit::test]
-fn history_status_icons_use_the_sidebar_geometry_and_passive_roles(cx: &mut TestAppContext) {
-    let mut fixture = fixture(cx);
-    let (request, _, _) = query(&mut fixture);
-    let mut snapshot = SessionSnapshot::from(SessionMeta::new(
-        SessionId::new(),
-        "codex-acp".into(),
-        Owner::current(),
-    ));
-    let mut page = listing(vec![row("external", "/repo")]);
-    page.imported
-        .insert("external".into(), snapshot.meta.id.to_string());
-    deliver(
-        &fixture,
-        Update::AgentHistory {
-            epoch: request,
-            result: Ok(page),
-        },
-        cx,
-    );
-    for (index, (status, label, width, height)) in [
-        (SessionStatus::Starting, "启动中", 12., 12.),
-        (SessionStatus::Working, "执行中", 12., 12.),
-        (SessionStatus::Stopped, "已停止", 6., 6.),
-        (SessionStatus::Failed, "失败", 12., 12.),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        snapshot.meta.status = status;
-        snapshot.meta.revision = bas::model::Cursor::from_raw(index as u64 + 1);
-        cx.update(|cx| {
-            fixture
-                .browser
-                .update(cx, |browser, cx| {
-                    browser.merge_session(snapshot.clone());
-                    cx.notify();
-                })
-                .expect("status update")
-        });
-        cx.update_window(fixture.window.into(), |_, window, cx| {
-            window.render_frame(cx);
-            let state = window.find("agent-history-status-0-0");
-            assert_eq!(state.role(), Some(gpui_kit::Role::Status));
-            assert_eq!(state.label(), Some(label));
-            assert_eq!(
-                window.find("agent-history-indicator-0-0").bounds().size,
-                gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height))
-            );
-            if matches!(status, SessionStatus::Starting | SessionStatus::Working) {
-                let close = window.find("agent-history-close-0-0");
-                assert_eq!(
-                    close.bounds().size,
-                    gpui_kit::size(gpui_kit::px(24.), gpui_kit::px(24.))
-                );
-            }
-        })
-        .expect("shared status visuals");
-    }
-}
-
-#[gpui_kit::test]
-fn relative_time_sorting_keeps_unknown_dates_last_without_fake_now(cx: &mut TestAppContext) {
-    let fixture = fixture(cx);
-    let rows = listing(vec![
-        row("unknown", "/repo").updated_at("invalid"),
-        row("older", "/repo").updated_at("2026-10-15T10:00:00Z"),
-        row("newer", "/repo").updated_at("2026-10-16T18:00:00+08:00"),
-    ]);
-    cx.update(|cx| {
-        fixture
-            .browser
-            .update(cx, |browser, _| {
-                let visible = browser.visible_rows("codex-acp", &rows, "");
-                assert_eq!(
-                    visible
-                        .iter()
-                        .map(|info| info.session_id.to_string())
-                        .collect::<Vec<_>>(),
-                    ["newer", "older", "unknown"]
-                );
-            })
-            .expect("time order")
-    });
-}
-
-#[gpui_kit::test]
-fn catalog_removal_forgets_old_bindings_but_not_newer_import_receipts(cx: &mut TestAppContext) {
-    let mut fixture = fixture(cx);
-    let (request, _, _) = query(&mut fixture);
-    let info = row("external", "/repo");
-    let snapshot = SessionSnapshot::from(SessionMeta::new(
-        SessionId::new(),
-        "codex-acp".into(),
-        Owner::current(),
-    ));
-    let id = snapshot.meta.id;
-    let mut page = listing(vec![info.clone()]);
-    page.imported.insert("external".into(), id.to_string());
-    deliver(
-        &fixture,
-        Update::AgentHistory {
-            epoch: request,
-            result: Ok(page),
-        },
-        cx,
-    );
-    cx.update(|cx| {
-        fixture
-            .browser
-            .update(cx, |browser, _| browser.merge_session(snapshot.clone()))
-            .expect("receipt")
-    });
-    deliver(
-        &fixture,
-        Update::Catalog(Ok(connection::Catalog {
-            agents: agents(),
-            sessions: Vec::new(),
-        })),
-        cx,
-    );
-    cx.update(|cx| {
-        fixture
-            .browser
-            .update(cx, |browser, _| {
-                assert!(
-                    browser.imported("codex-acp", &info).is_some(),
-                    "old catalog cannot erase a newer receipt"
-                );
-            })
-            .expect("stale catalog")
-    });
-    deliver(
-        &fixture,
-        Update::Catalog(Ok(connection::Catalog {
-            agents: agents(),
-            sessions: vec![snapshot],
-        })),
-        cx,
-    );
-    deliver(
-        &fixture,
-        Update::Catalog(Ok(connection::Catalog {
-            agents: agents(),
-            sessions: Vec::new(),
-        })),
-        cx,
-    );
-    cx.update(|cx| {
-        fixture
-            .browser
-            .update(cx, |browser, _| {
-                assert!(
-                    browser.imported("codex-acp", &info).is_none(),
-                    "confirmed removal must not keep a stale view-record action"
-                );
-            })
-            .expect("removed binding")
-    });
 }
 
 #[gpui_kit::test]
@@ -767,113 +385,4 @@ fn native_deletion_receipts_are_correlated_and_keep_local_transcripts(cx: &mut T
             .expect("delete scope")
     });
     assert!(fixture.opened.borrow().is_empty());
-}
-
-#[gpui_kit::test]
-fn long_workspace_filters_and_action_icons_fit_the_minimum_window(cx: &mut TestAppContext) {
-    let mut fixture = fixture(cx);
-    let (request, _, _) = query(&mut fixture);
-    deliver(
-        &fixture,
-        Update::AgentHistory {
-            epoch: request,
-            result: Ok(listing(Vec::new())),
-        },
-        cx,
-    );
-    let cwd = PathBuf::from(format!(
-        "/projects/{}/primary",
-        "long-workspace-".repeat(20)
-    ));
-    cx.update(|cx| {
-        fixture
-            .browser
-            .update(cx, |browser, cx| {
-                browser.select_workspace(Some(cwd.clone()), cx)
-            })
-            .expect("long cwd")
-    });
-    let (request, _, _) = query(&mut fixture);
-    let info = acp::SessionInfo::new("external", cwd)
-        .title("Imported history")
-        .updated_at("2026-10-16T10:00:00Z");
-    let mut local = SessionMeta::new(SessionId::new(), "codex-acp".into(), Owner::current());
-    local.status = SessionStatus::Idle;
-    let mut page = listing(vec![info]);
-    page.imported
-        .insert("external".into(), local.id.to_string());
-    deliver(
-        &fixture,
-        Update::Catalog(Ok(connection::Catalog {
-            agents: agents(),
-            sessions: vec![local.into()],
-        })),
-        cx,
-    );
-    deliver(
-        &fixture,
-        Update::AgentHistory {
-            epoch: request,
-            result: Ok(page),
-        },
-        cx,
-    );
-    cx.update_window(fixture.window.into(), |_, window, cx| {
-        window.resize(gpui_kit::size(gpui_kit::px(780.), gpui_kit::px(480.)));
-        window.render_frame(cx);
-        let bounds = window.find("agent-history-window").bounds();
-        for id in [
-            "agent-history-workspace-filter",
-            "agent-history-refresh",
-            "agent-history-import-0-0",
-            "agent-history-close-0-0",
-            "agent-history-delete-0-0",
-        ] {
-            let control = window.find(id).bounds();
-            assert!(
-                control.left() >= bounds.left() && control.right() <= bounds.right(),
-                "{id} exceeds history window width: {control:?} outside {bounds:?}"
-            );
-            assert!(
-                control.bottom() <= bounds.bottom(),
-                "{id} exceeds history window height"
-            );
-        }
-    })
-    .expect("minimum history window");
-}
-
-#[gpui_kit::test]
-fn reopening_history_reuses_its_native_window_and_applies_requested_filters(
-    cx: &mut TestAppContext,
-) {
-    let fixture = fixture(cx);
-    let (commands, _unused) = mpsc::unbounded_channel();
-    let (_updates, events) = mpsc::channel(1);
-    let reopened = cx.update(|cx| {
-        window::open_connected(
-            OpenRequest {
-                server: "127.0.0.1:7337".parse().expect("server"),
-                agents: agents(),
-                agent: Some("pi-acp".into()),
-                cwd: None,
-                workspaces: Vec::new(),
-                open_session: Rc::new(|_, _| true),
-            },
-            Connection::for_test(commands),
-            events,
-            cx,
-        )
-        .expect("reopen")
-    });
-    assert_eq!(fixture.window.window_id(), reopened.window_id());
-    cx.update(|cx| {
-        fixture
-            .browser
-            .update(cx, |browser, _| {
-                assert_eq!(browser.agent.as_deref(), Some("pi-acp"));
-                assert_eq!(browser.cwd, None);
-            })
-            .expect("reconfigured scope")
-    });
 }

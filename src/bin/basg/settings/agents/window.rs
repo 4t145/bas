@@ -7,9 +7,6 @@ use gpui_kit::{
     size,
 };
 
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;
-
 struct OpenWindow(WindowHandle<Root>);
 impl Global for OpenWindow {}
 

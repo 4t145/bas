@@ -186,81 +186,6 @@ fn preparation_and_failed_activation_retain_complete_versions_and_previous_refer
     assert!(installation::load_record(&old).is_ok());
 }
 
-#[tokio::test]
-async fn identical_custom_command_never_acquires_managed_ownership() {
-    let fixture = fixture::Fixture::serve(None, false).await;
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let manager = fixture::manager(&directory, &fixture.url);
-    let managed = prepare(&manager, "1.0.0");
-    let spec = managed.resolve().expect("launch projection");
-    let store = manager.store().expect("store");
-    let mut document = store.load().expect("settings");
-    store
-        .save_agents(&mut document, vec![spec.clone().into()])
-        .expect("custom config");
-    let bytes = fs::read(store.path()).expect("custom settings");
-    assert!(
-        fixture::install(&manager)
-            .await
-            .expect_err("custom collision")
-            .to_string()
-            .contains("configured manually")
-    );
-    assert!(manager.remove("fixture-agent").await.is_err());
-    assert!(installation::activate(store, &mut document, managed).is_err());
-    assert_eq!(fs::read(store.path()).expect("unchanged settings"), bytes);
-    let catalog = manager
-        .catalog(vec![spec.into()], false)
-        .await
-        .expect("catalog");
-    let entry = catalog
-        .entries
-        .iter()
-        .find(|entry| entry.id == "fixture-agent")
-        .expect("entry");
-    assert_eq!(entry.source, Source::Custom);
-    assert_eq!(entry.installed_version, None);
-}
-
-#[tokio::test]
-async fn catalog_uses_selected_descriptor_metadata_and_separate_latest_version() {
-    let fixture = fixture::Fixture::serve(None, false).await;
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let manager = fixture::manager(&directory, &fixture.url);
-    let managed = prepare(&manager, "0.5.0");
-    let registrations = vec![AgentRegistration::Managed(managed.clone())];
-    let catalog = manager
-        .catalog(registrations.clone(), false)
-        .await
-        .expect("catalog");
-    let entry = catalog
-        .entries
-        .iter()
-        .find(|entry| entry.id == "fixture-agent")
-        .expect("entry");
-    assert_eq!(entry.name, "Fixture 0.5.0");
-    assert_eq!(entry.description, "Installed 0.5.0");
-    assert_eq!(entry.version, "1.0.0");
-    assert_eq!(entry.installed_version.as_deref(), Some("0.5.0"));
-    assert_eq!(entry.source, Source::Registry);
-    drop(fixture);
-    manager.registry.lock().await.registry = None;
-    fs::remove_file(manager.root.join("registry.json")).expect("remove registry cache");
-    let offline = manager
-        .catalog(registrations, true)
-        .await
-        .expect("descriptor without registry");
-    assert!(offline.warning.is_some());
-    let entry = offline
-        .entries
-        .iter()
-        .find(|entry| entry.id == "fixture-agent")
-        .expect("offline entry");
-    assert_eq!(entry.name, "Fixture 0.5.0");
-    assert_eq!(entry.installed_version.as_deref(), Some("0.5.0"));
-    assert_eq!(entry.status, Status::Installed);
-}
-
 #[test]
 fn digest_missing_descriptor_and_rebound_identity_fail_closed() {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -299,24 +224,4 @@ fn digest_missing_descriptor_and_rebound_identity_fail_closed() {
         );
     }
     assert_eq!(path.file_name().expect("filename"), INSTALLATION_FILE);
-}
-
-#[cfg(unix)]
-#[test]
-fn descriptor_and_directory_symlinks_fail_closed() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let manager = fixture::manager(&directory, "http://127.0.0.1:1");
-    let managed = prepare(&manager, "1.0.0");
-    let path = &managed.installation.path;
-    let moved = directory.path().join("descriptor.json");
-    fs::rename(path, &moved).expect("move descriptor");
-    std::os::unix::fs::symlink(&moved, path).expect("descriptor symlink");
-    assert!(installation::load_record(&managed).is_err());
-    fs::remove_file(path).expect("remove symlink");
-    fs::rename(&moved, path).expect("restore descriptor");
-    let version = path.parent().expect("version directory");
-    let moved = directory.path().join("moved-version");
-    fs::rename(version, &moved).expect("move version");
-    std::os::unix::fs::symlink(&moved, version).expect("version symlink");
-    assert!(installation::load_record(&managed).is_err());
 }

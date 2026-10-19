@@ -10,7 +10,7 @@ exec nix eval --impure --raw --expr '
     name = "bas-source";
     filter = path: type:
       let name = builtins.baseNameOf path; in
-      !(builtins.elem name [ ".git" ".delta" ".direnv" "target" ".test-results" "result" "node_modules" "__pycache__" ])
+      !(builtins.elem name [ ".git" ".delta" ".direnv" "target" "result" "node_modules" "__pycache__" ])
       && builtins.match "[.]env([.].*)?" name == null;
   }
 '

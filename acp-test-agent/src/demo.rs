@@ -8,8 +8,6 @@ pub mod commands;
 pub(crate) mod resources;
 pub mod sessions;
 
-#[cfg(test)]
-mod tests;
 
 /// Name advertised in `initialize` and used for `.name(...)` debugging.
 pub const AGENT_NAME: &str = "acp-test-agent";

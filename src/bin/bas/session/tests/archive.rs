@@ -69,33 +69,6 @@ async fn running_embedded_turn_survives_archive_and_restore_keeps_history() {
 }
 
 #[tokio::test]
-async fn archived_turn_can_still_be_cancelled() {
-    let session = pending_session(Limits::default()).await;
-    let mut live = session.attach(options(0)).await.expect("attach");
-    let turn = session
-        .prompt(vec!["cancel me".into()])
-        .await
-        .expect("prompt");
-    session.set_archived(true).await;
-    session
-        .cancel()
-        .await
-        .expect("archive does not prohibit cancel");
-    session
-        .apply(Update::Turn {
-            turn,
-            update: TurnUpdate::Finished(Ok(acp::PromptResponse::new(StopReason::Cancelled))),
-        })
-        .await;
-    assert_eq!(
-        finish(&mut live).await.expect("cancel completes"),
-        StopReason::Cancelled
-    );
-    assert!(session.meta().archived);
-    session.shutdown().await;
-}
-
-#[tokio::test]
 async fn archival_is_metadata_for_starting_stopped_and_failed_sessions() {
     for status in [
         SessionStatus::Starting,

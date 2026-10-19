@@ -121,7 +121,5 @@ pub(crate) use tr;
 
 #[cfg(test)]
 mod tests;
-#[cfg(all(test, feature = "gui-tests"))]
-pub(crate) use tests::isolated_language_test;
 #[cfg(test)]
 pub(crate) use tests::visible_text;

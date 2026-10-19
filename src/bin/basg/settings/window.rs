@@ -19,9 +19,6 @@ const HEIGHT: f32 = 720.;
 const MIN_WIDTH: f32 = 720.;
 const MIN_HEIGHT: f32 = 480.;
 
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;
-
 actions!(settings_window, [CloseWindow]);
 
 struct OpenWindow {

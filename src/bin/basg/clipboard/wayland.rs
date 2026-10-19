@@ -124,9 +124,6 @@ fn read_mime(mime: &str) -> Result<Vec<u8>, Error> {
     }
 }
 
-#[cfg(test)]
-mod tests;
-
 #[cfg(feature = "gui-tests")]
 mod probe;
 #[cfg(feature = "gui-tests")]

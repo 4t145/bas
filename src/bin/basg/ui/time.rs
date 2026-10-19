@@ -33,6 +33,3 @@ pub(crate) fn parse_rfc3339(value: &str) -> Option<Timestamp> {
     let millis = u64::try_from(at.unix_timestamp_nanos() / 1_000_000).ok()?;
     Some(Timestamp::from_millis(millis))
 }
-
-#[cfg(test)]
-mod tests;

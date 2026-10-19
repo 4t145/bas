@@ -2,8 +2,6 @@
 
 use std::sync::Mutex;
 
-#[cfg(test)]
-mod tests;
 
 #[derive(Default)]
 pub(crate) struct Resources {

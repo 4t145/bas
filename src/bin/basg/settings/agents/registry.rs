@@ -619,8 +619,5 @@ impl Agents {
     }
 }
 
-#[cfg(all(test, feature = "gui-tests"))]
-use gpui_kit::px;
-
 #[cfg(test)]
 mod tests;

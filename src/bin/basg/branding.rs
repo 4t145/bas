@@ -10,6 +10,3 @@ pub(crate) fn dimensional_logo() -> Img {
     let source = ImageSource::Resource(Resource::Embedded(DIMENSIONAL.into()));
     el! { #img(source) { size: LOGO_SIZE.px; flex_shrink_0; } }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

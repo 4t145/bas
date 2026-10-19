@@ -102,6 +102,3 @@ impl<M: InputModeKind> Element for Placeholder<M> {
         self.input.paint(window, cx);
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

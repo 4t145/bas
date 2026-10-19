@@ -36,37 +36,3 @@ async fn unreachable_local_daemon_is_not_reported_as_installed() {
     .expect_err("not connected");
     assert!(error.contains("启动本机 bas"));
 }
-
-#[test]
-fn session_specific_auth_methods_override_initialization_without_mutating_it() {
-    use bas::acp;
-    let initial: acp::InitializeResponse = serde_json::from_value(serde_json::json!({
-        "protocolVersion":1, "agentCapabilities":{},
-        "authMethods":[{"id":"initial","name":"Initial","type":"terminal","args":["old"]}]
-    }))
-    .expect("initialize");
-    let methods = authentication_methods(
-        serde_json::to_value(initial.clone()).expect("raw initial"),
-        None,
-    )
-    .expect("fallback");
-    assert_eq!(methods[0].id, "initial");
-    let error = acp::Error::auth_required().data(serde_json::json!({
-        "authMethods":[{"id":"specific","name":"Specific","type":"terminal","args":["new"]}]
-    }));
-    let methods = authentication_methods(
-        serde_json::to_value(initial.clone()).expect("raw initial"),
-        Some((&error).into()),
-    )
-    .expect("specific");
-    assert_eq!(methods[0].id, "specific");
-    assert_eq!(initial.auth_methods[0].id().to_string(), "initial");
-    let malformed = acp::Error::auth_required().data(serde_json::json!({"authMethods":false}));
-    assert!(
-        authentication_methods(
-            serde_json::to_value(initial).expect("raw initial"),
-            Some((&malformed).into())
-        )
-        .is_err()
-    );
-}

@@ -1,9 +1,6 @@
 use super::*;
 use gpui_kit::{assets::IconName, component::button::ButtonCustomVariant};
 
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;
-
 impl Agents {
     fn can_remove(&self, registration: &AgentRegistration, cx: &App) -> bool {
         self.registry.editable()

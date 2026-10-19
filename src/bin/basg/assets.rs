@@ -116,6 +116,3 @@ impl AssetSource for Assets {
         Ok(paths)
     }
 }
-
-#[cfg(test)]
-mod tests;

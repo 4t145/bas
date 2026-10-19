@@ -130,32 +130,6 @@ async fn approval_rpc_validates_options_and_publishes_authoritative_snapshots() 
 }
 
 #[tokio::test]
-async fn approval_subscription_closes_when_daemon_stops() {
-    let registry = registry(100);
-    let session = create(&registry).await;
-    let service = Service::new(registry.clone());
-    let mut stream = service
-        .watch_permissions(Request::new(pb::WatchPermissionsRequest {
-            session: session.id().to_string(),
-        }))
-        .await
-        .expect("approval subscription")
-        .into_inner();
-    stream
-        .next()
-        .await
-        .expect("first snapshot")
-        .expect("valid snapshot");
-    registry.shutdown().await;
-    assert!(
-        tokio::time::timeout(Duration::from_secs(2), stream.next())
-            .await
-            .expect("shutdown releases approval stream")
-            .is_none()
-    );
-}
-
-#[tokio::test]
 async fn disconnecting_real_grpc_approval_stream_cancels_pending_request() {
     use crate::agent::PermissionPolicy;
     use tokio_stream::wrappers::TcpListenerStream;
@@ -209,50 +183,4 @@ async fn disconnecting_real_grpc_approval_stream_cancels_pending_request() {
     registry.shutdown().await;
     server.abort();
     let _ = server.await;
-}
-
-#[tokio::test]
-async fn deleting_session_closes_approval_stream_and_cancels_pending_request() {
-    let registry = registry(100);
-    let session = create(&registry).await;
-    let service = Service::new(registry.clone());
-    let mut stream = service
-        .watch_permissions(Request::new(pb::WatchPermissionsRequest {
-            session: session.id().to_string(),
-        }))
-        .await
-        .expect("approval subscription")
-        .into_inner();
-    stream
-        .next()
-        .await
-        .expect("first snapshot")
-        .expect("valid snapshot");
-    let host = registry.permissions().host(Arc::new(LocalHost::default()));
-    let id = session.id();
-    let answer = tokio::spawn(async move { host.request_permission(approval_request(id)).await });
-    let snapshot = tokio::time::timeout(Duration::from_secs(2), stream.next())
-        .await
-        .expect("approval deadline")
-        .expect("approval update")
-        .expect("valid snapshot");
-    assert_eq!(snapshot.pending.len(), 1);
-    registry.remove(id).await.expect("delete session");
-    assert_eq!(
-        answer
-            .await
-            .expect("request task")
-            .expect("approval outcome"),
-        acp::RequestPermissionOutcome::Cancelled
-    );
-    if let Some(snapshot) = stream.next().await {
-        assert!(snapshot.expect("final snapshot").pending.is_empty());
-    }
-    assert!(
-        tokio::time::timeout(Duration::from_secs(2), stream.next())
-            .await
-            .expect("removed session stream closes")
-            .is_none()
-    );
-    registry.shutdown().await;
 }

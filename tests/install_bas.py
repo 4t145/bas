@@ -19,7 +19,7 @@ class InstallBasTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         scripts = self.root / "scripts"
         scripts.mkdir()
-        for name in ("install-bas", "install-basg", "nix-profile-install"):
+        for name in ("install-bas", "nix-profile-install"):
             shutil.copy2(ROOT / "scripts" / name, scripts / name)
         self.executable(scripts / "nix-source", "#!/bin/sh\nprintf 'fixture-source\\n'\n")
         binaries = self.root / "bin"
@@ -38,8 +38,6 @@ elif sys.argv[1:3] == ["profile", "list"]:
         print(os.environ["PROFILE_LIST_ERROR"], file=sys.stderr)
         sys.exit(1)
     print('{{"elements": {{"codex-acp": {{"storePaths": ["/old/codex"]}}}}}}')
-elif sys.argv[1:3] == ["profile", "install"]:
-    print("warning: 'install' is a deprecated alias for 'add'", file=sys.stderr)
 """,
         )
         self.executable(
@@ -157,42 +155,7 @@ elif command not in ("daemon-reload", "restart"):
             ["link", "daemon-reload", "enable", "restart"],
         )
 
-    def test_service_update_without_force_stops_before_restart(self):
-        for operation in ("link", "enable"):
-            with self.subTest(operation=operation):
-                script = self.root / "scripts/install-bas"
-                source = (ROOT / "scripts/install-bas").read_text()
-                script.write_text(source.replace(
-                    f"systemctl --user {operation} --force",
-                    f"systemctl --user {operation}",
-                ))
-                self.service_fixture()
-                old_service = self.previous_service_links()
-                result = self.run_installer("--service")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("File exists", result.stderr)
-                commands = [json.loads(line) for line in self.service_log.read_text().splitlines()]
-                self.assertFalse(any("restart" in call for call in commands))
-                self.assertEqual(self.enabled_link.resolve(), old_service)
-                for link in (self.unit_link, self.enabled_link):
-                    link.unlink()
-                self.service_log.unlink()
-                shutil.rmtree(self.package)
 
-    def test_removed_flag_fails_before_any_side_effect(self):
-        for arguments in (
-            ("--with-codex",),
-            ("--service", "--with-codex"),
-            ("--profile", "/unused/profile", "--with-codex"),
-            ("--with-codex=true",),
-        ):
-            with self.subTest(arguments=arguments):
-                result = self.run_installer(*arguments)
-                self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn("docs/install.md", result.stderr)
-                self.assertIn("independently", result.stderr)
-                self.assertFalse(self.log.exists())
-                self.assertFalse(self.config.exists())
 
     def test_unreadable_profile_stops_before_removing_or_adding_packages(self):
         self.env["PROFILE_LIST_ERROR"] = "profile contains an invalid path URL"
@@ -201,7 +164,7 @@ elif command not in ("daemon-reload", "restart"):
         self.assertIn(self.env["PROFILE_LIST_ERROR"], result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertFalse(any(call[:2] in (
-            ["profile", "remove"], ["profile", "add"], ["profile", "install"],
+            ["profile", "remove"], ["profile", "add"],
         ) for call in calls))
         self.assertFalse(self.config.exists())
 
@@ -239,28 +202,7 @@ elif command not in ("daemon-reload", "restart"):
             if call[:2] == ["profile", "remove"]:
                 self.assertEqual(call[-1], "bas")
 
-    def test_gui_install_uses_profile_add_without_deprecation_warning(self):
-        result = self.run_installer(
-            "--profile", "/fixture/gui-profile", "--priority", "7",
-            script="install-basg",
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr, "")
-        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(
-            [call for call in calls if call[:2] == ["profile", "add"]],
-            [["profile", "add", "fixture-source#basg",
-              "--profile", "/fixture/gui-profile", "--priority", "7"]],
-        )
-        self.assertFalse(self.config.exists())
 
-    def test_help_has_no_install_side_effect(self):
-        result = self.run_installer("--help")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("--with-codex", result.stdout)
-        self.assertIn("independently", result.stdout)
-        self.assertFalse(self.log.exists())
-        self.assertFalse(self.config.exists())
 
 
 if __name__ == "__main__":

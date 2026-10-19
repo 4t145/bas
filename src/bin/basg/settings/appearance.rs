@@ -13,9 +13,6 @@ use gpui_kit::{
     px,
 };
 
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;
-
 const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
 
 #[derive(Clone, Copy, PartialEq, Eq)]

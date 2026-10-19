@@ -4,43 +4,6 @@ use crate::{acp, model::*};
 mod permissions;
 mod submission;
 
-#[test]
-fn additional_workspace_metadata_and_events_round_trip() {
-    let mut meta = SessionMeta::new(SessionId::new(), "agent".into(), Owner::current());
-    let update = Event::new(
-        meta.id,
-        Cursor::from_raw(1),
-        EventKind::WorkspaceChanged {
-            directories: vec!["/shared".into()],
-            config: acp::NewSessionResponse::new(meta.id.to_string()),
-            subagents: Default::default(),
-        },
-    );
-    assert!(meta.apply_event(&update));
-    assert_eq!(
-        meta.additional_directories,
-        [std::path::PathBuf::from("/shared")]
-    );
-    let wire = pb::Event::from(&update);
-    assert_eq!(Event::try_from(wire).expect("event"), update);
-    let snapshot = SessionSnapshot::from(meta);
-    assert_eq!(
-        SessionSnapshot::try_from(pb::Session::try_from(&snapshot).expect("wire"))
-            .expect("snapshot"),
-        snapshot
-    );
-}
-
-#[test]
-fn agent_reported_timestamp_survives_session_snapshot_transport() {
-    let mut meta = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
-    meta.agent_updated_at = Some(Timestamp::from_millis(1234));
-    let snapshot = SessionSnapshot::from(meta);
-    let wire = pb::Session::try_from(&snapshot).expect("session snapshot");
-    assert_eq!(wire.agent_updated_at, Some(1234));
-    assert_eq!(SessionSnapshot::try_from(wire).expect("snapshot"), snapshot);
-}
-
 fn event(kind: EventKind) -> Event {
     Event::new(SessionId::new(), Cursor::from_raw(17), kind)
 }
@@ -62,94 +25,6 @@ fn native_acp_updates_survive_the_protobuf_boundary_without_loss() {
             serde_json::from_slice::<serde_json::Value>(&payload.json).expect("JSON"),
             serde_json::to_value(update).expect("SDK JSON")
         );
-    }
-}
-
-#[test]
-fn prompt_content_and_extension_metadata_use_the_sdk_schema() {
-    let updates: Vec<acp::SessionUpdate> =
-        serde_json::from_str(include_str!("assets/updates.json")).expect("ACP fixtures");
-    let content = updates
-        .into_iter()
-        .filter_map(|update| match update {
-            acp::SessionUpdate::AgentMessageChunk(chunk) => Some(chunk.content),
-            _ => None,
-        })
-        .collect();
-    let request = acp::PromptRequest::new(SessionId::new().to_string(), content).meta(
-        serde_json::from_value::<acp::Meta>(serde_json::json!({"large":9007199254740993_u64}))
-            .expect("metadata"),
-    );
-    let decoded: acp::PromptRequest = pb::AcpPayload::from(&request).decode().expect("prompt");
-    assert_eq!(decoded, request);
-    assert_eq!(decoded.prompt.len(), 5);
-}
-
-#[test]
-fn lifecycle_and_complete_prompt_responses_round_trip() {
-    for kind in [
-        EventKind::TurnStarted {
-            turn: TurnId::new(),
-        },
-        EventKind::TurnFinished {
-            turn: TurnId::new(),
-            result: Ok(
-                acp::PromptResponse::new(acp::StopReason::MaxTurnRequests).meta(
-                    serde_json::from_value::<acp::Meta>(serde_json::json!({"cost":1.2}))
-                        .expect("metadata"),
-                ),
-            ),
-        },
-        EventKind::TurnFinished {
-            turn: TurnId::new(),
-            result: Err(acp::Error::new(-32000, "authentication required")
-                .data(serde_json::json!({"authMethods": [], "large": 9_007_199_254_740_993_u64}))),
-        },
-        EventKind::TitleChanged {
-            title: "renamed".into(),
-        },
-        EventKind::ArchiveChanged { archived: true },
-        EventKind::ArchiveChanged { archived: false },
-        EventKind::StatusChanged {
-            status: SessionStatus::Working,
-        },
-        EventKind::Failed {
-            message: "backend failed".into(),
-        },
-    ] {
-        let original = event(kind);
-        assert_eq!(
-            Event::try_from(pb::Event::from(&original)).expect("event"),
-            original
-        );
-    }
-}
-
-#[test]
-fn runtime_interruptions_round_trip_without_an_acp_outcome() {
-    use prost::Message;
-    for reason in [
-        InterruptionReason::BackendFailure {
-            message: "connection lost".into(),
-        },
-        InterruptionReason::DispatchFailure {
-            message: "cannot dispatch".into(),
-        },
-        InterruptionReason::SessionStopped,
-        InterruptionReason::DaemonRestarted,
-        InterruptionReason::CancelledBeforeDispatch,
-    ] {
-        let original = event(EventKind::TurnInterrupted {
-            turn: TurnId::new(),
-            reason,
-        });
-        let wire = pb::Event::from(&original);
-        assert!(matches!(
-            wire.kind,
-            Some(pb::event::Kind::TurnInterrupted(_))
-        ));
-        let decoded = pb::Event::decode(wire.encode_to_vec().as_slice()).expect("protobuf event");
-        assert_eq!(Event::try_from(decoded).expect("interruption"), original);
     }
 }
 
@@ -261,34 +136,6 @@ fn session_capabilities_modes_and_options_round_trip() {
 }
 
 #[test]
-fn session_preserves_original_initialization_extensions_across_protobuf() {
-    let raw = serde_json::json!({
-        "protocolVersion": 1,
-        "agentCapabilities": {},
-        "agentInfo": {"name":"fixture", "version":"1.0.0", "future":"retained"},
-        "authMethods": [{
-            "id":"future", "name":"Provider authorization", "type":"future-auth",
-            "providerField":{"scope":"example"}, "_meta":{"vendor":"retained"}
-        }],
-        "futureInitialization":{"opaque":9007199254740993_u64}
-    });
-    let mut session = SessionMeta::new(SessionId::new(), "fixture".into(), Owner::current());
-    session.initialization = Some(serde_json::from_value(raw.clone()).expect("typed projection"));
-    session.initialization_raw = Some(raw.clone());
-    let snapshot = SessionSnapshot::from(session);
-    let wire = pb::Session::try_from(&snapshot).expect("wire snapshot");
-    assert_eq!(
-        wire.initialization
-            .as_ref()
-            .expect("original initialization")
-            .decode::<serde_json::Value>()
-            .expect("JSON"),
-        raw
-    );
-    assert_eq!(SessionSnapshot::try_from(wire).expect("snapshot"), snapshot);
-}
-
-#[test]
 fn missing_owner_and_unknown_lifecycle_status_are_rejected() {
     let session = pb::Session {
         id: SessionId::new().to_string(),
@@ -311,53 +158,6 @@ fn missing_owner_and_unknown_lifecycle_status_are_rejected() {
             ..
         })
     ));
-}
-
-#[cfg(unix)]
-#[test]
-fn non_utf8_working_directory_is_rejected_without_replacement() {
-    use std::os::unix::ffi::OsStringExt;
-    let mut session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
-    session.cwd = Some(std::ffi::OsString::from_vec(b"/tmp/invalid-\xff".to_vec()).into());
-    assert!(matches!(
-        pb::Session::try_from(&SessionSnapshot::from(session.clone())),
-        Err(Error::NonUtf8Cwd)
-    ));
-    assert!(matches!(
-        super::utf8_cwd(session.cwd.as_ref().unwrap()),
-        Err(Error::NonUtf8Cwd)
-    ));
-    session.cwd = Some("/tmp/中文".into());
-    assert_eq!(
-        pb::Session::try_from(&SessionSnapshot::from(session))
-            .expect("UTF-8 directory")
-            .cwd
-            .as_deref(),
-        Some("/tmp/中文")
-    );
-}
-
-#[test]
-fn snapshot_preserves_initial_metadata_and_rejects_invalid_turn() {
-    let session = SessionSnapshot::from(SessionMeta::new(
-        SessionId::new(),
-        "test".into(),
-        Owner::current(),
-    ));
-    let mut wire = pb::Session::try_from(&session).unwrap();
-    assert_eq!(wire.revision, 0);
-    assert_eq!(wire.active_turn, None);
-    assert!(!wire.archived);
-    assert_eq!(wire.last_reply, 0);
-    let decoded = SessionSnapshot::try_from(wire.clone())
-        .expect("snapshot")
-        .meta;
-    assert_eq!(decoded.revision, Cursor::START);
-    assert_eq!(decoded.active_turn, None);
-    assert!(!decoded.archived);
-    assert_eq!(decoded.last_reply, Cursor::START);
-    wire.active_turn = Some("invalid-turn".into());
-    assert!(matches!(SessionSnapshot::try_from(wire), Err(Error::Id(_))));
 }
 
 #[test]

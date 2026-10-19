@@ -1,6 +1,5 @@
 /target
 /.direnv/
-/.test-results/
 __pycache__/
 /result
 .env

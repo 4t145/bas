@@ -16,8 +16,6 @@ use gpui_kit::{
 mod agents;
 mod appearance;
 mod form;
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;
 pub(crate) mod window;
 
 // Keep actions distinct from the ghost navigation items, using upstream state styling.

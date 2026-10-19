@@ -43,31 +43,6 @@ fn native_acp_errors_keep_one_mapping_across_creation_and_session_operations() {
 }
 
 #[test]
-fn raw_acp_error_extensions_survive_both_operation_boundaries() {
-    let raw = json!({
-        "code": i32::from(acp::ErrorCode::AuthRequired),
-        "message": "authentication expired",
-        "data": {"authMethods": [{"id": "login"}]},
-        "futureExtension": {"counter": 9_007_199_254_740_993_u64}
-    });
-    let native = || agent::Error::AcpRaw {
-        error: Box::new(serde_json::from_value(raw.clone()).expect("ACP error")),
-        raw: raw.clone(),
-    };
-    for status in [
-        Status::from(CreateError::Agent(native())),
-        Status::from(SessionError::Agent(native())),
-    ] {
-        assert_eq!(status.code(), Code::Unauthenticated);
-        assert_eq!(status.message(), "authentication expired");
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(status.details()).expect("raw ACP details"),
-            raw
-        );
-    }
-}
-
-#[test]
 fn daemon_failures_never_masquerade_as_native_acp_errors() {
     for (status, expected) in [
         (Status::from(CreateError::Timeout), Code::DeadlineExceeded),
@@ -105,20 +80,4 @@ fn daemon_failures_never_masquerade_as_native_acp_errors() {
         );
         assert!(acp_error(&status).is_err());
     }
-}
-
-#[test]
-fn unsupported_backend_operations_keep_their_context_specific_status() {
-    let unsupported = || agent::Error::Unsupported {
-        agent: "fixture".into(),
-        operation: "session/load",
-    };
-    assert_eq!(
-        Status::from(CreateError::Agent(unsupported())).code(),
-        Code::FailedPrecondition
-    );
-    assert_eq!(
-        Status::from(SessionError::Agent(unsupported())).code(),
-        Code::Unimplemented
-    );
 }

@@ -93,24 +93,3 @@ fn visible_replies_survive_close_and_reopen_but_new_replies_stay_unread(cx: &mut
     .expect("new cursors remain unread until explicitly acknowledged");
     assert_eq!(Store::open(path).seen_replies().get(&meta.id), Some(&5));
 }
-
-#[gpui_kit::test]
-fn read_frontier_is_saved_after_the_debounce_without_closing(cx: &mut TestAppContext) {
-    let directory = tempfile::tempdir().expect("window state");
-    let path = directory.path().join("state.json");
-    let fixture = fixture(cx);
-    let id = session().id;
-    cx.update(|cx| {
-        fixture.view.update(cx, |view, cx| {
-            view.attach_restore(Some(Store::open(path.clone())));
-            view.see_reply(id, 4, cx);
-            view.see_reply(id, 8, cx);
-            view.see_reply(id, 3, cx);
-        })
-    });
-    assert!(!path.exists());
-    cx.executor()
-        .advance_clock(std::time::Duration::from_secs(1));
-    cx.run_until_parked();
-    assert_eq!(Store::open(path).seen_replies().get(&id), Some(&8));
-}

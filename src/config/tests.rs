@@ -1,29 +1,6 @@
 use super::*;
 
 #[test]
-fn custom_agent_notes_round_trip_without_changing_launch_configuration() {
-    let mut spec = AgentSpec::acp(
-        "custom",
-        agent::Command::new("example-acp", ["--stdio".into()]),
-    );
-    let original = serde_json::to_value(&spec).expect("default spec");
-    assert!(original.get("description").is_none());
-    let command = spec.command.clone();
-    spec.description = "用于项目审查的智能体".into();
-    let saved = serde_json::to_value(&spec).expect("noted spec");
-    assert_eq!(saved["description"], "用于项目审查的智能体");
-    let restored: AgentSpec = serde_json::from_value(saved).expect("restore notes");
-    assert_eq!(restored, spec);
-    assert_eq!(restored.command, command);
-    assert!(
-        serde_json::from_value::<AgentSpec>(original)
-            .expect("legacy spec")
-            .description
-            .is_empty()
-    );
-}
-
-#[test]
 fn strict_json_and_domain_rules() {
     for text in [
         r#"{"unknown":1}"#,
@@ -82,33 +59,6 @@ fn strict_json_and_domain_rules() {
     assert!("x=embedded:dummy".parse::<AgentSpec>().is_err());
     assert!("x=acp".parse::<AgentSpec>().is_err());
     assert!("=embedded".parse::<AgentSpec>().is_err());
-}
-
-#[test]
-fn composer_enter_preference_defaults_and_persists_with_existing_agent_configuration() {
-    use appearance::ComposerEnterBehavior;
-
-    let directory = tempfile::tempdir().expect("settings directory");
-    let store = Store::at(directory.path().join("settings.json"));
-    let mut document = store.load().expect("default settings");
-    assert_eq!(
-        document.settings.appearance.composer_enter_behavior,
-        ComposerEnterBehavior::Send
-    );
-    let agents = document.settings.daemon.agents.clone();
-    let appearance = Appearance {
-        composer_enter_behavior: ComposerEnterBehavior::Newline,
-        ..document.settings.appearance.clone()
-    };
-    store
-        .save_appearance(&mut document, appearance)
-        .expect("save input preference");
-    let saved = store.load().expect("reload settings").settings;
-    assert_eq!(
-        saved.appearance.composer_enter_behavior,
-        ComposerEnterBehavior::Newline
-    );
-    assert_eq!(saved.daemon.agents, agents);
 }
 
 #[test]

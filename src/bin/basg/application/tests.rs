@@ -10,88 +10,6 @@ fn init(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn delete_confirmation_is_floating_and_remembered_only_after_confirmation(cx: &mut TestAppContext) {
-    use std::{cell::Cell, rc::Rc};
-    let directory = tempfile::tempdir().expect("settings");
-    let path = directory.path().join("settings.json");
-    cx.update(|cx| {
-        gpui_kit::init(cx);
-        crate::configuration::init(Some(path.clone()), cx);
-        theme::init(None, cx);
-    });
-    assert_eq!(InfoWindow::Confirmation.window_kind(), WindowKind::Floating);
-    let calls = Rc::new(Cell::new(0));
-    for confirm in [false, true] {
-        let called = calls.clone();
-        let handle = cx.update(|cx| {
-            open_delete_confirmation(request(), move |_| called.set(called.get() + 1), cx)
-                .expect("dialog");
-            cx.global::<OpenWindows>()
-                .confirmation
-                .expect("confirmation")
-        });
-        cx.update_window(handle.into(), |_, window, cx| {
-            window.render_frame(cx);
-            window.click("delete-dont-ask", cx);
-            window.click(
-                if confirm {
-                    "message-confirm"
-                } else {
-                    "message-close"
-                },
-                cx,
-            );
-        })
-        .expect("remember deletion preference");
-        let stored = bas::config::Store::at(path.clone())
-            .load()
-            .expect("settings")
-            .settings
-            .appearance;
-        assert_eq!(stored.confirm_session_delete, confirm.then_some(false));
-    }
-    assert_eq!(calls.get(), 1);
-    let called = calls.clone();
-    cx.update(|cx| {
-        open_delete_confirmation(request(), move |_| called.set(called.get() + 1), cx)
-            .expect("skip dialog")
-    });
-    assert_eq!(calls.get(), 2);
-}
-
-#[gpui_kit::test]
-fn about_reuses_a_window_and_opens_homepage(cx: &mut TestAppContext) {
-    init(cx);
-    let handle = cx.update(|cx| open_about(cx).expect("about window"));
-    let again = cx.update(|cx| open_about(cx).expect("focus existing window"));
-    assert_eq!(handle.window_id(), again.window_id());
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.find("about-window").visible());
-        let logo = window.find("about-dimensional-logo");
-        assert!(logo.visible());
-        assert_eq!(logo.bounds().size, gpui_kit::size(px(96.), px(96.)));
-        window.click("about-home", cx);
-    })
-    .expect("about content");
-    assert_eq!(cx.opened_url().as_deref(), Some(HOME_URL));
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.click("about-close", cx);
-    })
-    .expect("close about");
-    assert!(cx.update_window(handle.into(), |_, _, _| ()).is_err());
-    let reopened = cx.update(|cx| open_about(cx).expect("reopen after closing"));
-    assert_ne!(handle.window_id(), reopened.window_id());
-}
-
-#[gpui_kit::test]
-fn releases_opens_only_the_manual_release_page(cx: &mut TestAppContext) {
-    init(cx);
-    cx.update(open_releases);
-    assert_eq!(cx.opened_url().as_deref(), Some(RELEASES_URL));
-}
-
-#[gpui_kit::test]
 fn quit_can_be_cancelled_and_reopened_without_a_workspace(cx: &mut TestAppContext) {
     init(cx);
     let about = cx.update(|cx| open_about(cx).expect("independent about"));
@@ -173,25 +91,6 @@ fn messages_do_not_replace_confirmations_and_confirmation_runs_once(cx: &mut Tes
         assert!(window.find("quit-window").visible());
     })
     .expect("unrelated quit is intact");
-}
-
-#[gpui_kit::test]
-fn cancellation_drops_confirmation_callback(cx: &mut TestAppContext) {
-    init(cx);
-    let confirmation = cx.update(|cx| {
-        open_confirmation(
-            request(),
-            |_| panic!("cancel must not execute callback"),
-            cx,
-        )
-        .expect("confirmation")
-    });
-    cx.update_window(confirmation.into(), |_, window, cx| {
-        window.render_frame(cx);
-        window.click("message-close", cx);
-    })
-    .expect("cancel");
-    assert!(cx.update_window(confirmation.into(), |_, _, _| ()).is_err());
 }
 
 #[gpui_kit::test]

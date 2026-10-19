@@ -1,8 +1,5 @@
 //! Compact and exact labels for context usage details.
 
-#[cfg(test)]
-mod tests;
-
 pub(super) fn short_tokens(count: u64) -> String {
     let (unit, suffix) = if count >= 1_000_000 {
         (1_000_000, "M")

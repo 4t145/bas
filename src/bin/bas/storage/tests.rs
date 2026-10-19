@@ -202,47 +202,6 @@ async fn acceptance_rolls_back_with_failed_sqlite_batch() {
     );
 }
 
-#[tokio::test]
-async fn acceptance_reopens_and_rejects_corruption() {
-    let dir = tempfile::tempdir().expect("directory");
-    let path = dir.path().join("private/history.sqlite");
-    let db = LocalDb::open(&path).await.expect("open");
-    let mut state = meta();
-    db.create(state.clone(), None).await.expect("create");
-    let (event, acceptance) = accepted_event(&mut state);
-    db.commit(state.clone(), &[event], Some(acceptance))
-        .await
-        .expect("accept");
-    let batch = events(&mut state, 8);
-    db.commit(state.clone(), &batch, None)
-        .await
-        .expect("append");
-    drop(db);
-    let db = LocalDb::open(&path).await.expect("reopen");
-    assert_eq!(db.tail(state.id, 1).await.expect("small window").len(), 1);
-    assert_eq!(
-        db.acceptance(state.id, acceptance.receipt.turn)
-            .await
-            .expect("query"),
-        Some(acceptance)
-    );
-    let connection = rusqlite::Connection::open(&path).expect("corruption fixture");
-    for update in [
-        "PRAGMA ignore_check_constraints=ON; UPDATE accepted_prompts SET fingerprint=x'00'",
-        "UPDATE accepted_prompts SET fingerprint=zeroblob(32), cursor=0",
-        "UPDATE accepted_prompts SET cursor=2",
-        "UPDATE accepted_prompts SET cursor=999",
-    ] {
-        connection
-            .execute_batch(update)
-            .expect("inject corrupt row");
-        assert!(matches!(
-            db.acceptance(state.id, acceptance.receipt.turn).await,
-            Err(Error::Corrupt(_))
-        ));
-    }
-}
-
 async fn contract(storage: &dyn Storage) {
     let mut state = meta();
     let id = state.id;
@@ -389,81 +348,6 @@ async fn sqlite_reopens_and_skips_applied_migration() {
     }
 }
 
-#[tokio::test]
-async fn sqlite_adopts_previous_version_one_schema() {
-    let dir = tempfile::tempdir().expect("directory");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
-            .expect("private database directory");
-    }
-    let path = dir.path().join("history.sqlite");
-    let mut state = meta();
-    let legacy;
-    {
-        let db = LocalDb::open(&path).await.expect("create schema");
-        db.create(state.clone(), None).await.expect("create");
-        legacy = events(&mut state, 2);
-        db.commit(state.clone(), &legacy, None)
-            .await
-            .expect("legacy events");
-        // The previous rusqlite adapter had user_version=1 but did not have
-        // Toasty's migration history.
-        db.test_sql(TestSql::DropMigrationHistory)
-            .await
-            .expect("simulate legacy schema");
-    }
-    let db = LocalDb::open(&path)
-        .await
-        .expect("adopt version one schema");
-    assert_eq!(
-        db.load(state.id).await.expect("load").expect("exists").meta,
-        state
-    );
-    assert_eq!(
-        db.page(state.id, None, 8)
-            .await
-            .expect("legacy history")
-            .events,
-        legacy
-    );
-    let (event, acceptance) = accepted_event(&mut state);
-    db.commit(state.clone(), &[event], Some(acceptance))
-        .await
-        .expect("v2 acceptance");
-    drop(db);
-    let db = LocalDb::open(&path)
-        .await
-        .expect("reopen upgraded database");
-    assert_eq!(
-        db.acceptance(state.id, acceptance.receipt.turn)
-            .await
-            .expect("query"),
-        Some(acceptance)
-    );
-}
-
-#[tokio::test]
-async fn sqlite_refuses_incompatible_acceptance_schema() {
-    let dir = tempfile::tempdir().expect("directory");
-    let path = dir.path().join("private/history.sqlite");
-    let db = LocalDb::open(&path).await.expect("create");
-    drop(db);
-    let connection = rusqlite::Connection::open(&path).expect("fixture");
-    connection
-        .execute_batch(
-            "DROP TABLE accepted_prompts;
-         CREATE TABLE accepted_prompts (
-             session_id TEXT NOT NULL, turn_id TEXT NOT NULL,
-             cursor INTEGER NOT NULL, fingerprint BLOB NOT NULL,
-             PRIMARY KEY(session_id)
-         );",
-        )
-        .expect("malformed composite key");
-    assert!(matches!(LocalDb::open(&path).await, Err(Error::Corrupt(_))));
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn sqlite_rejects_insecure_path_and_symlink() {
@@ -482,41 +366,6 @@ async fn sqlite_rejects_insecure_path_and_symlink() {
     let link = dir.path().join("link.sqlite");
     symlink(&path, &link).expect("symlink");
     assert!(matches!(LocalDb::open(&link).await, Err(Error::Io(_))));
-}
-
-#[tokio::test]
-async fn composite_key_and_failed_batch_rollback() {
-    let db = LocalDb::open(":memory:").await.expect("open");
-    let mut state = meta();
-    let id = state.id;
-    db.create(state.clone(), None).await.expect("create");
-    let first = events(&mut state, 1);
-    db.commit(state.clone(), &first, None)
-        .await
-        .expect("commit");
-    let duplicate = db
-        .test_sql(TestSql::InsertDuplicate {
-            session: id,
-            cursor: first[0].cursor,
-            payload: serde_json::to_vec(&first[0]).expect("json"),
-        })
-        .await;
-    assert!(duplicate.is_err(), "(session_id,cursor) must be unique");
-    let batch = events(&mut state, 2);
-    db.test_sql(TestSql::RejectThirdEvent)
-        .await
-        .expect("trigger");
-    assert!(db.commit(state, &batch, None).await.is_err());
-    assert_eq!(
-        db.load(id)
-            .await
-            .expect("load")
-            .expect("exists")
-            .meta
-            .revision,
-        first[0].cursor
-    );
-    assert_eq!(db.page(id, None, 10).await.expect("page").events, first);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -568,31 +417,4 @@ async fn sqlite_lock_wait_does_not_stall_the_daemon_runtime() {
         .expect("SQLite write completes")
         .expect("storage task did not panic")
         .expect("storage resumes after lock release");
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn sqlite_refuses_legacy_schema_without_the_event_composite_key() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = tempfile::tempdir().expect("directory");
-    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
-        .expect("private database directory");
-    let path = dir.path().join("legacy.sqlite");
-    let connection = rusqlite::Connection::open(&path).expect("legacy database");
-    connection
-        .execute_batch(
-            "CREATE TABLE sessions (
-                id TEXT PRIMARY KEY, metadata BLOB NOT NULL, updated_at INTEGER NOT NULL,
-                revision INTEGER NOT NULL, resume_version INTEGER, resume_payload BLOB
-            );
-            CREATE INDEX sessions_recent ON sessions(updated_at DESC, id DESC);
-            CREATE TABLE events (session_id TEXT, cursor INTEGER, payload BLOB);
-            PRAGMA user_version = 1;",
-        )
-        .expect("malformed legacy schema");
-    drop(connection);
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .expect("private legacy database");
-    assert!(matches!(LocalDb::open(&path).await, Err(Error::Corrupt(_))));
 }

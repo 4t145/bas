@@ -897,7 +897,7 @@ checkPhase 的默认目标 260 项与 GUI 发布配置 85 项全通过；未执�
 | 含 GUI 的全目标构建 | 通过 |
 | 含 GUI 的严格 Clippy | 通过 |
 | 格式与 diff 检查 | 通过 |
-| Nix 构建与 checkPhase | 通过；daemon 117 项、GUI 包的 `gui` 配置 55 项通过；包含 UI-005、UI-007 修复，未运行系统虚拟机测试 |
+| Nix 构建与 checkPhase | 通过；daemon 117 项、GUI 包的 `gui` 配置 55 项通过；包含 UI-005、UI-007 修复，未运行系统级黑箱测试 |
 
 ```sh
 cargo test --all-targets --locked

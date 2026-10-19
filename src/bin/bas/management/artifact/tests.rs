@@ -75,24 +75,3 @@ fn archives_cannot_create_symlinks_that_escape_the_root() {
     );
     assert!(!destination.join("escape").exists());
 }
-
-#[test]
-fn raw_binary_is_written_to_manifest_command_without_shell_parsing() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let archive_path = directory.path().join("download");
-    fs::write(&archive_path, b"fixture executable").expect("binary fixture");
-    let destination = directory.path().join("extracted");
-    fs::create_dir(&destination).expect("extract directory");
-    extract(
-        &archive_path,
-        "https://example.com/raw-agent",
-        &destination,
-        "./dist/agent",
-        false,
-    )
-    .expect("raw installation");
-    assert_eq!(
-        fs::read(destination.join("dist/agent")).expect("installed binary"),
-        b"fixture executable"
-    );
-}

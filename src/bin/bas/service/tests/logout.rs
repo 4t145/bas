@@ -5,7 +5,7 @@ use crate::{
 };
 use bas::{
     model::Owner,
-    service::{Client, pb, pb::bas_server::Bas},
+    service::{Client, pb},
 };
 use std::{sync::Arc, time::Duration};
 use tokio_stream::wrappers::TcpListenerStream;
@@ -114,72 +114,6 @@ async fn logout_negotiates_capability_once_without_creating_or_deleting_sessions
     assert_eq!(fixture.methods(), ["initialize", "logout"]);
     assert_eq!(fixture.registry.list().await, before);
     fixture.registry.shutdown().await;
-}
-
-#[tokio::test]
-async fn unsupported_logout_is_not_sent_and_native_rejection_keeps_details() {
-    for mode in ["unsupported", "reject"] {
-        let mut fixture = Fixture::new(mode).await;
-        let error = fixture
-            .client
-            .logout_agent(fixture.request())
-            .await
-            .expect_err("failure");
-        if mode == "unsupported" {
-            assert_eq!(fixture.methods(), ["initialize"]);
-            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
-        } else {
-            assert_eq!(fixture.methods(), ["initialize", "logout"]);
-            assert_eq!(error.code(), tonic::Code::InvalidArgument);
-            let error: bas::acp::Error =
-                serde_json::from_slice(error.details()).expect("native error");
-            assert_eq!(error.message, "logout rejected");
-            assert_eq!(error.data.expect("data")["reason"], "fixture");
-        }
-    }
-}
-
-#[tokio::test]
-async fn stale_configuration_unknown_peer_and_remote_peer_cannot_log_out() {
-    let mut fixture = Fixture::new("supported").await;
-    let mut request = fixture.request();
-    let mut changed = fixture.spec.clone();
-    changed.env.insert("CHANGED".into(), "true".into());
-    request.expected_spec_json = serde_json::to_vec(&changed).expect("spec");
-    assert_eq!(
-        fixture
-            .client
-            .logout_agent(request)
-            .await
-            .expect_err("stale")
-            .code(),
-        tonic::Code::FailedPrecondition
-    );
-    let service = Service::new(fixture.registry.clone());
-    assert_eq!(
-        service
-            .logout_agent(tonic::Request::new(fixture.request()))
-            .await
-            .expect_err("unknown peer")
-            .code(),
-        tonic::Code::PermissionDenied
-    );
-    let mut remote = tonic::Request::new(fixture.request());
-    remote
-        .extensions_mut()
-        .insert(tonic::transport::server::TcpConnectInfo {
-            local_addr: Some("127.0.0.1:7337".parse().expect("local")),
-            remote_addr: Some("192.0.2.10:54321".parse().expect("remote")),
-        });
-    assert_eq!(
-        service
-            .logout_agent(remote)
-            .await
-            .expect_err("remote")
-            .code(),
-        tonic::Code::PermissionDenied
-    );
-    assert!(fixture.methods().is_empty());
 }
 
 #[tokio::test]

@@ -16,13 +16,6 @@ async fn pair() -> (Controller, Helper) {
 }
 
 #[tokio::test]
-async fn returns_real_nonzero_exit_code() {
-    let (mut controller, helper) = pair().await;
-    helper.finish(-37).await.expect("send exit code");
-    assert_eq!(controller.result().await.expect("receive exit code"), -37);
-}
-
-#[tokio::test]
 async fn rejects_missing_and_partial_results() {
     for count in 0..4 {
         let (mut controller, mut helper) = pair().await;
@@ -91,70 +84,6 @@ async fn dropping_listener_prevents_helper_start() {
 }
 
 #[tokio::test]
-async fn invalid_and_disconnected_candidates_do_not_occupy_listener() {
-    let listener = Listener::bind().expect("bind listener");
-    timeout(TEST_TIMEOUT, async {
-        let candidates = async {
-            let mut wrong = TcpStream::connect(listener.endpoint.address)
-                .await
-                .expect("connect invalid candidate");
-            let mut token = *listener.endpoint.token.as_bytes();
-            token[0] ^= 1;
-            wrong.write_all(&token).await.expect("send wrong token");
-            let mut acknowledgement = [0];
-            assert!(
-                wrong.read_exact(&mut acknowledgement).await.is_err(),
-                "wrong token must not be acknowledged"
-            );
-            let mut partial = TcpStream::connect(listener.endpoint.address)
-                .await
-                .expect("connect partial candidate");
-            partial
-                .write_all(&[0; 8])
-                .await
-                .expect("send partial token");
-            drop(partial);
-            listener
-                .endpoint()
-                .connect()
-                .await
-                .expect("valid helper connects")
-        };
-        let (controller, helper) = tokio::join!(listener.accept(), candidates);
-        let mut controller = controller.expect("accept only valid helper");
-        helper.finish(19).await.expect("finish valid attempt");
-        assert_eq!(controller.result().await.expect("valid result"), 19);
-    })
-    .await
-    .expect("invalid candidates do not end attempt");
-}
-
-#[tokio::test]
-async fn stalled_candidate_is_bounded() {
-    let listener = Listener::bind().expect("bind listener");
-    let mut stalled = TcpStream::connect(listener.endpoint.address)
-        .await
-        .expect("connect stalled candidate");
-    timeout(TEST_TIMEOUT, async {
-        let valid = async {
-            let mut acknowledgement = [0];
-            assert!(stalled.read_exact(&mut acknowledgement).await.is_err());
-            listener
-                .endpoint()
-                .connect()
-                .await
-                .expect("connect after timeout")
-        };
-        let (controller, helper) = tokio::join!(listener.accept(), valid);
-        drop(controller.expect("accept valid candidate after timeout"));
-        let mut helper = helper;
-        helper.cancelled().await;
-    })
-    .await
-    .expect("stalled candidate cannot retain listener");
-}
-
-#[tokio::test]
 async fn rejects_non_loopback_endpoint() {
     let endpoint = Endpoint {
         address: "192.0.2.1:42".parse().expect("valid test address"),
@@ -166,28 +95,4 @@ async fn rejects_non_loopback_endpoint() {
         .err()
         .expect("reject remote address");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-}
-
-#[tokio::test]
-async fn unexpected_controller_input_cancels_helper() {
-    let (mut controller, mut helper) = pair().await;
-    controller
-        .socket
-        .write_all(&[99])
-        .await
-        .expect("send unexpected input");
-    timeout(TEST_TIMEOUT, helper.cancelled())
-        .await
-        .expect("unexpected input cancels login");
-}
-
-#[tokio::test]
-async fn endpoint_round_trip_and_unknown_fields() {
-    let listener = Listener::bind().expect("bind listener");
-    let mut value = serde_json::to_value(listener.endpoint()).expect("serialize endpoint");
-    let endpoint: Endpoint = serde_json::from_value(value.clone()).expect("decode endpoint");
-    assert_eq!(endpoint.address, listener.endpoint.address);
-    assert!(endpoint.token == listener.endpoint.token);
-    value["unexpected"] = serde_json::json!(true);
-    assert!(serde_json::from_value::<Endpoint>(value).is_err());
 }

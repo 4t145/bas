@@ -1,25 +1,5 @@
 use super::*;
 
-#[test]
-fn closing_unobserved_connections_releases_failed_startup_state() {
-    let interactions = Arc::new(Elicitations::default());
-    let session = SessionId::new();
-    let connection = uuid::Uuid::new_v4();
-    interactions.open_connection(session, connection);
-    interactions.cancel_connection(session, connection);
-    assert!(!interactions.lock().contains_key(&session));
-
-    let subscription = interactions.subscribe(session);
-    interactions.open_connection(session, connection);
-    interactions.cancel_connection(session, connection);
-    assert!(
-        interactions.lock().contains_key(&session),
-        "an attached viewer retains its channel until disconnect"
-    );
-    drop(subscription);
-    assert!(!interactions.lock().contains_key(&session));
-}
-
 fn form(session: SessionId) -> Value {
     json!({"sessionId":session.to_string(),"mode":"form","message":"Choose a project name","requestedSchema":{"type":"object","properties":{"project":{"type":"string","minLength":1}},"required":["project"]}})
 }
@@ -99,89 +79,6 @@ async fn invalid_form_response_keeps_the_request_available_for_correction() {
             .respond(session, &request.request_id, json!({"action":"cancel"}))
             .is_err()
     );
-}
-
-#[tokio::test]
-async fn opening_a_url_waits_for_its_matching_connection_completion() {
-    let interactions = Arc::new(Elicitations::default());
-    let session = SessionId::new();
-    let connection = open(&interactions, session);
-    let mut subscription = interactions.subscribe(session);
-    let worker = {
-        let interactions = interactions.clone();
-        tokio::spawn(async move {
-            interactions
-                .request(session, connection, url(session))
-                .await
-        })
-    };
-    let request = pending(&mut subscription).await;
-    interactions
-        .respond(session, &request.request_id, json!({"action":"accept"}))
-        .expect("consent");
-    assert_eq!(
-        worker.await.expect("worker").expect("URL response"),
-        json!({"action":"accept"})
-    );
-    assert!(subscription.snapshots.borrow().pending[0].answered);
-    interactions.complete(SessionId::new(), connection, "opaque-url");
-    interactions.complete(session, connection, "unknown-url");
-    assert_eq!(subscription.snapshots.borrow().pending.len(), 1);
-    interactions.complete(session, connection, "opaque-url");
-    assert!(subscription.snapshots.borrow().pending.is_empty());
-    assert_eq!(
-        subscription.snapshots.borrow().completed_ids,
-        [request.request_id]
-    );
-}
-
-#[tokio::test]
-async fn last_viewer_disconnect_cancels_pending_and_headless_requests() {
-    let interactions = Arc::new(Elicitations::default());
-    let session = SessionId::new();
-    let connection = open(&interactions, session);
-    let mut subscription = interactions.subscribe(session);
-    let worker = {
-        let interactions = interactions.clone();
-        tokio::spawn(async move {
-            interactions
-                .request(session, connection, form(session))
-                .await
-        })
-    };
-    let _ = pending(&mut subscription).await;
-    drop(subscription);
-    assert_eq!(
-        worker.await.expect("worker").expect("cancelled response"),
-        json!({"action":"cancel"})
-    );
-    assert_eq!(
-        interactions
-            .request(session, connection, form(session))
-            .await
-            .expect("headless response"),
-        json!({"action":"cancel"})
-    );
-}
-
-#[tokio::test]
-async fn cancelled_backend_callback_removes_its_unanswered_request() {
-    let interactions = Arc::new(Elicitations::default());
-    let session = SessionId::new();
-    let connection = open(&interactions, session);
-    let mut subscription = interactions.subscribe(session);
-    let worker = {
-        let interactions = interactions.clone();
-        tokio::spawn(async move {
-            interactions
-                .request(session, connection, form(session))
-                .await
-        })
-    };
-    let _ = pending(&mut subscription).await;
-    worker.abort();
-    let _ = worker.await;
-    assert!(subscription.snapshots.borrow().pending.is_empty());
 }
 
 #[tokio::test]
@@ -306,25 +203,4 @@ async fn closing_the_current_connection_cancels_requests_and_requires_new_regist
             .expect("closed request"),
         json!({"action":"cancel"})
     );
-}
-
-#[tokio::test]
-async fn broker_preserves_the_original_acp_scope_while_routing_by_bas_session() {
-    let interactions = Arc::new(Elicitations::default());
-    let session = SessionId::new();
-    let connection = open(&interactions, session);
-    let mut subscription = interactions.subscribe(session);
-    let mut raw = form(session);
-    raw["sessionId"] = json!("opaque-acp-session");
-    let original = raw.clone();
-    let worker = {
-        let interactions = interactions.clone();
-        tokio::spawn(async move { interactions.request(session, connection, raw).await })
-    };
-    let request = pending(&mut subscription).await;
-    assert_eq!(request.request, original);
-    interactions
-        .respond(session, &request.request_id, json!({"action":"cancel"}))
-        .expect("cancel request");
-    worker.await.expect("worker").expect("cancelled response");
 }

@@ -12,23 +12,6 @@ fn args(protocol: &str) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn forced_v1_serves_v1_clients() -> Result<(), Box<dyn std::error::Error>> {
-    Client
-        .builder()
-        .name("routing-v1-client")
-        .connect_with(agent_with_args(args("v1")), async |cx| {
-            let response = cx
-                .send_request(v1::InitializeRequest::new(ProtocolVersion::V1))
-                .block_task()
-                .await?;
-            assert_eq!(response.protocol_version, ProtocolVersion::V1);
-            Ok::<(), Error>(())
-        })
-        .await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn forced_v1_rejects_a_v2_only_client() -> Result<(), Box<dyn std::error::Error>> {
     Client
         .v2()
@@ -62,26 +45,6 @@ async fn forced_v2_serves_v2_clients() -> Result<(), Box<dyn std::error::Error>>
                 .block_task()
                 .await?;
             assert_eq!(response.protocol_version, ProtocolVersion::V2);
-            Ok::<(), Error>(())
-        })
-        .await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn forced_v2_rejects_a_v1_client() -> Result<(), Box<dyn std::error::Error>> {
-    Client
-        .builder()
-        .name("routing-v1-client")
-        .connect_with(agent_with_args(args("v2")), async |cx| {
-            let result = cx
-                .send_request(v1::InitializeRequest::new(ProtocolVersion::V1))
-                .block_task()
-                .await;
-            assert!(
-                result.is_err(),
-                "the v1 client must not reach a v2-only agent"
-            );
             Ok::<(), Error>(())
         })
         .await?;

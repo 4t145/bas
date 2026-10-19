@@ -61,16 +61,6 @@ impl Editor {
         apply(effective, Some(window), cx);
         Ok(())
     }
-
-    #[cfg(all(test, feature = "gui-tests"))]
-    pub(crate) fn at(path: PathBuf) -> Self {
-        let mut loader = Loader::new(bas::config::Store::at(path), None);
-        loader.test_imports = Some(source::Files::default());
-        Self {
-            loader,
-            generation: Rc::default(),
-        }
-    }
 }
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);

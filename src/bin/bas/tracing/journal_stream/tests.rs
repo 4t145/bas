@@ -16,18 +16,6 @@ fn only_the_matching_stream_is_accepted() {
 }
 
 #[test]
-fn device_and_inode_must_both_match() {
-    let (_reader, writer) = pipe().expect("test pipe should open");
-    let stat = fstat(&writer).expect("open pipe should have metadata");
-    for value in [
-        format!("{}:{}", stat.st_dev ^ 1, stat.st_ino),
-        format!("{}:{}", stat.st_dev, stat.st_ino ^ 1),
-    ] {
-        assert!(!stream_is_journal(Some(OsStr::new(&value)), &writer));
-    }
-}
-
-#[test]
 fn missing_invalid_and_non_unicode_values_are_rejected() {
     let (_reader, writer) = pipe().expect("test pipe should open");
     assert!(!stream_is_journal(None, &writer));

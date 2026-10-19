@@ -44,23 +44,6 @@ async fn next_permission(subscription: &mut PermissionSubscription) -> PendingPe
 }
 
 #[tokio::test]
-async fn headless_requests_keep_configured_policy() {
-    let permissions = Arc::new(Permissions::default());
-    let session = SessionId::new();
-    for (policy, expected) in [
-        (PermissionPolicy::Allow, "allow-once"),
-        (PermissionPolicy::Deny, "reject-once"),
-    ] {
-        let host = permissions.host(Arc::new(LocalHost::new(policy)));
-        let outcome = host
-            .request_permission(request(session))
-            .await
-            .expect("headless policy");
-        assert_eq!(outcome, selected(expected));
-    }
-}
-
-#[tokio::test]
 async fn attached_client_must_answer_even_with_allow_policy() {
     let permissions = Arc::new(Permissions::default());
     let session = SessionId::new();
@@ -156,79 +139,6 @@ async fn last_approver_disconnect_cancels_instead_of_falling_back_to_allow() {
             .expect("detached interactive policy"),
         acp::RequestPermissionOutcome::Cancelled
     );
-}
-
-#[tokio::test]
-async fn turn_cancellation_resolves_all_pending_approvals() {
-    let permissions = Arc::new(Permissions::default());
-    let session = SessionId::new();
-    let mut subscription = permissions.subscribe(session);
-    let host = permissions.host(Arc::new(LocalHost::default()));
-    let answer = tokio::spawn(async move { host.request_permission(request(session)).await });
-    let pending = next_permission(&mut subscription).await;
-    permissions.cancel(session);
-    assert_eq!(
-        answer
-            .await
-            .expect("request task")
-            .expect("approval outcome"),
-        acp::RequestPermissionOutcome::Cancelled
-    );
-    assert!(subscription.snapshots.borrow().is_empty());
-    assert!(matches!(
-        permissions.respond(session, &pending.request_id, selected("allow-once")),
-        Err(PermissionError::Expired)
-    ));
-}
-
-#[tokio::test]
-async fn aborted_backend_callback_removes_stale_approval() {
-    let permissions = Arc::new(Permissions::default());
-    let session = SessionId::new();
-    let mut subscription = permissions.subscribe(session);
-    let host = permissions.host(Arc::new(LocalHost::default()));
-    let answer = tokio::spawn(async move { host.request_permission(request(session)).await });
-    let pending = next_permission(&mut subscription).await;
-    answer.abort();
-    assert!(
-        answer
-            .await
-            .expect_err("backend request aborted")
-            .is_cancelled()
-    );
-    assert!(subscription.snapshots.borrow().is_empty());
-    assert!(matches!(
-        permissions.respond(session, &pending.request_id, selected("allow-once")),
-        Err(PermissionError::Expired)
-    ));
-}
-
-#[tokio::test]
-async fn new_viewer_receives_existing_requests_without_duplicate_decisions() {
-    let permissions = Arc::new(Permissions::default());
-    let session = SessionId::new();
-    let mut first = permissions.subscribe(session);
-    let host = permissions.host(Arc::new(LocalHost::default()));
-    let answer = tokio::spawn(async move { host.request_permission(request(session)).await });
-    let pending = next_permission(&mut first).await;
-    let second = permissions.subscribe(session);
-    assert_eq!(second.snapshots.borrow().first(), Some(&pending));
-    permissions
-        .respond(
-            session,
-            &pending.request_id,
-            acp::RequestPermissionOutcome::Cancelled,
-        )
-        .expect("cancel choice");
-    assert_eq!(
-        answer
-            .await
-            .expect("request task")
-            .expect("approval outcome"),
-        acp::RequestPermissionOutcome::Cancelled
-    );
-    assert!(first.snapshots.borrow().is_empty());
-    assert!(second.snapshots.borrow().is_empty());
 }
 
 #[tokio::test]

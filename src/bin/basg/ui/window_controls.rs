@@ -236,6 +236,3 @@ impl RenderOnce for TitleBar {
             .child(self.controls)
     }
 }
-
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;

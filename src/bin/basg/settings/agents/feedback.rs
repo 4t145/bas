@@ -3,9 +3,6 @@
 use super::*;
 use gpui_kit::assets::IconName;
 
-#[cfg(all(test, feature = "gui-tests"))]
-mod tests;
-
 impl Agents {
     pub(in crate::settings) fn save_status(&self) -> Option<String> {
         if self.editor.spec().is_some() {

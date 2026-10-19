@@ -38,7 +38,7 @@ rustPlatform.buildRustPackage {
       ../proto
       ../assets
       (lib.fileset.fileFilter (file: file.name != ".git") ../vendor/gds-uim)
-      (lib.fileset.difference ../tests ../tests/system)
+      ../tests
     ];
   };
   cargoLock.lockFile = ../Cargo.lock;

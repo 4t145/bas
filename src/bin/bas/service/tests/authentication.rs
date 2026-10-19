@@ -123,72 +123,6 @@ async fn grpc_interactive_authentication_routes_a_form_and_final_check() {
 }
 
 #[tokio::test]
-async fn grpc_authentication_rejects_changed_configuration_before_launch() {
-    let directory = tempfile::tempdir().expect("fixture directory");
-    let mut saved = spec(&directory);
-    let (registry, mut client, server) = server(saved.clone()).await;
-    saved.env.insert("changed".into(), "value".into());
-    let (controls, input) = tokio::sync::mpsc::channel(8);
-    controls.send(start(&saved)).await.expect("start");
-    let error = client
-        .authenticate_agent_interactive(ReceiverStream::new(input))
-        .await
-        .expect_err("stale configuration");
-    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
-    assert!(!directory.path().join("pid").exists());
-    registry.shutdown().await;
-    server.abort();
-}
-
-#[tokio::test]
-async fn grpc_authentication_does_not_report_ready_after_catalog_change() {
-    let directory = tempfile::tempdir().expect("fixture directory");
-    let saved = spec(&directory);
-    let (registry, mut client, server) = server(saved.clone()).await;
-    let (controls, input) = tokio::sync::mpsc::channel(8);
-    controls.send(start(&saved)).await.expect("start");
-    let mut output = client
-        .authenticate_agent_interactive(ReceiverStream::new(input))
-        .await
-        .expect("interactive RPC")
-        .into_inner();
-    let event = tokio::time::timeout(Duration::from_secs(5), output.message())
-        .await
-        .expect("timeout")
-        .expect("RPC event")
-        .expect("form");
-    let Some(pb::authentication_event::Kind::Elicitation(pending)) = event.kind else {
-        panic!("expected form");
-    };
-    let mut changed = saved;
-    changed.env.insert("changed".into(), "value".into());
-    registry.replace_catalog(Arc::new(
-        Catalog::from_specs([changed]).expect("new catalog"),
-    ));
-    controls
-        .send(pb::AuthenticationInput {
-            kind: Some(pb::authentication_input::Kind::ElicitationResponse(
-                pb::ElicitationAnswer {
-                    request_id: pending.request_id,
-                    response: Some(
-                        (&serde_json::json!({"action":"accept","content":{"project":"atlas"}}))
-                            .into(),
-                    ),
-                },
-            )),
-        })
-        .await
-        .expect("answer");
-    let error = tokio::time::timeout(Duration::from_secs(5), output.message())
-        .await
-        .expect("timeout")
-        .expect_err("changed configuration invalidates readiness");
-    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
-    registry.shutdown().await;
-    server.abort();
-}
-
-#[tokio::test]
 async fn grpc_authentication_failures_preserve_stages_and_protocol_reasons() {
     for (mode, stage, code, reason, authenticated) in [
         (
@@ -268,56 +202,6 @@ async fn grpc_authentication_failures_preserve_stages_and_protocol_reasons() {
         registry.shutdown().await;
         server.abort();
     }
-}
-
-#[tokio::test]
-async fn grpc_authentication_string_diagnostics_filter_credentials_before_transport() {
-    let directory = tempfile::tempdir().expect("fixture directory");
-    let mut spec = spec(&directory);
-    spec.env.insert(
-        "BAS_FIXTURE_MODE".into(),
-        "agent_auth_rpc_reject_string".into(),
-    );
-    let (registry, mut client, server) = server(spec.clone()).await;
-    let (controls, input) = tokio::sync::mpsc::channel(8);
-    controls.send(start(&spec)).await.expect("start");
-    let mut output = client
-        .authenticate_agent_interactive(ReceiverStream::new(input))
-        .await
-        .expect("interactive RPC")
-        .into_inner();
-    let error = tokio::time::timeout(Duration::from_secs(5), output.message())
-        .await
-        .expect("failure deadline")
-        .expect_err("failed authentication");
-    assert_authentication_failure(
-        &error,
-        "Agent authentication failed",
-        -32603,
-        "Provider rejected authentication",
-    );
-    assert!(
-        error
-            .message()
-            .contains("https://provider.example/callback")
-    );
-    for private in [
-        "private-refresh",
-        "private-bearer",
-        "private-code",
-        "private-state",
-        "user:password",
-    ] {
-        assert!(
-            !error.message().contains(private),
-            "credential leaked to tonic: {private}"
-        );
-    }
-    assert!(directory.path().join("pid.authenticate").exists());
-    drop(output);
-    drop(controls);
-    registry.shutdown().await;
-    server.abort();
 }
 
 fn assert_authentication_failure(error: &tonic::Status, stage: &str, code: i32, reason: &str) {

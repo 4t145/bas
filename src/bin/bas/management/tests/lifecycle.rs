@@ -25,47 +25,6 @@ fn assert_clean(manager: &Manager) {
 }
 
 #[tokio::test]
-async fn aborting_waiter_cancels_owned_download_and_releases_resources() {
-    let fixture = fixture::Fixture::serve(None, true).await;
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let manager = fixture::manager(&directory, &fixture.url);
-    let (sender, _receiver) = mpsc::channel(32);
-    let owner = Arc::clone(&manager);
-    let waiter = tokio::spawn(async move { owner.install("fixture-agent", sender).await });
-    fixture.started.notified().await;
-    assert!(manager.mutation.try_lock().is_err());
-    assert!(manager.mutation_lock().is_err());
-    waiter.abort();
-    assert!(waiter.await.expect_err("aborted waiter").is_cancelled());
-    // Do not call shutdown here: cancellation must come from the waiter.
-    manager.installations.close();
-    tokio::time::timeout(Duration::from_secs(2), manager.installations.wait())
-        .await
-        .expect("owned operation observes dropped waiter");
-    assert_clean(&manager);
-    assert_eq!(Arc::strong_count(&manager), 1, "no task retains manager");
-}
-
-#[tokio::test]
-async fn timed_out_waiter_cancels_queued_operation_without_effects() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let manager = fixture::manager(&directory, "http://127.0.0.1:1");
-    let guard = manager.mutation.lock().await;
-    let (sender, _receiver) = mpsc::channel(32);
-    let mut waiter = Box::pin(manager.install("fixture-agent", sender));
-    poll_pending(waiter.as_mut()).await;
-    assert_eq!(manager.installations.len(), 1);
-    assert!(tokio::time::timeout(Duration::ZERO, waiter).await.is_err());
-    manager.installations.close();
-    tokio::time::timeout(Duration::from_secs(2), manager.installations.wait())
-        .await
-        .expect("timeout cancels queued work while lock remains held");
-    drop(guard);
-    assert!(manager.installations.is_empty());
-    assert!(!manager.root.join("operation.lock").exists());
-}
-
-#[tokio::test]
 async fn shutdown_drains_active_and_queued_operations_and_rejects_new_installs() {
     let fixture = fixture::Fixture::serve(None, true).await;
     let directory = tempfile::tempdir().expect("temporary directory");

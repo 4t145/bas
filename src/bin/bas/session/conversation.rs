@@ -363,14 +363,6 @@ impl Session {
         .await
     }
 
-    #[cfg(test)]
-    pub(crate) fn subscriber_count(&self) -> usize {
-        self.lock()
-            .events
-            .as_ref()
-            .map_or(0, broadcast::Sender::receiver_count)
-    }
-
     pub fn id(&self) -> SessionId {
         self.lock().meta.id
     }
@@ -380,10 +372,6 @@ impl Session {
         Foreground(Arc::downgrade(self))
     }
 
-    #[cfg(test)]
-    pub(crate) fn foreground_viewers(&self) -> usize {
-        self.lock().foreground_viewers
-    }
     pub fn meta(&self) -> SessionMeta {
         self.lock().meta.clone()
     }
@@ -661,14 +649,6 @@ impl Session {
         )))
         .await
         .map(|receipt| receipt.turn)
-    }
-
-    /// # Errors
-    /// Rejects inactive sessions or reports a backend cancellation failure.
-    #[cfg(test)]
-    pub async fn cancel(self: &Arc<Self>) -> Result<(), SessionError> {
-        self.cancel_acp(acp::CancelNotification::new(self.id().to_string()))
-            .await
     }
 
     /// # Errors
