@@ -8,6 +8,7 @@ use gpui_kit::{
 
 use crate::connections::{self, Profiles};
 
+mod discovery;
 mod transport;
 mod view;
 use transport::Transport;
@@ -20,6 +21,7 @@ actions!(connection_editor, [CancelEditing, AddConnection]);
 pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", CancelEditing, Some("BasConnectionEditor")),
+        KeyBinding::new("escape", CancelEditing, Some("BasConnections")),
         KeyBinding::new(
             if cfg!(target_os = "macos") {
                 "cmd-n"
@@ -62,6 +64,9 @@ pub(super) struct Page {
     transport: Transport,
     addresses: HashMap<Transport, String>,
     editor: Option<Editor>,
+    discovery: Option<discovery::State>,
+    scan: Option<gpui_kit::Task<()>>,
+    scan_generation: u64,
     feedback: Feedback,
     _subscriptions: Vec<Subscription>,
 }
@@ -116,6 +121,9 @@ impl Page {
             transport: Transport::Local,
             addresses: HashMap::new(),
             editor: None,
+            discovery: None,
+            scan: None,
+            scan_generation: 0,
             feedback: Feedback::Idle,
             _subscriptions: subscriptions,
         }
@@ -144,6 +152,7 @@ impl Page {
         if self.editor.is_some() {
             return;
         }
+        self.dismiss_discovery();
         self.editor = Some(Editor::Add);
         self.scroll_to = Some(0);
         self.transport = Transport::Local;
@@ -161,6 +170,7 @@ impl Page {
     }
 
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_discovery();
         self.editor = None;
         self.feedback = Feedback::Idle;
         self.focus.focus(window, cx);
@@ -171,6 +181,7 @@ impl Page {
         if self.editor.is_some() {
             return;
         }
+        self.dismiss_discovery();
         if !self.profiles.read(cx).entries().contains(profile) {
             self.feedback = Feedback::Error(crate::i18n::tr!("connections-changed").into());
             cx.notify();

@@ -6,12 +6,105 @@ use gpui_kit::{
     assets::IconName,
     component::{
         menu::{DropdownMenu, PopupMenuItem},
+        spinner::Spinner,
         *,
     },
     div, px,
 };
 
 impl Page {
+    fn add_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let manual = cx.entity().downgrade();
+        let discover = manual.clone();
+        el! { #ui::icon_action("connection-new", IconName::Plus, $crate::i18n::tr!("connections-add")) {
+            disabled: $(self.editor.is_some() || self.profiles.read(cx).entries().is_empty());
+            dropdown_menu: $move |menu, _, _| {
+                let manual = manual.clone();
+                let discover = discover.clone();
+                ui::menu(menu)
+                .item(PopupMenuItem::new(crate::i18n::tr!("connections-manual"))
+                    .on_click(move |_, window, cx| {
+                        let _ = manual.update(cx, |this, cx| this.add(window, cx));
+                    }))
+                .item(PopupMenuItem::new(crate::i18n::tr!("connections-discover"))
+                    .on_click(move |_, window, cx| {
+                        let _ = discover.update(cx, |this, cx| this.discover(window, cx));
+                    }))
+            };
+        } }.into_any_element()
+    }
+
+    fn discovery_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use discovery::State;
+        let state = self.discovery.as_ref()?;
+        let found = if let State::Found(endpoint) = state {
+            let saved = self.local_profile(endpoint, cx);
+            let added = saved.is_some();
+            let name = saved
+                .map(|profile| profile.name.as_str())
+                .unwrap_or(discovery::LOCAL_NAME)
+                .to_owned();
+            let address = connections::presentation::endpoint(endpoint);
+            let hint = address.clone();
+            Some(el! { #div {
+                id: "connection-discovered"; test_support;
+                flex; items_center; gap_3; min_w_0;
+            } [
+                #div { flex_1; flex; flex_col; gap_2; min_w_0; } [
+                    #div { flex; items_center; gap_2; min_w_0; } [
+                        $connections::presentation::icon(&bas::service::Target::Local) { size: $px(ui::ICON); flex_shrink_0; },
+                        #div {
+                            id: "connection-discovered-name"; test_support;
+                            role: gpui_kit::Role::Label; aria_label: $name.clone();
+                            flex_1; min_w_0; truncate;
+                        } [$name],
+                    ],
+                    #div {
+                        id: "connection-discovered-endpoint"; test_support;
+                        role: gpui_kit::Role::Label; aria_label: $address.clone();
+                        min_w_0; truncate; text_color: $cx.theme().muted_foreground;
+                        hoverable_tooltip: $move |window, cx| ui::tooltip::view(hint.clone(), window, cx);
+                    } [$address],
+                ],
+                #super::super::action_button("connection-discovered-add") {
+                    label: $(if added { crate::i18n::tr!("connections-already-added") } else { crate::i18n::tr!("connections-create") });
+                    disabled: added; flex_shrink_0;
+                    on_click: $cx.listener(|this, _, window, cx| this.add_discovered(window, cx));
+                },
+            ] })
+        } else {
+            None
+        };
+        Some(el! { #div {
+            id: "connection-discovery"; test_support;
+            flex; flex_col; gap_3; p_3; border_1; rounded_md; min_w_0;
+            border_color: $cx.theme().border; flex_shrink_0;
+        } [
+            #div { flex; items_center; gap_2; } [
+                #div { flex_1; font_weight: FontWeight::SEMIBOLD; } [$crate::i18n::tr!("connections-discover")],
+                #ui::icon_action("connection-discovery-cancel", IconName::X, $crate::i18n::tr!("connections-cancel")) {
+                    on_click: $cx.listener(|this, _, window, cx| this.cancel(window, cx));
+                },
+            ],
+            #div { text_color: $cx.theme().muted_foreground; } [$crate::i18n::tr!("connections-discovery-scope")],
+            ..found,
+            ..$matches!(state, State::Loading).then(|| el! { #div {
+                id: "connection-discovery-loading"; test_support; role: gpui_kit::Role::Status;
+                aria_label: $crate::i18n::tr!("connections-discovery-loading"); flex; items_center; gap_2;
+            } [
+                Spinner { with_size: $px(ui::ICON); color: $cx.theme().muted_foreground; },
+                $crate::i18n::tr!("connections-discovery-loading"),
+            ] }),
+            ..$matches!(state, State::Failed).then(|| el! { #div { flex; flex_col; gap_2; } [
+                #div { id: "connection-discovery-failed"; test_support; role: gpui_kit::Role::Status; } [$crate::i18n::tr!("connections-discovery-failed")],
+                #super::super::action_button("connection-discovery-retry") {
+                    label: $crate::i18n::tr!("connections-discovery-retry");
+                    on_click: $cx.listener(|this, _, window, cx| this.discover(window, cx));
+                },
+            ] }),
+        ] }.into_any_element())
+    }
+
     fn transport_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let owner = cx.entity().downgrade();
         let selected = self.transport;
@@ -261,6 +354,7 @@ impl Render for Page {
             size_full; px_5; py_4; text_size: ui::SMALL;
             flex; flex_col; gap_3;
             on_action: $cx.listener(|this, _: &AddConnection, window, cx| this.add(window, cx));
+            on_action: $cx.listener(|this, _: &CancelEditing, window, cx| this.cancel(window, cx));
         } [
             #div { id: "connections-toolbar"; test_support; flex; items_center; gap_2; flex_shrink_0; } [
                 #div { font_weight: FontWeight::SEMIBOLD; } [$crate::i18n::tr!("connections-list")],
@@ -271,16 +365,14 @@ impl Render for Page {
                     disabled: editing;
                     on_click: $cx.listener(|this, _, _, cx| this.reload(cx));
                 },
-                #ui::icon_action("connection-new", IconName::Plus, $crate::i18n::tr!("connections-add")) {
-                    disabled: $(editing || count == 0);
-                    on_click: $cx.listener(|this, _, window, cx| this.add(window, cx));
-                },
+                $self.add_menu(cx),
             ],
             #div {
                 id: "connections-list"; test_support; flex_1; min_h_0;
                 overflow_y_scroll; track_scroll: $&self.scroll; flex; flex_col; gap_3;
             } [
                 ..error,
+                ..$self.discovery_view(cx),
                 ..$bool::then(adding, || el! { #div {
                     border_1; border_color: $cx.theme().border; rounded_md;
                     bg: $cx.theme().muted; p_3; flex_shrink_0;

@@ -50,6 +50,187 @@ fn assert_list_only(window: &mut Window, cx: &mut App) {
 }
 
 #[gpui_kit::test]
+fn add_menu_keeps_manual_add_explicit(cx: &mut TestAppContext) {
+    let (_directory, window, page) = setup(cx);
+    cx.update_window(window.into(), |_, window, cx| {
+        window.click("connection-new", cx);
+        assert!(
+            page.read(cx).editor.is_none(),
+            "plus opens a menu, not an editor"
+        );
+        window.press("down", cx);
+        window.press("enter", cx);
+        assert!(matches!(page.read(cx).editor, Some(Editor::Add)));
+    })
+    .expect("add menu");
+}
+
+#[gpui_kit::test]
+fn discovery_is_read_only_until_add_and_never_retargets(cx: &mut TestAppContext) {
+    use bas::service::Target;
+    let (directory, window, page) = setup(cx);
+    let path = directory.path().join("settings.json");
+    let store = bas::config::Store::at(path.clone());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let remote: bas::service::tls::ConnectionOptions = "tcp://192.0.2.1".parse().expect("remote");
+    cx.update(|cx| {
+        cx.set_global(crate::agents::catalog::Service::new(
+            remote.clone(),
+            runtime.handle().clone(),
+        ))
+    });
+    let endpoint = Target::Local.resolved().expect("default endpoint");
+    cx.update_window(window.into(), |_, window, cx| {
+        page.read(cx).profiles.clone().update(cx, |profiles, cx| {
+            profiles
+                .put(
+                    ConnectionProfile {
+                        id: "remote".into(),
+                        name: "Remote".into(),
+                        note: Some("keep".into()),
+                        target: remote.target.clone(),
+                        tls: None,
+                    },
+                    cx,
+                )
+                .expect("save remote");
+            profiles.select("remote", cx).expect("select remote");
+            profiles.remove("local", cx).expect("delete saved local");
+        });
+        let before = std::fs::read(&path).expect("settings");
+        page.update(cx, |page, cx| {
+            page.begin_scan(std::future::pending(), window, cx);
+        });
+        window.render_frame(cx);
+        assert!(window.find("connection-discovery-loading").visible());
+        assert!(window.try_find("connection-discovered").is_none());
+        page.update(cx, |page, cx| {
+            page.finish_scan(page.scan_generation, Ok(endpoint.clone()), cx)
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("connection-discovered-endpoint").label(),
+            Some(connections::presentation::endpoint(&endpoint).as_str())
+        );
+        assert_eq!(
+            window.find("connection-discovered-name").label(),
+            Some("Local")
+        );
+        assert!(
+            window
+                .find("connection-discovered-endpoint")
+                .bounds()
+                .right()
+                < window.find("connection-discovered-add").bounds().left()
+        );
+        assert_eq!(std::fs::read(&path).expect("unchanged settings"), before);
+        assert_eq!(connections::current(cx), Some(remote.clone()));
+        window.click("connection-discovered-add", cx);
+        let saved = store.load().expect("saved").settings.frontend;
+        assert_eq!(saved.selected, "remote");
+        assert_eq!(saved.connections.len(), 2);
+        assert_eq!(saved.connections[0].note.as_deref(), Some("keep"));
+        assert_eq!(saved.connections[1].target, Target::Local);
+        assert_eq!(saved.connections[1].name, "Local");
+        assert_eq!(connections::current(cx), Some(remote.clone()));
+
+        // Both the automatic profile and its explicit resolved address count as added.
+        page.update(cx, |page, cx| {
+            page.begin_scan(std::future::pending(), window, cx);
+            page.finish_scan(page.scan_generation, Ok(endpoint.clone()), cx);
+            assert!(page.local_profile(&endpoint, cx).is_some());
+        });
+        window.click("connection-discovered-add", cx);
+        assert_eq!(
+            store
+                .load()
+                .expect("saved")
+                .settings
+                .frontend
+                .connections
+                .len(),
+            2
+        );
+        page.read(cx).profiles.clone().update(cx, |profiles, cx| {
+            let mut local = saved.connections[1].clone();
+            local.target = endpoint.clone();
+            local.name = "My workstation".into();
+            profiles.put(local, cx).expect("explicit endpoint");
+        });
+        assert!(page.read(cx).local_profile(&endpoint, cx).is_some());
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("connection-discovered-name").label(),
+            Some("My workstation")
+        );
+        window.click("connection-discovered-add", cx);
+        assert_eq!(
+            store
+                .load()
+                .expect("saved")
+                .settings
+                .frontend
+                .connections
+                .len(),
+            2
+        );
+    })
+    .expect("discovery window");
+}
+
+#[gpui_kit::test]
+fn discovery_cancel_failure_and_stale_results_cannot_modify_editor(cx: &mut TestAppContext) {
+    let (directory, window, page) = setup(cx);
+    let path = directory.path().join("settings.json");
+    let (send, receive) = futures::channel::oneshot::channel::<()>();
+    let old = cx
+        .update_window(window.into(), |_, window, cx| {
+            let old = page.update(cx, |page, cx| {
+                page.begin_scan(
+                    async move {
+                        let _ = receive.await;
+                        Err(())
+                    },
+                    window,
+                    cx,
+                );
+                page.scan_generation
+            });
+            window.click("connection-discovery-cancel", cx);
+            old
+        })
+        .expect("cancel discovery");
+    cx.run_until_parked();
+    assert!(send.send(()).is_err(), "dismissal drops the owned request");
+    cx.update_window(window.into(), |_, window, cx| {
+        page.update(cx, |page, cx| {
+            page.add(window, cx);
+            page.finish_scan(old, Ok(bas::service::Target::Local), cx);
+            assert!(page.discovery.is_none());
+            assert!(matches!(page.editor, Some(Editor::Add)));
+            page.cancel(window, cx);
+            page.begin_scan(std::future::pending(), window, cx);
+            page.finish_scan(old, Err(()), cx);
+            assert!(matches!(page.discovery, Some(discovery::State::Loading)));
+            page.finish_scan(page.scan_generation, Err(()), cx);
+        });
+        window.render_frame(cx);
+        assert!(window.find("connection-discovery-retry").visible());
+        assert!(window.try_find("connection-discovered").is_none());
+        window.press("escape", cx);
+        assert!(page.read(cx).discovery.is_none());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("untouched settings"),
+            "{}"
+        );
+    })
+    .expect("discovery window");
+}
+
+#[gpui_kit::test]
 fn mtls_editor_requires_file_references_and_preserves_them(cx: &mut TestAppContext) {
     let (directory, window, page) = setup(cx);
     let store = bas::config::Store::at(directory.path().join("settings.json"));
@@ -289,7 +470,7 @@ fn transport_drafts_survive_switching_and_cancel_never_persists(cx: &mut TestApp
     let (directory, window, page) = setup(cx);
     let path = directory.path().join("settings.json");
     cx.update_window(window.into(), |_, window, cx| {
-        window.click("connection-new", cx);
+        page.update(cx, |page, cx| page.add(window, cx));
         page.update(cx, |page, cx| {
             page.name
                 .update(cx, |input, cx| input.set_value("Draft", window, cx));
@@ -338,7 +519,7 @@ fn transport_drafts_survive_switching_and_cancel_never_persists(cx: &mut TestApp
         window.click("connection-cancel", cx);
         assert_list_only(window, cx);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
-        window.click("connection-new", cx);
+        page.update(cx, |page, cx| page.add(window, cx));
         assert_eq!(page.read(cx).transport, Transport::Local);
         assert!(page.read(cx).name.read(cx).value().is_empty());
         assert!(page.read(cx).note.read(cx).value().is_empty());
