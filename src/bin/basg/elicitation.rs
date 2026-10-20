@@ -352,9 +352,9 @@ impl Panel {
             }
         }
         if let Some(error) = self.errors.get(&name) {
-            row = gds_uim::el! { $row [ #div {
-                text_size: $crate::ui::SMALL; text_color: $cx.theme().danger;
-            } [ $error.clone() ] ] };
+            row = gds_uim::el! { $row [
+                $crate::ui::feedback(format!("elicitation-{}-field-{name}-error", self.request_id), error.clone(), cx.theme().danger)
+            ] };
         }
         row.into_any_element()
     }
@@ -367,7 +367,9 @@ impl Render for Panel {
                 id: $format!("elicitation-{}", self.request_id); test_support;
                 flex; flex_col; gap_2; text_size: $crate::ui::SMALL;
                 p_3; border_1; border_color: $cx.theme().border; rounded_md;
-            } [ $self.request.message.clone() ]
+            } [
+                $crate::ui::feedback(format!("elicitation-{}-message", self.request_id), self.request.message.clone(), cx.theme().foreground)
+            ]
         };
         let panel = match &self.request.mode {
             Mode::Form(form) => {
@@ -400,7 +402,13 @@ impl Render for Panel {
                 ] }
             }
         };
-        let message = (!self.message.is_empty()).then(|| self.message.clone());
+        let message = (!self.message.is_empty()).then(|| {
+            crate::ui::feedback(
+                format!("elicitation-{}-feedback", self.request_id),
+                self.message.clone(),
+                cx.theme().foreground,
+            )
+        });
         gds_uim::el! {
             $panel [
                 #div { flex; gap_2; } [

@@ -157,9 +157,9 @@ impl Browser {
                         #div { id: $format!("agent-history-group-name-{agent_index}"); test_support; min_w_0; truncate; } [$agent.id.clone()],
                         #div { id: $format!("agent-history-group-count-{agent_index}"); test_support; text_color: $cx.theme().muted_foreground; } [$count.to_string()],
                     ],
-                    ..$error.map(|error| gds_uim::el! {
-                        #div { text_color: $cx.theme().danger; } [$error.clone()]
-                    }),
+                    ..$error.map(|error| crate::ui::feedback(
+                        format!("agent-history-error-{agent_index}"), error.clone(), cx.theme().danger,
+                    )),
                     ..entries,
                 ] }.into_any_element())
             }).collect()
@@ -319,8 +319,12 @@ impl Browser {
                     hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(raw_time.clone(), window, cx);
                 } [$time],
             ],
-            ..$roots_warning,
-            ..$restore_warning,
+            ..$roots_warning.map(|message| crate::ui::feedback(
+                format!("agent-history-roots-warning-{key}"), message, cx.theme().foreground,
+            )),
+            ..$restore_warning.map(|message| crate::ui::feedback(
+                format!("agent-history-restore-warning-{key}"), message, cx.theme().foreground,
+            )),
             #div { flex; items_center; gap_2; } [
                 #div {
                     id: $format!("agent-history-directory-{key}"); test_support;
@@ -364,13 +368,18 @@ impl Render for Browser {
                 ],
                 $crate::ui::input::placeholder(&self.search, Input::new(&self.search).small().cleanable(true)),
                 #div { text_color: $cx.theme().muted_foreground; } [$crate::i18n::tr!("agent-history-help")],
-                ..$pending,
-                ..$self.connection_error.as_ref().map(|error| gds_uim::el! {
-                    #div { text_color: $cx.theme().danger; } [$error.clone()]
-                }),
-                ..$self.notice.clone(),
+                ..$pending.map(|message| crate::ui::feedback(
+                    "agent-history-pending", message, cx.theme().foreground,
+                )),
+                ..$self.connection_error.as_ref().map(|error| crate::ui::feedback(
+                    "agent-history-connection-error", error.clone(), cx.theme().danger,
+                )),
+                ..$self.notice.clone().map(|message| crate::ui::feedback(
+                    "agent-history-notice", message, cx.theme().foreground,
+                )),
                 #div { id: "agent-history-rows"; flex_1; min_h_0; overflow_y_scroll; } [
-                    ..$empty, ..groups,
+                    ..$empty.map(|message| crate::ui::feedback("agent-history-empty", message, cx.theme().foreground)),
+                    ..groups,
                 ],
             ],
         ] }

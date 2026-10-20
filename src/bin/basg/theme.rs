@@ -282,6 +282,7 @@ pub(super) fn window_root(
         cx.notify();
     })
     .detach();
+    let view = crate::diagnostics::wrap(view, cx);
     Root::new(view, window, cx).refine_style(&font_style(cx))
 }
 

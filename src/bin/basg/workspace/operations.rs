@@ -255,11 +255,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.session_error(session, message.clone());
-        if self.window.presented
-            && let Err(error) = crate::application::open_message(title, &message, cx)
-        {
-            tracing::error!(%error, %message, "cannot show operation failure");
-        }
+        self.report_operation_error(title, &message, cx);
         cx.notify();
     }
 }

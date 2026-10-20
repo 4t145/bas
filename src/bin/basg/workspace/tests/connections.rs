@@ -257,11 +257,8 @@ fn folder_picker_waits_for_its_workspace_to_be_presented(cx: &mut TestAppContext
 }
 
 fn active(root: gpui_kit::AnyView, cx: &App) -> Entity<Workspace> {
-    root.downcast::<Root>()
-        .expect("window root")
-        .read(cx)
-        .view()
-        .clone()
+    let root = root.downcast::<Root>().expect("window root");
+    crate::diagnostics::content(root.read(cx), cx)
         .downcast::<crate::connections::WorkspaceHost>()
         .expect("workspace host")
         .read(cx)

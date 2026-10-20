@@ -71,6 +71,7 @@ impl Workspace {
                 let new_session = view.clone();
                 let workspace = view.clone();
                 let manager = view.clone();
+                let logs = view.clone();
                 menu.min_w(px(280.))
                     .max_w(px(320.))
                     .item(
@@ -154,6 +155,25 @@ impl Workspace {
                             menus::in_parent(parent, window, cx, |window, cx| {
                                 let _ =
                                     settings.update(cx, |this, cx| this.open_settings(window, cx));
+                            });
+                        }),
+                    )
+                    .item(
+                        application_item(
+                            crate::i18n::tr!("logs-title"),
+                            Some(Box::new(crate::diagnostics::OpenLogs)),
+                        )
+                        .on_click(move |_, window, cx| {
+                            menus::in_parent(parent, window, cx, |window, cx| {
+                                let _ = logs.update(cx, |this, cx| {
+                                    this.close_menu(window, cx);
+                                    cx.defer_in(window, |_, window, cx| {
+                                        window.dispatch_action(
+                                            Box::new(crate::diagnostics::OpenLogs),
+                                            cx,
+                                        );
+                                    });
+                                });
                             });
                         }),
                     )

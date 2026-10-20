@@ -7,6 +7,7 @@ fn connection_icons_are_bundled_in_the_application() {
     for path in [
         "icons/monitor.svg",
         "icons/server.svg",
+        "icons/activity.svg",
         crate::assets::SECURE_CONNECTION,
         "icons/cable.svg",
         "icons/pencil.svg",
@@ -21,7 +22,9 @@ fn connection_icons_are_bundled_in_the_application() {
     }
 }
 
-fn setup(cx: &mut TestAppContext) -> (tempfile::TempDir, WindowHandle<Root>, Entity<Page>) {
+pub(super) fn setup(
+    cx: &mut TestAppContext,
+) -> (tempfile::TempDir, WindowHandle<Root>, Entity<Page>) {
     let directory = tempfile::tempdir().expect("settings directory");
     let path = directory.path().join("settings.json");
     std::fs::write(&path, "{}").expect("settings");

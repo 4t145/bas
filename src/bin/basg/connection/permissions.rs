@@ -7,7 +7,11 @@ pub(super) async fn watch_session(
     session: SessionId,
     epoch: u64,
 ) {
+    tracing::debug!(%session, epoch, "Opening conversation permissions");
     let stream = open(&mut client, session).await;
+    if let Err(error) = &stream {
+        tracing::warn!(%session, epoch, %error, "Conversation permissions unavailable");
+    }
     let approvals = watch_permissions(client.clone(), updates.clone(), session, epoch, stream);
     let elicitations = super::elicitations::watch(client.clone(), updates.clone(), session, epoch);
     tokio::join!(

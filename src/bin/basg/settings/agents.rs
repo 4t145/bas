@@ -1253,9 +1253,9 @@ impl Agents {
                         $crate::i18n::tr!("agent-remove-confirm-help")
                     ]
                 }),
-                ..$bool::then(!self.message.is_empty(), || gds_uim::el! {
-                    #div { id: "agents-form-message"; test_support; text_size: crate::ui::SMALL; text_color: $cx.theme().danger; } [$self.message.clone()]
-                }),
+                ..$bool::then(!self.message.is_empty(), || crate::ui::feedback(
+                    "agents-form-message", self.message.clone(), cx.theme().danger,
+                )),
                 $actions,
             ]
         }.into_any_element()
@@ -1413,23 +1413,16 @@ impl Agents {
         let heading = gds_uim::el! {
             #div { p_5; flex_shrink_0; flex; flex_col; gap_2; } [
                 $header,
-                ..$dirty.then(|| gds_uim::el! {
-                    #div { id: "agents-dirty"; test_support; text_size: $crate::ui::SMALL; } [
-                        $crate::i18n::tr!("settings-unsaved")
-                    ]
-                }),
-                ..$bool::then(!self.message.is_empty() && self.editor.spec().is_none(), || gds_uim::el! {
-                    #div {
-                        id: "agents-message"; test_support; text_size: $crate::ui::SMALL;
-                        text_color: $cx.theme().muted_foreground;
-                    } [ $self.message.clone() ]
-                }),
+                ..$dirty.then(|| crate::ui::feedback(
+                    "agents-dirty", crate::i18n::tr!("settings-unsaved"), cx.theme().foreground,
+                )),
+                ..$bool::then(!self.message.is_empty() && self.editor.spec().is_none(), || crate::ui::feedback(
+                    "agents-message", self.message.clone(), cx.theme().muted_foreground,
+                )),
                 ..$bool::then(page == Page::Onboarding, || self.saved_feedback(cx)).flatten(),
-                ..$bool::then(!self.registration_errors.is_empty(), || gds_uim::el! {
-                    #div { id: "agents-registration-errors"; test_support; text_size: $crate::ui::SMALL; } [
-                        $self.registration_errors.clone()
-                    ]
-                }),
+                ..$bool::then(!self.registration_errors.is_empty(), || crate::ui::feedback(
+                    "agents-registration-errors", self.registration_errors.clone(), cx.theme().foreground,
+                )),
             ]
         };
         gds_uim::el! {

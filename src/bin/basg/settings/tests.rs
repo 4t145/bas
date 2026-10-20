@@ -3,6 +3,47 @@ use bas::{config::ConnectionProfile, service::Target};
 use gpui_kit::{TestAppContext, component::Root, size, test::TestWindowExt};
 
 #[gpui_kit::test]
+fn settings_footer_copies_original_multiline_feedback(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("settings directory");
+    let path = directory.path().join("settings.json");
+    std::fs::write(&path, "{}").expect("settings fixture");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::configuration::init(Some(path), cx);
+        crate::theme::init(None, cx);
+        crate::application::init(cx);
+        crate::agents::init(Target::Local.into(), runtime.handle().clone(), cx);
+    });
+    let message = format!(
+        "Connection response\n{}\n trailing space ",
+        "endpoint/".repeat(80)
+    );
+    let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        let settings = cx.new(|cx| {
+            let mut settings = Settings::new(window, cx);
+            settings.connection_message = message.clone();
+            settings
+        });
+        Root::new(settings, window, cx)
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("settings-save-status").visible());
+        window.click("settings-save-status-copy", cx);
+        assert_eq!(
+            cx.read_from_clipboard().expect("copied feedback").text(),
+            Some(message.clone()),
+        );
+        assert!(window.find("settings-connections").visible());
+    })
+    .expect("settings feedback window");
+}
+
+#[gpui_kit::test]
 fn frontend_connections_and_backend_switching_are_distinct_settings_scopes(
     cx: &mut TestAppContext,
 ) {

@@ -325,10 +325,12 @@ impl Workspace {
                 cx.theme().muted_foreground,
             ),
         };
+        let message = match &notice.notice.description {
+            Some(description) => format!("{}\n{description}", notice.notice.title),
+            None => notice.notice.title.clone(),
+        };
         el! {
             #div {
-                id: $SharedString::from(format!("protocol-notice-{id}"));
-                test_support;
                 rounded_md; border_1;
                 border_color: $color.opacity(0.35);
                 bg: $color.opacity(0.05);
@@ -340,13 +342,9 @@ impl Workspace {
                     text_size: crate::ui::SMALL;
                 } [
                     #div { text_color: color; } [
-                        $format!("{label} · {}", notice.notice.title),
+                        $label,
                     ],
-                    ..$notice
-                            .notice
-                            .description
-                            .as_ref()
-                            .map(|description| el! { #div [$description.clone()] }),
+                    $crate::ui::feedback(format!("protocol-notice-{id}"), message, color),
                 ],
                 Button($SharedString::from(format!("dismiss-protocol-notice-{id}"))) {
                     ghost; xsmall;
@@ -444,9 +442,8 @@ impl Workspace {
                 $header,
                 ..$compaction.error.as_ref().map(|error| el! {
                     #div {
-                        px_3; pb_3; text_size: crate::ui::SMALL;
-                        text_color: $cx.theme().danger;
-                    } [$error.clone()]
+                        px_3; pb_3;
+                    } [$crate::ui::feedback(format!("compaction-error-{id}"), error.clone(), cx.theme().danger)]
                 }),
             ].gds_uim::m! {
                 @expanded: $|panel| panel.child(el! {

@@ -371,22 +371,23 @@ impl Render for Authentication {
             cx.theme().foreground
         };
         let message = (!self.message.is_empty()).then(|| {
-            gds_uim::el! {
-                #div {
-                    id: $(if failed { "authentication-error" } else { "authentication-progress" });
-                    test_support; min_w_0; whitespace_normal;
-                    text_size: $crate::ui::SMALL;
-                    text_color: $(if failed { cx.theme().danger } else { cx.theme().foreground });
-                } [ $crate::ui::tooltip::wrap_tokens(&self.message) ]
-            }
+            crate::ui::feedback(
+                if failed {
+                    "authentication-error"
+                } else {
+                    "authentication-progress"
+                },
+                self.message.clone(),
+                if failed {
+                    cx.theme().danger
+                } else {
+                    cx.theme().foreground
+                },
+            )
         });
         let methods = (!busy && !self.status.connected()).then(|| {
             let empty = self.methods.is_empty().then(|| {
-                gds_uim::el! {
-                    #div {
-                        text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                    } [ $crate::i18n::tr!("auth-no-methods") ]
-                }
+                crate::ui::feedback("authentication-no-methods", crate::i18n::tr!("auth-no-methods"), cx.theme().muted_foreground)
             });
             let choices = self
                 .methods

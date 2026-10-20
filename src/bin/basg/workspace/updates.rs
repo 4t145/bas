@@ -27,6 +27,7 @@ impl Workspace {
             | Update::DeletedAgentHistory { .. }
             | Update::Catalog(_)
             | Update::AuthenticationRequired { .. }
+            | Update::HistoryProgress { .. }
             | Update::Stream { .. }
             | Update::Permissions { .. }
             | Update::PermissionUnavailable { .. }
@@ -471,6 +472,9 @@ impl Workspace {
             Update::Stream { epoch, state } if epoch == self.selected.epoch => {
                 self.selected.stream = state
             }
+            Update::HistoryProgress { epoch, loaded } if epoch == self.selected.epoch => {
+                self.selected.history_loaded = loaded;
+            }
             Update::Permissions { epoch, pending } if epoch == self.selected.epoch => {
                 self.selected.approval.error = None;
                 self.selected.approval.panel.replace(pending);
@@ -502,6 +506,7 @@ impl Workspace {
             }
             Update::Snapshot { .. }
             | Update::Event { .. }
+            | Update::HistoryProgress { .. }
             | Update::Stream { .. }
             | Update::Permissions { .. }
             | Update::PermissionUnavailable { .. } => {}

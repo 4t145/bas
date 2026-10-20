@@ -8,6 +8,8 @@ use gpui_kit::{
 
 use crate::connections::{self, Profiles};
 
+mod certificates;
+mod check;
 mod discovery;
 mod transport;
 mod view;
@@ -61,12 +63,16 @@ pub(super) struct Page {
     tls_certificate: Entity<InputState>,
     tls_key: Entity<InputState>,
     tls_server_name: Entity<InputState>,
+    certificate_picker_open: bool,
+    certificate_editor_generation: u64,
     transport: Transport,
     addresses: HashMap<Transport, String>,
     editor: Option<Editor>,
     discovery: Option<discovery::State>,
     scan: Option<gpui_kit::Task<()>>,
     scan_generation: u64,
+    checks: HashMap<String, check::Entry>,
+    check_generation: u64,
     feedback: Feedback,
     _subscriptions: Vec<Subscription>,
 }
@@ -85,7 +91,10 @@ impl Page {
         let tls_certificate = cx.new(|cx| InputState::new(window, cx));
         let tls_key = cx.new(|cx| InputState::new(window, cx));
         let tls_server_name = cx.new(|cx| InputState::new(window, cx));
-        let mut subscriptions = vec![cx.observe(&profiles, |_, _, cx| cx.notify())];
+        let mut subscriptions = vec![cx.observe(&profiles, |this: &mut Self, _, cx| {
+            this.prune_checks(cx);
+            cx.notify();
+        })];
         for input in [
             &name,
             &note,
@@ -118,12 +127,16 @@ impl Page {
             tls_certificate,
             tls_key,
             tls_server_name,
+            certificate_picker_open: false,
+            certificate_editor_generation: 0,
             transport: Transport::Local,
             addresses: HashMap::new(),
             editor: None,
             discovery: None,
             scan: None,
             scan_generation: 0,
+            checks: HashMap::new(),
+            check_generation: 0,
             feedback: Feedback::Idle,
             _subscriptions: subscriptions,
         }
@@ -154,6 +167,7 @@ impl Page {
         }
         self.dismiss_discovery();
         self.editor = Some(Editor::Add);
+        self.certificate_editor_generation += 1;
         self.scroll_to = Some(0);
         self.transport = Transport::Local;
         self.addresses.clear();
@@ -172,6 +186,7 @@ impl Page {
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_discovery();
         self.editor = None;
+        self.certificate_editor_generation += 1;
         self.feedback = Feedback::Idle;
         self.focus.focus(window, cx);
         cx.notify();
@@ -188,6 +203,7 @@ impl Page {
             return;
         }
         self.editor = Some(Editor::Edit(profile.clone()));
+        self.certificate_editor_generation += 1;
         self.scroll_to = self
             .profiles
             .read(cx)
@@ -248,6 +264,9 @@ impl Page {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if transport != self.transport {
+            self.certificate_editor_generation += 1;
+        }
         self.addresses
             .insert(self.transport, self.target.read(cx).value().to_string());
         self.transport = transport;
@@ -313,9 +332,9 @@ impl Page {
         let tls = (self.transport == Transport::Mtls).then(|| {
             let server_name = self.tls_server_name.read(cx).value().trim().to_owned();
             bas::service::tls::ClientTls {
-                ca: self.tls_ca.read(cx).value().trim().into(),
-                certificate: self.tls_certificate.read(cx).value().trim().into(),
-                private_key: self.tls_key.read(cx).value().trim().into(),
+                ca: self.tls_ca.read(cx).value().as_str().into(),
+                certificate: self.tls_certificate.read(cx).value().as_str().into(),
+                private_key: self.tls_key.read(cx).value().as_str().into(),
                 server_name: (!server_name.is_empty()).then_some(server_name),
             }
         });

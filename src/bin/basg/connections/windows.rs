@@ -85,7 +85,7 @@ pub(crate) fn open_for(target: Target, cx: &mut App) -> anyhow::Result<WindowHan
         .and_then(|windows| windows.0.get(&target))
         .copied()
         && let Ok(result) = handle.update(cx, |root, window, cx| {
-            if let Ok(host) = root.view().clone().downcast::<WorkspaceHost>() {
+            if let Ok(host) = crate::diagnostics::content(root, cx).downcast::<WorkspaceHost>() {
                 host.update(cx, |host, cx| host.select(target.clone(), window, cx))?;
             }
             window.activate_window();
@@ -127,9 +127,7 @@ pub(super) fn switch_in(
         .downcast::<Root>()
         .ok_or_else(|| anyhow::anyhow!("The workspace window is unavailable"))?;
     handle.update(cx, |root, window, cx| {
-        let host = root
-            .view()
-            .clone()
+        let host = crate::diagnostics::content(root, cx)
             .downcast::<WorkspaceHost>()
             .map_err(|_| anyhow::anyhow!("This window does not contain a workspace"))?;
         host.update(cx, |host, cx| host.select(target.clone(), window, cx))

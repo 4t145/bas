@@ -302,15 +302,9 @@ fn frame(id: &str, cache: &Entity<Cache>, content: AnyElement, cx: &App) -> Div 
             image_cache: $cache.clone();
         } [
             $content,
-            ..$cache.read(cx).errors.iter().map(|(key, message)| el! {
-                #div {
-                    id: $SharedString::from(format!("image-error-{id}-{key}"));
-                    test_support;
-                    min_h: $px(crate::ui::CONTROL);
-                    text_size: crate::ui::SMALL;
-                    text_color: $cx.theme().muted_foreground;
-                } [$message.clone()]
-            }),
+            ..$cache.read(cx).errors.iter().map(|(key, message)| crate::ui::feedback(
+                format!("image-error-{id}-{key}"), message.clone(), cx.theme().muted_foreground,
+            )),
         ]
     }
 }

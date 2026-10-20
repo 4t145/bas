@@ -50,6 +50,7 @@ gpui_kit::assets::icon_assets!(
         FolderPlus,
         Monitor,
         Server,
+        Activity,
         Cable,
         Lock,
         Maximize2,

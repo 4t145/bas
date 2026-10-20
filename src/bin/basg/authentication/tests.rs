@@ -2,6 +2,44 @@ use super::*;
 use gpui_kit::{TestAppContext, component::Root, px, size};
 use serde_json::json;
 
+#[gpui_kit::test]
+fn authentication_feedback_copies_original_multiline_text(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+
+    let (window, panel) = empty_panel(cx);
+    let message = format!(
+        "Authentication response\n{}\n retry unchanged ",
+        "long-token/".repeat(80)
+    );
+    cx.update_window(window.into(), |_, window, cx| {
+        for failed in [true, false] {
+            panel.update(cx, |panel, cx| {
+                panel.message = message.clone();
+                panel.status = if failed {
+                    Status::Failed(message.clone())
+                } else {
+                    Status::Authenticating
+                };
+                cx.notify();
+            });
+            window.render_frame(cx);
+            let id = if failed {
+                "authentication-error"
+            } else {
+                "authentication-progress"
+            };
+            assert!(window.find(id).visible());
+            window.click(format!("{id}-copy"), cx);
+            assert_eq!(
+                cx.read_from_clipboard().expect("copied feedback").text(),
+                Some(message.clone()),
+            );
+            assert_eq!(panel.read(cx).message, message);
+        }
+    })
+    .expect("authentication feedback window");
+}
+
 fn empty_panel(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<Root>, Entity<Authentication>) {
     cx.update(|cx| {
         gpui_kit::init(cx);

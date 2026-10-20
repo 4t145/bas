@@ -1,5 +1,5 @@
 use super::*;
-use bas::service::{Client, Target, pb};
+use bas::service::Target;
 use std::time::Duration;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -18,17 +18,11 @@ pub(super) enum State {
 /// # Errors
 /// Fails if authenticated IPC or the read-only Bas RPC cannot complete in time.
 async fn probe(candidate: Target) -> Result<Target, ()> {
-    tokio::time::timeout(PROBE_TIMEOUT, async {
-        let endpoint = candidate.resolved().map_err(|_| ())?;
-        let mut client = Client::connect_target(&candidate).await.map_err(|_| ())?;
-        client
-            .list_agents(pb::ListAgentsRequest {})
-            .await
-            .map_err(|_| ())?;
-        Ok(endpoint)
-    })
-    .await
-    .map_err(|_| ())?
+    let endpoint = candidate.resolved().map_err(|_| ())?;
+    super::check::probe(candidate.into(), PROBE_TIMEOUT)
+        .await
+        .map_err(|_| ())?;
+    Ok(endpoint)
 }
 
 impl Page {

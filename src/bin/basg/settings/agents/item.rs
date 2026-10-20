@@ -141,12 +141,9 @@ impl RenderOnce for Item {
                     } [$self.entry.description.clone()],
                     $self.entry.links(),
                 ],
-                ..$self.feedback.map(|feedback| gds_uim::el! {
-                    #div {
-                        id: $format!("agents-operation-{id}"); test_support;
-                        text_color: $cx.theme().primary; min_w_0;
-                    } [$feedback]
-                }),
+                ..$self.feedback.map(|feedback| crate::ui::feedback(
+                    format!("agents-operation-{id}"), feedback, cx.theme().primary,
+                )),
                 ..$self.content.map(|content| gds_uim::el! {
                     #div { pt_2; border_t_1; border_color: $cx.theme().border; } [$content]
                 }),

@@ -105,12 +105,17 @@ impl Workspace {
 
     pub(super) fn operation_error(&mut self, title: &str, message: String, cx: &mut Context<Self>) {
         self.selected.error = Some(message.clone());
-        if self.window.presented
-            && let Err(error) = crate::application::open_message(title, &message, cx)
-        {
-            tracing::error!(%error, %message, "cannot show operation failure");
-        }
+        self.report_operation_error(title, &message, cx);
         cx.notify();
+    }
+
+    pub(super) fn report_operation_error(&self, title: &str, message: &str, cx: &mut App) {
+        use crate::diagnostics::{self, log::Level};
+        if self.window.presented {
+            diagnostics::notify(Some(self.window.handle), Level::Error, title, message, cx);
+        } else {
+            diagnostics::record(Level::Error, title, message, cx);
+        }
     }
 
     pub(super) fn request_delete(

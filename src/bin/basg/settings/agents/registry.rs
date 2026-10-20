@@ -568,25 +568,24 @@ impl Agents {
             .and_then(|catalog| catalog.warning.as_ref());
         gds_uim::el! {
             #div { id: "agents-registry"; test_support; w_full; min_w_0; flex; flex_col; gap_2; } [
-                ..$warning.map(|warning| gds_uim::el! {
-                    #div { text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground; } [
-                        $warning.clone()
-                    ]
-                }),
+                ..$warning.map(|warning| crate::ui::feedback(
+                    "agents-registry-warning", warning.clone(), cx.theme().muted_foreground,
+                )),
                 ..$entries.is_empty().then(|| gds_uim::el! {
-                    #div { py_4; text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground; } [
-                        $(if self.registry.loading() {
+                    #div { py_4; } [
+                        $crate::ui::feedback("agents-registry-status", if self.registry.loading() {
                             crate::i18n::tr!("catalog-loading")
                         } else if self.registry.catalog.is_none() {
                             crate::i18n::tr!("catalog-connect")
                         } else {
                             crate::i18n::tr!("catalog-no-results")
-                        })
+                        }, cx.theme().muted_foreground)
                     ]
                 }),
                 ..$entries.into_iter().map(|entry| self.registry_card(entry, cx)),
             ]
-        }.into_any_element()
+        }
+        .into_any_element()
     }
 }
 

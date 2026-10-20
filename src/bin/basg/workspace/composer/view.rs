@@ -97,41 +97,28 @@ impl Workspace {
 
     fn render_composer_feedback(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let message = self.composer_error(cx)?;
-        let detail = message.clone();
+        let retry = self.selected.timeline.conversation.is_some()
+            && matches!(self.selected.stream, StreamState::Unavailable(_));
         Some(
             gds_uim::el! {
                 #div {
-                    id: "composer-feedback";
-                    test_support; flex; items_center; gap_2; px_2;
+                    flex; items_center; min_w_0; px_2;
                     h: $px(crate::ui::CONTROL);
                     flex_shrink_0;
-                    text_size: $crate::ui::SMALL;
-                    text_color: $cx.theme().danger;
                 } [
-                    #div {
-                        id: "composer-feedback-message";
-                        test_support;
-                        role: $gpui_kit::Role::Label;
-                        aria_label: $message.clone();
-                        flex_1; min_w_0; truncate;
-                    } [$message.replace('\n', " ")],
-                    $layout::icon_button("composer-feedback-details", IconName::Info) {
-                        accessibility_label: $crate::i18n::tr!("feedback-details");
-                        tooltip: $crate::i18n::tr!("feedback-details");
-                        on_click: $move |_, _, cx| Self::on_composer_feedback_details(&detail, cx);
-                    },
+                    #div { flex_1; min_w_0; } [
+                        $crate::ui::feedback("composer-feedback", message, cx.theme().danger).compact(),
+                    ],
+                    ..$retry.then(|| gds_uim::el! {
+                        #crate::ui::icon_action("history-resync-retry", IconName::RefreshCw, $crate::i18n::tr!("session-history-retry")) {
+                            flex_shrink_0;
+                            on_click: $cx.listener(|this, _, _, cx| this.retry_history(cx));
+                        }
+                    }),
                 ]
             }
             .into_any_element(),
         )
-    }
-
-    fn on_composer_feedback_details(detail: &str, cx: &mut App) {
-        if let Err(error) =
-            crate::application::open_message(crate::i18n::tr!("feedback-title"), detail, cx)
-        {
-            tracing::error!(%error, "cannot open operation details");
-        }
     }
 
     pub(in crate::workspace) fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {

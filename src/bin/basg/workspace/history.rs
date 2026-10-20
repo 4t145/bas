@@ -4,6 +4,27 @@ use super::*;
 use bas::model::SessionSnapshot;
 
 impl Workspace {
+    pub(super) fn retry_history(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.selected.id else {
+            return;
+        };
+        if matches!(
+            self.selected.stream,
+            StreamState::Loading | StreamState::Live
+        ) {
+            return;
+        }
+        self.selected.reload();
+        self.command(
+            Command::Watch {
+                session,
+                epoch: self.selected.epoch,
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
     pub(super) fn history_request(
         &self,
         agent: String,

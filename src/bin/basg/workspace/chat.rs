@@ -227,6 +227,19 @@ impl Workspace {
             StreamState::Unavailable(_) => (crate::i18n::tr!("status-session-unavailable"), false),
             StreamState::Closed => (crate::i18n::tr!("status-session-ended"), false),
         };
+        let failure = match &self.selected.stream {
+            StreamState::Unavailable(error) | StreamState::Reconnecting(error) => {
+                Some(error.presentation())
+            }
+            _ => None,
+        };
+        let progress = (loading && self.selected.history_loaded > 0).then(|| {
+            crate::i18n::tr!(
+                "session-history-progress",
+                count = self.selected.history_loaded
+            )
+        });
+        let retry = !loading && self.selected.id.is_some();
         gds_uim::el! { #content_panel() {
             id: "conversation-history-transition"; test_support;
             role: gpui_kit::Role::Status; aria_label: label;
@@ -237,6 +250,16 @@ impl Workspace {
                 "conversation-history-loading", IconName::LoaderCircle, cx.theme().muted_foreground, true
             )),
             $label,
+            ..progress,
+            ..$failure.map(|message| crate::ui::feedback(
+                "history-load-error", message, cx.theme().danger
+            )),
+            ..$retry.then(|| gds_uim::el! {
+                #crate::ui::action_button("history-load-retry") {
+                    label: $crate::i18n::tr!("session-history-retry");
+                    on_click: $cx.listener(|this, _, _, cx| this.retry_history(cx));
+                }
+            }),
         ] }.into_any_element()
     }
 

@@ -32,6 +32,7 @@ pub(crate) fn init(cx: &mut App) {
         return;
     }
     cx.set_global(ActionsRegistered);
+    crate::diagnostics::window::init(cx);
     let (settings, quit) = if cfg!(target_os = "macos") {
         ("cmd-,", "cmd-q")
     } else {
@@ -61,7 +62,6 @@ fn on_quit(_: &Quit, cx: &mut App) {
 enum InfoWindow {
     About,
     Quit,
-    Message,
     Confirmation,
 }
 
@@ -69,7 +69,6 @@ enum InfoWindow {
 struct OpenWindows {
     about: Option<WindowHandle<Root>>,
     quit: Option<WindowHandle<Root>>,
-    message: Option<WindowHandle<Root>>,
     confirmation: Option<WindowHandle<Root>>,
 }
 impl Global for OpenWindows {}
@@ -79,36 +78,6 @@ pub(crate) struct Confirmation {
     pub message: String,
     pub confirm_label: String,
     pub destructive: bool,
-}
-
-/// Shows an error independently of any pending confirmation.
-///
-/// # Errors
-/// Returns a platform error if the message window cannot be created.
-pub(crate) fn open_message(
-    title: &str,
-    message: &str,
-    cx: &mut App,
-) -> anyhow::Result<WindowHandle<Root>> {
-    // Replace only the previous informational message, never a confirmation.
-    if let Some(handle) = cx
-        .try_global::<OpenWindows>()
-        .and_then(|state| state.message)
-    {
-        let _ = handle.update(cx, |_, window, _| window.remove_window());
-    }
-    open_host(
-        Host {
-            kind: InfoWindow::Message,
-            title: title.into(),
-            message: message.into(),
-            confirm_label: String::new(),
-            destructive: false,
-            on_confirm: None,
-            skip_delete_reminder: None,
-        },
-        cx,
-    )
 }
 
 /// Repeated requests focus the pending confirmation and discard the new request.
@@ -193,7 +162,6 @@ impl InfoWindow {
             // other name
             Self::About => crate::i18n::tr!("app-about"),
             Self::Quit => crate::i18n::tr!("app-quit-title"),
-            Self::Message => "BasG",
             Self::Confirmation => crate::i18n::tr!("app-confirm"),
         }
     }
@@ -202,7 +170,6 @@ impl InfoWindow {
         match self {
             Self::About => &mut windows.about,
             Self::Quit => &mut windows.quit,
-            Self::Message => &mut windows.message,
             Self::Confirmation => &mut windows.confirmation,
         }
     }
@@ -347,12 +314,9 @@ impl Host {
                 flex; flex_col; flex_1; min_h_0; gap_6; p_6;
             } [
                 #div {
-                    id: "application-message-body";
-                    test_support;
-                    role: gpui_kit::Role::Label;
-                    aria_label: $self.message.clone();
+                    id: "application-message-scroll";
                     flex_1; min_h_0; overflow_y_scroll; whitespace_normal;
-                } [$crate::ui::tooltip::wrap_tokens(&self.message)],
+                } [$crate::ui::feedback("application-message-body", self.message.clone(), cx.theme().foreground)],
                 ..$self.skip_delete_reminder.map(|checked| el! {
                     #crate::ui::checkbox("delete-dont-ask") {
                         checked: checked; label: $crate::i18n::tr!("delete-dont-ask");
@@ -442,13 +406,12 @@ impl Render for Host {
         let id = match self.kind {
             InfoWindow::About => "about-window",
             InfoWindow::Quit => "quit-window",
-            InfoWindow::Message => "message-window",
             InfoWindow::Confirmation => "confirmation-window",
         };
         let content = match self.kind {
             InfoWindow::About => self.about().into_any_element(),
             InfoWindow::Quit => self.quit().into_any_element(),
-            InfoWindow::Message | InfoWindow::Confirmation => self.message(cx).into_any_element(),
+            InfoWindow::Confirmation => self.message(cx).into_any_element(),
         };
         el! {
             #div {

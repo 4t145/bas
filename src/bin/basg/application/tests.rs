@@ -64,7 +64,7 @@ fn request() -> Confirmation {
 }
 
 #[gpui_kit::test]
-fn messages_do_not_replace_confirmations_and_confirmation_runs_once(cx: &mut TestAppContext) {
+fn notices_do_not_replace_confirmations_or_open_windows(cx: &mut TestAppContext) {
     use std::{cell::Cell, rc::Rc};
     init(cx);
     let calls = Rc::new(Cell::new(0));
@@ -89,15 +89,24 @@ fn messages_do_not_replace_confirmations_and_confirmation_runs_once(cx: &mut Tes
     });
     assert_eq!(confirmation.window_id(), again.window_id());
     let quit = cx.update(|cx| open_quit(cx).expect("separate quit"));
-    let message =
-        cx.update(|cx| open_message("归档失败", "请稍后重试", cx).expect("error message"));
-    let replacement =
-        cx.update(|cx| open_message("删除失败", "连接已断开", cx).expect("replace only error"));
-    assert_ne!(message.window_id(), replacement.window_id());
-    assert!(cx.update_window(message.into(), |_, _, _| ()).is_err());
+    cx.update(|cx| {
+        crate::diagnostics::notify(
+            Some(quit.into()),
+            crate::diagnostics::log::Level::Error,
+            "归档失败",
+            "请稍后重试",
+            cx,
+        );
+    });
+    cx.update(|cx| assert_eq!(cx.windows().len(), 2));
     assert_eq!(calls.get(), 0);
     cx.update_window(confirmation.into(), |_, window, cx| {
         window.render_frame(cx);
+        window.click("application-message-body-copy", cx);
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some(request().message)
+        );
         window.click("message-confirm", cx);
     })
     .expect("confirm original request");

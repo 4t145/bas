@@ -1,44 +1,5 @@
+use super::super::check::tests::ProbeService;
 use super::*;
-use tonic::{Request, Response, Status, codegen::*};
-
-#[derive(Clone)]
-struct ProbeService;
-
-impl tonic::server::NamedService for ProbeService {
-    const NAME: &'static str = "bas.v1.Bas";
-}
-
-impl tonic::server::UnaryService<pb::ListAgentsRequest> for ProbeService {
-    type Response = pb::ListAgentsResponse;
-    type Future = BoxFuture<Response<Self::Response>, Status>;
-
-    fn call(&mut self, _: Request<pb::ListAgentsRequest>) -> Self::Future {
-        Box::pin(async { Ok(Response::new(pb::ListAgentsResponse::default())) })
-    }
-}
-
-impl Service<http::Request<tonic::body::Body>> for ProbeService {
-    type Response = http::Response<tonic::body::Body>;
-    type Error = std::convert::Infallible;
-    type Future = BoxFuture<Self::Response, Self::Error>;
-
-    fn poll_ready(
-        &mut self,
-        _: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        std::task::Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, request: http::Request<tonic::body::Body>) -> Self::Future {
-        assert_eq!(request.uri().path(), "/bas.v1.Bas/ListAgents");
-        Box::pin(async move {
-            let codec = tonic_prost::ProstCodec::default();
-            Ok(tonic::server::Grpc::new(codec)
-                .unary(ProbeService, request)
-                .await)
-        })
-    }
-}
 
 #[tokio::test]
 async fn private_ipc_probe_requires_a_bas_rpc_and_has_no_fallback() {

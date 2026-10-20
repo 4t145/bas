@@ -18,6 +18,7 @@ use tonic::Code;
 mod elicitations;
 mod failure;
 mod foreground;
+mod history;
 mod model;
 mod permissions;
 mod tracking;
@@ -211,6 +212,10 @@ pub(super) enum Update {
         epoch: u64,
         session: SessionSnapshot,
         events: Vec<Event>,
+    },
+    HistoryProgress {
+        epoch: u64,
+        loaded: usize,
     },
     Event {
         epoch: u64,
@@ -743,44 +748,6 @@ struct Snapshot {
     events: Vec<Event>,
 }
 
-/// # Errors
-/// Fails if a history page or session metadata cannot be read or decoded.
-async fn snapshot(client: &mut Client, session: SessionId) -> Result<Snapshot> {
-    let mut events = Vec::new();
-    let mut after = None;
-    loop {
-        let page = client
-            .load_history(pb::LoadHistoryRequest {
-                session: session.to_string(),
-                after,
-                limit: HISTORY_PAGE_SIZE,
-            })
-            .await?
-            .into_inner();
-        for event in page.events {
-            events.push(event.try_into()?);
-        }
-        match page.next {
-            Some(next) if Some(next) != after => after = Some(next),
-            Some(_) => return Err(Failure::Condition(Condition::RepeatedHistoryCursor).into()),
-            None => break,
-        }
-    }
-    let meta = client
-        .get_session(pb::GetSessionRequest {
-            session: session.to_string(),
-        })
-        .await?
-        .into_inner()
-        .session
-        .ok_or(Failure::Condition(Condition::MissingSessionInfo))?
-        .try_into()?;
-    Ok(Snapshot {
-        session: meta,
-        events,
-    })
-}
-
 async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: SessionId, epoch: u64) {
     let mut cursor = None;
     loop {
@@ -791,11 +758,16 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                     state: StreamState::Loading,
                 })
                 .await;
-            match tokio::time::timeout(REQUEST_TIMEOUT, snapshot(&mut client, session)).await {
-                Ok(Ok(Snapshot {
+            match history::snapshot(&mut client, session, REQUEST_TIMEOUT, |loaded| {
+                // Progress is advisory; never block history on a busy UI queue.
+                let _ = updates.try_send(Update::HistoryProgress { epoch, loaded });
+            })
+            .await
+            {
+                Ok(Snapshot {
                     session: meta,
                     events,
-                })) => {
+                }) => {
                     cursor = Some(events.last().map_or(0, |event| event.cursor.raw()));
                     let failure = meta
                         .runtime
@@ -823,35 +795,15 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                         return;
                     }
                 }
-                Ok(Err(error)) => {
-                    if error
-                        .downcast_ref::<tonic::Status>()
-                        .is_some_and(|status| terminal_watch_status(status.code()))
-                    {
-                        let _ = updates
-                            .send(Update::Stream {
-                                epoch,
-                                state: StreamState::Unavailable(error.into()),
-                            })
-                            .await;
-                        return;
-                    }
-                    if !retry(&updates, epoch, error.into()).await {
-                        return;
-                    }
-                    continue;
-                }
-                Err(_) => {
-                    if !retry(
-                        &updates,
-                        epoch,
-                        Failure::Timeout.context(FailureContext::StreamDeadline),
-                    )
-                    .await
-                    {
-                        return;
-                    }
-                    continue;
+                Err(error) => {
+                    tracing::warn!(%session, epoch, %error, "Conversation history load failed");
+                    let _ = updates
+                        .send(Update::Stream {
+                            epoch,
+                            state: StreamState::Unavailable(error),
+                        })
+                        .await;
+                    return;
                 }
             }
         }
@@ -972,6 +924,7 @@ fn terminal_watch_status(code: Code) -> bool {
 }
 
 async fn retry(updates: &mpsc::Sender<Update>, epoch: u64, error: Failure) -> bool {
+    tracing::warn!(epoch, %error, "Conversation stream reconnecting");
     if updates
         .send(Update::Stream {
             epoch,

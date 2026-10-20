@@ -635,7 +635,6 @@ impl Render for Settings {
         } else {
             self.connection_message.clone()
         };
-        let feedback_hint = feedback.clone();
         el! {
             #div {
                 id: "settings";
@@ -687,16 +686,7 @@ impl Render for Settings {
                                 ]
                             }),
                     ],
-                    #div {
-                        id: "settings-save-status"; test_support;
-                        role: gpui_kit::Role::Status; aria_label: $feedback.clone();
-                        h: crate::ui::COMPACT_CONTROL.px; flex_shrink_0; truncate;
-                        text_size: $crate::ui::SMALL;
-                        text_color: $cx.theme().muted_foreground;
-                        @$!feedback.is_empty() => {
-                            hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(feedback_hint.clone(), window, cx);
-                        };
-                    } [$feedback],
+                    $crate::ui::feedback("settings-save-status", feedback, cx.theme().muted_foreground).compact(),
                 ],
                 #div {
                     flex_1;

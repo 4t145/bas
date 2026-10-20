@@ -1,6 +1,115 @@
 use super::*;
 
 #[gpui_kit::test]
+fn failed_resync_can_retry_without_discarding_visible_history(cx: &mut TestAppContext) {
+    let fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.composer
+                .input
+                .update(cx, |input, cx| input.set_value("keep draft", window, cx));
+            view.update(
+                Update::Stream {
+                    epoch: view.selected.epoch,
+                    state: StreamState::Unavailable("resync interrupted".into()),
+                },
+                window,
+                cx,
+            );
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("conversation-history-transition").is_none());
+        assert!(window.find("history-resync-retry").visible());
+        window.click("history-resync-retry", cx);
+        let view = fixture.view.read(cx);
+        assert_eq!(
+            view.selected
+                .timeline
+                .conversation
+                .as_ref()
+                .expect("retained history")
+                .session
+                .id,
+            meta.id
+        );
+        assert_eq!(view.composer.input.read(cx).value().as_ref(), "keep draft");
+        assert_eq!(view.selected.stream, StreamState::Loading);
+    })
+    .expect("retry visible history");
+}
+
+#[gpui_kit::test]
+fn history_progress_and_retry_stay_with_the_selected_session(cx: &mut TestAppContext) {
+    let mut fixture = fixture(cx);
+    let meta = session();
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            view.sessions.entries.push(meta.clone());
+            view.select(meta.id, window, cx);
+            view.composer
+                .input
+                .update(cx, |input, cx| input.set_value("unsent draft", window, cx));
+            let epoch = view.selected.epoch;
+            view.update(Update::HistoryProgress { epoch, loaded: 512 }, window, cx);
+            view.update(
+                Update::HistoryProgress {
+                    epoch: epoch - 1,
+                    loaded: 9000,
+                },
+                window,
+                cx,
+            );
+            assert_eq!(view.selected.history_loaded, 512);
+            view.update(
+                Update::Stream {
+                    epoch,
+                    state: StreamState::Unavailable("page timed out\nretry safely".into()),
+                },
+                window,
+                cx,
+            );
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("conversation-history-loading").is_none());
+        assert_eq!(
+            window.find("history-load-error").label(),
+            Some("page timed out\nretry safely")
+        );
+        window.click("history-load-error-copy", cx);
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some("page timed out\nretry safely".into())
+        );
+        let old_epoch = fixture.view.read(cx).selected.epoch;
+        window.click("history-load-retry", cx);
+        let view = fixture.view.read(cx);
+        assert_eq!(view.selected.id, Some(meta.id));
+        assert!(view.selected.epoch > old_epoch);
+        assert_eq!(view.selected.history_loaded, 0);
+        assert_eq!(view.selected.stream, StreamState::Loading);
+        assert_eq!(
+            view.composer.input.read(cx).value().as_ref(),
+            "unsent draft"
+        );
+        window.render_frame(cx);
+        assert!(window.find("conversation-history-loading").visible());
+        assert!(window.try_find("history-load-retry").is_none());
+    })
+    .expect("retry retained history");
+    let epoch = cx.update(|cx| fixture.view.read(cx).selected.epoch);
+    let mut retry = false;
+    while let Ok(command) = fixture.commands.try_recv() {
+        if matches!(command, Command::Watch { session, epoch: requested } if session == meta.id && requested == epoch)
+        {
+            retry = true;
+        }
+    }
+    assert!(retry, "retry sends a new watch without switching sessions");
+}
+
+#[gpui_kit::test]
 fn switching_threads_shows_loading_until_the_matching_snapshot_arrives(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
     let first = session();

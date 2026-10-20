@@ -268,6 +268,7 @@ pub(super) struct SelectedThread {
     pub(super) agent: String,
     pub(super) epoch: u64,
     pub(super) stream: StreamState,
+    pub(super) history_loaded: usize,
     pub(super) creating: bool,
     pub(super) waiting_for_agent_selection: bool,
     pub(super) error: Option<String>,
@@ -284,6 +285,7 @@ impl SelectedThread {
             agent: String::new(),
             epoch: 0,
             stream: StreamState::Loading,
+            history_loaded: 0,
             creating: false,
             waiting_for_agent_selection: false,
             error: None,
@@ -312,6 +314,7 @@ impl SelectedThread {
     pub(super) fn reload(&mut self) {
         self.epoch += 1;
         self.stream = StreamState::Loading;
+        self.history_loaded = 0;
     }
 
     pub(super) fn awaiting_snapshot(&self) -> bool {

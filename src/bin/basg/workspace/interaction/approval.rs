@@ -138,27 +138,25 @@ impl Panel {
                 }
             });
             let submitting = disabled.then(|| {
-                gds_uim::el! {
-                    #div {
-                        text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                    } [ $crate::i18n::tr!("approval-submitting") ]
-                }
+                crate::ui::feedback(
+                    format!("approval-{request_id}-submitting"),
+                    crate::i18n::tr!("approval-submitting"),
+                    cx.theme().muted_foreground,
+                )
             });
             let error = self.errors.get(request_id).map(|error| {
-                gds_uim::el! {
-                    #div {
-                        text_size: $crate::ui::SMALL; text_color: $cx.theme().danger;
-                    } [ $error.clone() ]
-                }
+                crate::ui::feedback(
+                    format!("approval-{request_id}-error"),
+                    error.clone(),
+                    cx.theme().danger,
+                )
             });
             cards.push(gds_uim::el! {
                 #div {
                     w_full; min_w_0; flex; flex_col; gap_2; p_3;
                     rounded_lg; border_1; border_color: $cx.theme().warning;
                 } [
-                    #div {
-                        text_size: $crate::ui::SMALL; text_color: $cx.theme().warning;
-                    } [ $crate::i18n::tr!("approval-waiting") ],
+                    $crate::ui::feedback(format!("approval-{request_id}-waiting"), crate::i18n::tr!("approval-waiting"), cx.theme().warning),
                     #div { text_size: $crate::ui::SMALL; } [ $title ],
                     ..details,
                     #div { flex; flex_wrap; gap_2; } [ ..choices ],

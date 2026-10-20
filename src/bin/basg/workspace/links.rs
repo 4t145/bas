@@ -113,11 +113,13 @@ impl Target {
 }
 
 fn show_error(message: String, cx: &mut App) {
-    if let Err(error) =
-        crate::application::open_message(crate::i18n::tr!("resource-open-error"), &message, cx)
-    {
-        tracing::error!(%error, "cannot show resource error");
-    }
+    crate::diagnostics::notify(
+        None,
+        crate::diagnostics::log::Level::Error,
+        crate::i18n::tr!("resource-open-error"),
+        &message,
+        cx,
+    );
 }
 
 impl Workspace {

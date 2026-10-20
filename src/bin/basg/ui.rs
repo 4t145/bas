@@ -3,6 +3,7 @@
 
 mod button;
 mod content_row;
+mod feedback;
 pub(crate) mod input;
 pub(crate) mod input_geometry;
 pub(crate) mod session_status;
@@ -12,6 +13,7 @@ pub(crate) mod tooltip;
 pub(crate) mod window_controls;
 pub(crate) use button::Button;
 pub(crate) use content_row::ContentRow;
+pub(crate) use feedback::{copy_button, message as feedback};
 
 use gds_uim::el;
 use gpui_kit::{

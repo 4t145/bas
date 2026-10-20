@@ -9,6 +9,7 @@ use crate::attachment::Attachment;
 use pb::bas_server::{Bas, BasServer};
 mod adapter;
 mod archive;
+mod history;
 mod permissions;
 mod runtime;
 mod submission;
@@ -50,6 +51,7 @@ struct Fixture {
     session: SessionId,
     turn: TurnId,
     attachments: Arc<Mutex<Vec<Option<u64>>>>,
+    history_requests: Arc<Mutex<Vec<Option<u64>>>>,
     prompts: Arc<Mutex<Vec<acp::PromptRequest>>>,
     submissions: Arc<Mutex<Vec<PromptSubmission>>>,
     titles: Arc<Mutex<Vec<String>>>,
@@ -67,6 +69,7 @@ impl Drop for Fixture {
 enum Scenario {
     Tracking(tracking::Scenario),
     Submission(submission::Scenario),
+    History(history::Scenario),
     RuntimeFailure,
     AttachFailedPrecondition,
     StreamFailedPrecondition,
@@ -85,6 +88,7 @@ struct Service {
     turn: TurnId,
     history: Vec<Event>,
     attachments: Arc<Mutex<Vec<Option<u64>>>>,
+    history_requests: Arc<Mutex<Vec<Option<u64>>>>,
     prompts: Arc<Mutex<Vec<acp::PromptRequest>>>,
     submissions: Arc<Mutex<Vec<PromptSubmission>>>,
     titles: Arc<Mutex<Vec<String>>>,
@@ -269,6 +273,12 @@ impl Bas for Service {
         &self,
         _: Request<pb::GetSessionRequest>,
     ) -> Result<Response<pb::GetSessionResponse>, Status> {
+        if matches!(
+            self.scenario,
+            Scenario::History(history::Scenario::HungMetadata)
+        ) {
+            return std::future::pending().await;
+        }
         Ok(Response::new(pb::GetSessionResponse {
             session: Some(
                 pb::Session::try_from(&SessionSnapshot {
@@ -288,6 +298,13 @@ impl Bas for Service {
             return Err(Status::not_found("session removed"));
         }
         let request = request.into_inner();
+        self.history_requests
+            .lock()
+            .expect("history request log")
+            .push(request.after);
+        if let Scenario::History(scenario) = self.scenario {
+            return history::load(self, scenario, request).await;
+        }
         let remaining: Vec<_> = self
             .history
             .iter()
@@ -509,6 +526,7 @@ async fn fixture(scenario: Scenario) -> Fixture {
         })
         .collect();
     let attachments = Arc::new(Mutex::new(Vec::new()));
+    let history_requests = Arc::new(Mutex::new(Vec::new()));
     let prompts = Arc::new(Mutex::new(Vec::new()));
     let submissions = Arc::new(Mutex::new(Vec::new()));
     let titles = Arc::new(Mutex::new(Vec::new()));
@@ -552,6 +570,7 @@ async fn fixture(scenario: Scenario) -> Fixture {
         turn,
         history,
         attachments: attachments.clone(),
+        history_requests: history_requests.clone(),
         prompts: prompts.clone(),
         submissions: submissions.clone(),
         titles: titles.clone(),
@@ -575,6 +594,7 @@ async fn fixture(scenario: Scenario) -> Fixture {
         session: id,
         turn,
         attachments,
+        history_requests,
         prompts,
         submissions,
         titles,

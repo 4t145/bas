@@ -45,7 +45,6 @@ impl Page {
                 .unwrap_or(discovery::LOCAL_NAME)
                 .to_owned();
             let address = connections::presentation::endpoint(endpoint);
-            let hint = address.clone();
             Some(el! { #div {
                 id: "connection-discovered"; test_support;
                 flex; items_center; gap_3; min_w_0;
@@ -59,12 +58,7 @@ impl Page {
                             flex_1; min_w_0; truncate;
                         } [$name],
                     ],
-                    #div {
-                        id: "connection-discovered-endpoint"; test_support;
-                        role: gpui_kit::Role::Label; aria_label: $address.clone();
-                        min_w_0; truncate; text_color: $cx.theme().muted_foreground;
-                        hoverable_tooltip: $move |window, cx| ui::tooltip::view(hint.clone(), window, cx);
-                    } [$address],
+                    $ui::feedback("connection-discovered-endpoint", address, cx.theme().muted_foreground).compact(),
                 ],
                 #super::super::action_button("connection-discovered-add") {
                     label: $(if added { crate::i18n::tr!("connections-already-added") } else { crate::i18n::tr!("connections-create") });
@@ -89,14 +83,13 @@ impl Page {
             #div { text_color: $cx.theme().muted_foreground; } [$crate::i18n::tr!("connections-discovery-scope")],
             ..found,
             ..$matches!(state, State::Loading).then(|| el! { #div {
-                id: "connection-discovery-loading"; test_support; role: gpui_kit::Role::Status;
-                aria_label: $crate::i18n::tr!("connections-discovery-loading"); flex; items_center; gap_2;
+                flex; items_center; gap_2;
             } [
                 Spinner { with_size: $px(ui::ICON); color: $cx.theme().muted_foreground; },
-                $crate::i18n::tr!("connections-discovery-loading"),
+                $ui::feedback("connection-discovery-loading", crate::i18n::tr!("connections-discovery-loading"), cx.theme().foreground),
             ] }),
             ..$matches!(state, State::Failed).then(|| el! { #div { flex; flex_col; gap_2; } [
-                #div { id: "connection-discovery-failed"; test_support; role: gpui_kit::Role::Status; } [$crate::i18n::tr!("connections-discovery-failed")],
+                $ui::feedback("connection-discovery-failed", crate::i18n::tr!("connections-discovery-failed"), cx.theme().foreground),
                 #super::super::action_button("connection-discovery-retry") {
                     label: $crate::i18n::tr!("connections-discovery-retry");
                     on_click: $cx.listener(|this, _, window, cx| this.discover(window, cx));
@@ -144,16 +137,23 @@ impl Page {
 
     fn error_view(&self, cx: &App) -> Option<AnyElement> {
         self.error(cx).map(|message| {
-            el! { #div {
-                id: "connections-message"; test_support; role: gpui_kit::Role::Status;
-                aria_label: $message.clone(); flex; items_start; gap_2; min_w_0;
-                text_size: ui::SMALL; text_color: $cx.theme().danger;
-            } [
-                Icon(IconName::CircleAlert) { size: $px(ui::ICON); flex_shrink_0; },
-                #div { flex_1; min_w_0; } [$message],
-            ] }
-            .into_any_element()
+            ui::feedback("connections-message", message, cx.theme().danger).into_any_element()
         })
+    }
+
+    fn certificate_field(&self, field: certificates::Field, cx: &mut Context<Self>) -> AnyElement {
+        let input = field.input(self);
+        let control = el! { #div { w_full; min_w_0; flex; items_center; gap_1; } [
+            #div { flex_1; min_w_0; } [
+                #Input::new(input) { small; w_full; },
+            ],
+            #ui::icon_action($format!("{}-pick", field.id()), IconName::Folder, $field.picker_label()) {
+                disabled: $self.certificate_picker_open;
+                flex_shrink_0;
+                on_click: $cx.listener(move |this, _, window, cx| this.choose_certificate(field, window, cx));
+            },
+        ] }.into_any_element();
+        Self::field(field.id(), field.label(), control)
     }
 
     fn editor_view(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -179,37 +179,20 @@ impl Page {
             )
         });
         let tls: Vec<_> = if self.transport == Transport::Mtls {
-            [
-                (
-                    "connection-tls-ca",
-                    crate::i18n::tr!("connections-tls-ca"),
-                    &self.tls_ca,
-                ),
-                (
-                    "connection-tls-certificate",
-                    crate::i18n::tr!("connections-tls-certificate"),
-                    &self.tls_certificate,
-                ),
-                (
-                    "connection-tls-key",
-                    crate::i18n::tr!("connections-tls-key"),
-                    &self.tls_key,
-                ),
-                (
+            use certificates::Field;
+            vec![
+                self.certificate_field(Field::Ca, cx),
+                self.certificate_field(Field::Certificate, cx),
+                self.certificate_field(Field::Key, cx),
+                Self::field(
                     "connection-tls-server-name",
                     crate::i18n::tr!("connections-tls-server-name"),
-                    &self.tls_server_name,
+                    Input::new(&self.tls_server_name)
+                        .small()
+                        .w_full()
+                        .into_any_element(),
                 ),
             ]
-            .into_iter()
-            .map(|(id, label, input)| {
-                Self::field(
-                    id,
-                    label,
-                    Input::new(input).small().w_full().into_any_element(),
-                )
-            })
-            .collect()
         } else {
             Vec::new()
         };
@@ -252,6 +235,7 @@ impl Page {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = profile.id.clone();
+        let checked = profile.clone();
         let edit = profile.clone();
         let remove = profile.clone();
         let name = profile.name.clone();
@@ -264,6 +248,17 @@ impl Page {
         let editing =
             matches!(&self.editor, Some(Editor::Edit(original)) if original.id == profile.id);
         let busy = self.editor.is_some();
+        let checking = matches!(self.check_state(&profile), Some(check::State::Checking));
+        let check_result = match self.check_state(&profile) {
+            Some(check::State::Complete(result)) => Some(match result {
+                Ok(()) => (
+                    crate::i18n::tr!("connections-check-passed").to_owned(),
+                    cx.theme().success,
+                ),
+                Err(error) => (error.message(&profile.target), cx.theme().danger),
+            }),
+            _ => None,
+        };
         let current = default && connections::current(cx).as_ref() == Some(&profile.options());
         el! { #div {
             id: $format!("connection-card-{}", profile.id); test_support;
@@ -294,6 +289,12 @@ impl Page {
                     } [$target],
                 ],
                 #div { id: $format!("connection-actions-{id}"); test_support; flex; items_center; gap_1; flex_shrink_0; } [
+                    #ui::icon_action($format!("connection-check-{}", checked.id), IconName::Activity, $(if checking {
+                        crate::i18n::tr!("connections-checking")
+                    } else { crate::i18n::tr!("connections-check") })) {
+                        disabled: $(busy || checking); loading: checking;
+                        on_click: $cx.listener(move |this, _, _, cx| this.check_connection(&checked, cx));
+                    },
                     #ui::icon_action($format!("connection-select-{id}"), IconName::Check, $(if current {
                         crate::i18n::tr!("connections-in-use")
                     } else { crate::i18n::tr!("connections-use") })) {
@@ -312,14 +313,12 @@ impl Page {
                     },
                 ],
             ],
-            ..$profile.note.map(|note| {
-                let hint = note.clone();
-                el! { #div {
-                id: $format!("connection-note-{}", profile.id); test_support;
-                role: gpui_kit::Role::Label; aria_label: $note.clone();
-                min_w_0; truncate; text_color: $cx.theme().muted_foreground;
-                hoverable_tooltip: $move |window, cx| ui::tooltip::view(hint.clone(), window, cx);
-            } [$note] } }),
+            ..$profile.note.map(|note| ui::feedback(
+                format!("connection-note-{}", profile.id), note, cx.theme().muted_foreground,
+            ).compact()),
+            ..$check_result.map(|(message, color)| ui::feedback(
+                format!("connection-check-result-{}", profile.id), message, color,
+            )),
             ..$editing.then(|| el! { #div {
                 border_t_1; border_color: $cx.theme().border; pt_3; pb_1;
             } [$self.editor_view(cx)] }),

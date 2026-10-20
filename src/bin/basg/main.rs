@@ -12,6 +12,7 @@ mod configuration;
 mod connection;
 mod connections;
 mod conversation;
+mod diagnostics;
 mod elicitation;
 mod history;
 mod http;
@@ -61,6 +62,9 @@ struct Args {
     #[cfg(all(feature = "gui-tests", target_os = "linux"))]
     #[arg(long, hide = true)]
     test_wayland_clipboard: bool,
+    #[cfg(feature = "gui-tests")]
+    #[arg(long, hide = true)]
+    preview_logs: bool,
 }
 
 fn main() -> Result<()> {
@@ -70,11 +74,12 @@ fn main() -> Result<()> {
     if args.test_wayland_clipboard {
         return clipboard::wayland::check();
     }
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
-        )
-        .init();
+    let logs = diagnostics::init_tracing();
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        build = env!("BAS_BUILD_TAG"),
+        "Frontend started"
+    );
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(NETWORK_THREADS)
         .enable_all()
@@ -90,6 +95,7 @@ fn main() -> Result<()> {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            diagnostics::init(logs, cx);
             configuration::init(args.settings_file, cx);
             let profiles = connections::shared(cx);
             let server = match profiles.read(cx).startup_target(args.server) {
@@ -115,6 +121,14 @@ fn main() -> Result<()> {
                 }
             })
             .detach();
+            #[cfg(feature = "gui-tests")]
+            if args.preview_logs {
+                if let Err(error) = diagnostics::window::fixture::open(cx) {
+                    tracing::error!(%error, "cannot open log preview");
+                    cx.quit();
+                }
+                return;
+            }
             #[cfg(feature = "gui-tests")]
             if let Some(
                 panel @ ("settings"

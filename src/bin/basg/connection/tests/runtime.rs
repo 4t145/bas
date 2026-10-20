@@ -6,6 +6,8 @@ async fn failed_snapshot_delivers_history_before_unavailable_without_attaching()
     let updates = collect(&fixture).await;
     assert!(matches!(&updates[..], [
         Update::Stream { state: StreamState::Loading, .. },
+        Update::HistoryProgress { loaded: 256, .. },
+        Update::HistoryProgress { loaded: 300, .. },
         Update::Snapshot { session, events, .. },
         Update::Stream { state: StreamState::Unavailable(message), .. },
     ] if session.runtime.failure.is_some() && events.len() == 300 && message.presentation().contains("disk full")));
