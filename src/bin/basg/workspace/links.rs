@@ -126,7 +126,7 @@ impl Workspace {
             self.current()
                 .and_then(|session| session.cwd.as_deref().map(navigation::groups::normalize))
                 .or_else(|| self.navigation.selected_directory.clone()),
-            self.backend.server.ip().is_loopback(),
+            self.backend.server.is_local() || self.backend.server.is_loopback_tcp(),
         )
     }
 }

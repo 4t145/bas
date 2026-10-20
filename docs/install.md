@@ -96,7 +96,8 @@ make install-bas
 bas
 ```
 
-默认监听 `127.0.0.1:7337`。GUI 和 CLI 默认连接这个地址。
+默认使用同用户本地 IPC，GUI 和 CLI 默认连接 `local`，无需配对。
+TCP 仍可显式开启，连接格式和旧版迁移见 [服务连接类型](connections.md)。
 无需 GUI 时，只安装 bas 即可，守护进程包不引入图形运行库。
 
 源码均已加入 Git 后，也可显式使用包含子模块的本地 Git source：
@@ -368,7 +369,7 @@ systemctl --user start bas.service
 可在 `~/.config/bas/bas.env`（或 `$XDG_CONFIG_HOME/bas/bas.env`）中设置服务环境变量，例如：
 
 ```ini
-BAS_LISTEN=127.0.0.1:7337
+BAS_LISTEN=local
 BAS_HISTORY=8192
 ```
 

@@ -191,7 +191,7 @@ impl Workspace {
     ) -> menus::Builder {
         let owner = cx.entity().downgrade();
         let generation = self.composer.generation;
-        std::rc::Rc::new(move |menu, window, _| {
+        std::rc::Rc::new(move |menu, window, cx| {
             let parent = window.window_handle();
             let rename_owner = owner.clone();
             let rename_directory = directory.clone();
@@ -219,7 +219,7 @@ impl Workspace {
             )
             .item(
                 PopupMenuItem::new(crate::i18n::tr!("draft-discard"))
-                    .icon(IconName::Trash)
+                    .icon(crate::ui::delete_icon(cx))
                     .disabled(disabled)
                     .on_click(move |_, window, cx| {
                         menus::in_parent(parent, window, cx, |window, cx| {

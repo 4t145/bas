@@ -6,13 +6,37 @@ use super::{Notify, Storage, parse_agents};
 fn defaults_are_suitable_for_a_local_daemon() {
     let config = super::Config::default();
 
-    assert!(config.listen.ip().is_loopback());
+    assert_eq!(config.listen, vec![bas::service::Target::Local]);
     assert_eq!(config.notify, Notify::Auto);
     assert_eq!(config.storage, Storage::Localdb);
     assert_eq!(config.localdb_path, None);
     assert_eq!(
         config.agents,
         vec![crate::agent::AgentSpec::embedded().into()]
+    );
+}
+
+#[test]
+fn listeners_default_to_ipc_and_tcp_must_be_selected() {
+    use bas::service::Target;
+
+    let args = crate::clap::Args::try_parse_from(["bas", "--agents", "embedded"])
+        .expect("default arguments");
+    assert_eq!(args.config().unwrap().listen, vec![Target::Local]);
+
+    let args = crate::clap::Args::try_parse_from([
+        "bas",
+        "--agents",
+        "embedded",
+        "--listen",
+        "local",
+        "--listen",
+        "tcp://127.0.0.1:0",
+    ])
+    .expect("multiple listeners");
+    assert_eq!(
+        args.config().unwrap().listen,
+        vec![Target::Local, Target::Tcp("127.0.0.1:0".parse().unwrap())]
     );
 }
 

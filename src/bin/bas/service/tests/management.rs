@@ -5,14 +5,17 @@ fn remote<T>(value: T) -> Request<T> {
     request
         .extensions_mut()
         .insert(tonic::transport::server::TcpConnectInfo {
-            local_addr: Some("127.0.0.1:7337".parse().expect("local address")),
+            local_addr: Some(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                bas::service::DEFAULT_PORT,
+            ))),
             remote_addr: Some("192.0.2.1:12345".parse().expect("remote address")),
         });
     request
 }
 
 #[tokio::test]
-async fn remote_or_unknown_peers_cannot_install_remove_or_authenticate() {
+async fn management_capabilities_do_not_depend_on_peer_transport() {
     let registry = registry(100);
     let service = Service::new(registry.clone());
     for request in [
@@ -28,7 +31,7 @@ async fn remote_or_unknown_peers_cannot_install_remove_or_authenticate() {
             .await
             .err()
             .expect("install denied before acquiring manager");
-        assert_eq!(error.code(), Code::PermissionDenied);
+        assert_eq!(error.code(), Code::Unimplemented);
     }
     assert_eq!(
         service
@@ -38,7 +41,7 @@ async fn remote_or_unknown_peers_cannot_install_remove_or_authenticate() {
             .await
             .expect_err("remove denied")
             .code(),
-        Code::PermissionDenied
+        Code::Unimplemented
     );
     assert_eq!(
         service
@@ -46,7 +49,7 @@ async fn remote_or_unknown_peers_cannot_install_remove_or_authenticate() {
             .await
             .expect_err("auth denied")
             .code(),
-        Code::PermissionDenied
+        Code::InvalidArgument
     );
     registry.shutdown().await;
 }

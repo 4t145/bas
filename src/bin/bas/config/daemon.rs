@@ -1,13 +1,13 @@
-use std::{net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr};
 
-use bas::{config::AgentRegistration, service::DEFAULT_ADDRESS};
+use bas::{config::AgentRegistration, service::Target};
 
 use crate::{
     agent::{AgentSpec, PermissionPolicy},
     session::Limits,
 };
 
-/// Address the gRPC service listens on.
+/// Semicolon-separated transport endpoints the gRPC service listens on.
 pub const LISTEN_ENV: &str = "BAS_LISTEN";
 /// Comma-free, semicolon-separated agent catalog. See [`super::parse_agents`].
 pub const AGENTS_ENV: &str = "BAS_AGENTS";
@@ -81,7 +81,8 @@ pub struct ParseNotifyError {
 /// Daemon configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
-    pub listen: SocketAddr,
+    pub listen: Vec<Target>,
+    pub tls: Option<bas::service::tls::ServerTls>,
     pub notify: Notify,
     pub agents: Vec<AgentRegistration>,
     pub catalog_source: Option<super::CatalogSource>,
@@ -94,9 +95,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            listen: DEFAULT_ADDRESS
-                .parse()
-                .expect("the default listen address is a valid socket address"),
+            listen: vec![Target::Local],
+            tls: None,
             notify: Notify::default(),
             agents: vec![AgentSpec::embedded().into()],
             catalog_source: None,

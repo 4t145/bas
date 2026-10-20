@@ -14,7 +14,9 @@ WatchdogSec=30s
 # localdb is the default. For a system service, configure
 # BAS_LOCALDB_PATH=%S/bas/sessions.sqlite3 and StateDirectory=bas;
 # the deployment must provide a writable state directory for the service user.
-Environment=BAS_LISTEN=127.0.0.1:7337
+Environment=BAS_LISTEN=unix:///run/bas/service.sock
+RuntimeDirectory=bas
+RuntimeDirectoryMode=0700
 Environment=BAS_AGENTS=embedded
 Environment=BAS_LOG_BACKEND=journald
 Environment=BAS_NOTIFY=auto

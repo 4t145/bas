@@ -1,12 +1,11 @@
 use std::{
-    net::SocketAddr,
     num::{NonZeroU64, NonZeroUsize},
     path::PathBuf,
     time::Duration,
 };
 
 use anyhow::{Context, Result};
-use bas::service::DEFAULT_ADDRESS;
+use bas::service::{DEFAULT_TARGET, Target};
 use clap::Parser;
 
 use crate::{
@@ -19,9 +18,18 @@ use crate::{
 #[derive(Clone, Debug, Parser)]
 #[command(name = "bas", version, about, long_about = None)]
 pub struct Args {
-    /// Address the gRPC service listens on.
-    #[arg(long, env = config::LISTEN_ENV, default_value = DEFAULT_ADDRESS, value_name = "ADDR:PORT")]
-    listen: SocketAddr,
+    /// Repeat for multiple endpoints: local, tcp://HOST:PORT, or mtls://HOST:PORT.
+    #[arg(long, env = config::LISTEN_ENV, default_value = DEFAULT_TARGET, value_delimiter = ';', value_name = "TARGET")]
+    listen: Vec<Target>,
+    /// PEM server certificate chain for mtls:// listeners.
+    #[arg(long, requires_all = ["tls_key", "tls_client_ca"])]
+    tls_certificate: Option<PathBuf>,
+    /// PEM server private key (file reference only).
+    #[arg(long, requires_all = ["tls_certificate", "tls_client_ca"])]
+    tls_key: Option<PathBuf>,
+    /// PEM CA bundle trusted to issue client certificates.
+    #[arg(long, requires_all = ["tls_certificate", "tls_key"])]
+    tls_client_ca: Option<PathBuf>,
     /// Agent catalog, for example `embedded;opencode=acp:opencode acp`.
     #[arg(long, env = config::AGENTS_ENV, value_name = "SPEC")]
     agents: Option<String>,
@@ -88,8 +96,27 @@ impl Args {
             self.storage == Storage::Localdb || self.localdb_path.is_none(),
             "--localdb-path requires --storage localdb"
         );
+        let tls = match (&self.tls_certificate, &self.tls_key, &self.tls_client_ca) {
+            (Some(certificate), Some(private_key), Some(client_ca)) => {
+                Some(bas::service::tls::ServerTls {
+                    certificate: certificate.clone(),
+                    private_key: private_key.clone(),
+                    client_ca: client_ca.clone(),
+                })
+            }
+            (None, None, None) => None,
+            _ => anyhow::bail!("mTLS requires --tls-certificate, --tls-key and --tls-client-ca"),
+        };
+        anyhow::ensure!(
+            self.listen
+                .iter()
+                .any(|target| matches!(target, Target::Mtls(_)))
+                == tls.is_some(),
+            "mtls:// listeners require TLS files; TLS files require an mtls:// listener"
+        );
         Ok(Config {
-            listen: self.listen,
+            listen: self.listen.clone(),
+            tls,
             notify: self.notify,
             agents,
             catalog_source,

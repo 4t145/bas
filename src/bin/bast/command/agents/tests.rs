@@ -4,6 +4,18 @@ use serde_json::json;
 use super::parse_input;
 
 #[test]
+fn terminal_authentication_requires_same_machine_ipc() {
+    for value in ["local", "unix:///tmp/bas.sock", "pipe://bas-test"] {
+        let target = value.parse().expect("valid target");
+        assert!(super::require_local_terminal(&target).is_ok(), "{value}");
+    }
+    for value in ["tcp://127.0.0.1:4554", "tcp://192.0.2.1:4554", "[::1]:4554"] {
+        let remote = value.parse().expect("remote target");
+        assert!(super::require_local_terminal(&remote).is_err());
+    }
+}
+
+#[test]
 fn terminal_choices_return_agent_values_and_validate_constraints() {
     let request = parse_request(&json!({
         "mode":"form","requestId":"configure","message":"Project settings",

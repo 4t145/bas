@@ -30,6 +30,7 @@ impl Workspace {
     }
 
     pub(super) fn record_settings_target(&self, cx: &mut Context<Self>) {
+        crate::connections::manage(self.backend.server.clone(), cx);
         cx.update_global::<crate::agents::Changes, _>(|changes, _| {
             changes.target = Some(self.window.handle.window_id());
             changes.select = None;

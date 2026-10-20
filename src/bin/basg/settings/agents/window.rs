@@ -7,7 +7,10 @@ use gpui_kit::{
     size,
 };
 
-struct OpenWindow(WindowHandle<Root>);
+#[derive(Default)]
+struct OpenWindow(
+    std::collections::HashMap<Option<bas::service::tls::ConnectionOptions>, WindowHandle<Root>>,
+);
 impl Global for OpenWindow {}
 
 const WIDTH: f32 = 900.;
@@ -35,7 +38,11 @@ pub(in crate::settings) fn open(
 /// # Errors
 /// Returns a platform error when native window creation fails.
 fn open_inner(agents: Option<Entity<Agents>>, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
-    if let Some(handle) = current(cx)
+    let target = agents.as_ref().map_or_else(
+        || super::selected_target(cx),
+        |agents| agents.read(cx).target(),
+    );
+    if let Some(handle) = current_for(target.clone(), cx)
         && cx.windows().contains(&handle.into())
     {
         cx.defer(move |cx| {
@@ -87,12 +94,21 @@ fn open_inner(agents: Option<Entity<Agents>>, cx: &mut App) -> anyhow::Result<Wi
             cx.new(|cx| theme::window_root(host, window, cx))
         },
     )?;
-    cx.set_global(OpenWindow(handle));
+    if !cx.has_global::<OpenWindow>() {
+        cx.set_global(OpenWindow::default());
+    }
+    cx.update_global::<OpenWindow, _>(|state, _| {
+        state.0.insert(target, handle);
+    });
     Ok(handle)
 }
 
-pub(in crate::settings) fn current(cx: &App) -> Option<WindowHandle<Root>> {
-    cx.try_global::<OpenWindow>().map(|state| state.0)
+pub(super) fn current_for(
+    target: Option<bas::service::tls::ConnectionOptions>,
+    cx: &App,
+) -> Option<WindowHandle<Root>> {
+    cx.try_global::<OpenWindow>()
+        .and_then(|state| state.0.get(&target).copied())
 }
 
 struct Host {

@@ -38,9 +38,9 @@ async fn run() -> Result<()> {
             std::process::exit(code);
         }
     };
-    let mut client = Client::connect_at(args.server)
+    let mut client = Client::connect_options(&args.connection_options()?)
         .await
         .with_context(|| format!("cannot connect to bas at {}; is it running?", args.server))?;
 
-    args.command.run(&mut client, args.server).await
+    args.command.run(&mut client, &args.server).await
 }

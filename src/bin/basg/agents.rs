@@ -14,7 +14,7 @@ mod tests;
 /// Agent changes wake every chat window attached to the same daemon.
 #[derive(Clone, Default)]
 pub(crate) struct Changes {
-    pub server: Option<std::net::SocketAddr>,
+    pub server: Option<bas::service::tls::ConnectionOptions>,
     pub ready: Option<String>,
     pub select: Option<String>,
     pub target: Option<gpui_kit::WindowId>,
@@ -23,11 +23,11 @@ pub(crate) struct Changes {
 impl gpui_kit::Global for Changes {}
 
 pub(crate) fn init(
-    server: std::net::SocketAddr,
+    server: bas::service::tls::ConnectionOptions,
     runtime: tokio::runtime::Handle,
     cx: &mut gpui_kit::App,
 ) {
-    check::init(server, runtime.clone(), cx);
+    check::init(server.clone(), runtime.clone(), cx);
     catalog::init(server, runtime, cx);
     if !cx.has_global::<Changes>() {
         cx.set_global(Changes::default());

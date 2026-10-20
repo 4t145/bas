@@ -1,4 +1,5 @@
-use std::{net::SocketAddr, path::PathBuf};
+use bas::service::Target;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
@@ -6,12 +7,51 @@ use clap::{Parser, Subcommand};
 #[derive(Clone, Debug, Parser)]
 #[command(name = "bast", version, long_about = None)]
 pub struct Args {
-    /// Address of the daemon's gRPC service.
-    #[arg(long, global = true, default_value = bas::service::DEFAULT_ADDRESS)]
-    pub server: SocketAddr,
+    /// Daemon target: local, unix:///path, pipe://NAME, tcp://HOST[:PORT] or mtls://HOST[:PORT].
+    #[arg(long, global = true, env = "BAS_SERVER", default_value = bas::service::DEFAULT_TARGET)]
+    pub server: Target,
+
+    /// PEM server CA bundle; requires an mtls:// target.
+    #[arg(long, global = true, requires_all = ["tls_certificate", "tls_key"])]
+    pub tls_ca: Option<PathBuf>,
+    /// PEM client certificate chain.
+    #[arg(long, global = true, requires_all = ["tls_ca", "tls_key"])]
+    pub tls_certificate: Option<PathBuf>,
+    /// PEM client private key file.
+    #[arg(long, global = true, requires_all = ["tls_ca", "tls_certificate"])]
+    pub tls_key: Option<PathBuf>,
+    /// Expected certificate name/SNI, instead of the target's hostname or IP.
+    #[arg(long, global = true, requires = "tls_ca")]
+    pub tls_server_name: Option<String>,
 
     #[command(subcommand)]
     pub command: Command,
+}
+
+impl Args {
+    /// # Errors
+    /// Rejects incomplete credentials or TLS options on a non-TLS target.
+    pub fn connection_options(
+        &self,
+    ) -> Result<bas::service::tls::ConnectionOptions, bas::service::tls::Error> {
+        use bas::service::tls::{ClientTls, ConnectionOptions, Error};
+        let tls = match (&self.tls_ca, &self.tls_certificate, &self.tls_key) {
+            (Some(ca), Some(certificate), Some(private_key)) => Some(ClientTls {
+                ca: ca.clone(),
+                certificate: certificate.clone(),
+                private_key: private_key.clone(),
+                server_name: self.tls_server_name.clone(),
+            }),
+            (None, None, None) if self.tls_server_name.is_none() => None,
+            _ => return Err(Error::Configuration),
+        };
+        let options = ConnectionOptions {
+            target: self.server.clone(),
+            tls,
+        };
+        options.validate()?;
+        Ok(options)
+    }
 }
 
 /// What to do with the daemon.

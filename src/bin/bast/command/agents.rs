@@ -25,7 +25,7 @@ pub(super) async fn list(client: &mut Client) -> Result<()> {
 pub(super) async fn manage(
     command: crate::clap::Agent,
     client: &mut Client,
-    server: std::net::SocketAddr,
+    server: &bas::service::Target,
 ) -> Result<()> {
     use crate::clap::Agent;
     match command {
@@ -50,7 +50,6 @@ pub(super) async fn manage(
             }
         }
         Agent::Install { id } => {
-            require_local(server)?;
             let mut stream = client
                 .install_agent(pb::InstallAgentRequest { id: id.clone() })
                 .await?
@@ -75,12 +74,10 @@ pub(super) async fn manage(
             );
         }
         Agent::Login { id, method } => {
-            require_local(server)?;
             let spec = spec(client, &id).await?;
-            login(client, &spec, method.as_deref()).await?;
+            login(client, &spec, method.as_deref(), server).await?;
         }
         Agent::Remove { id } => {
-            require_local(server)?;
             client
                 .remove_agent(pb::RemoveAgentRequest { id: id.clone() })
                 .await?;
@@ -100,10 +97,10 @@ fn status(status: bas::management::Status) -> &'static str {
     }
 }
 
-fn require_local(server: std::net::SocketAddr) -> Result<()> {
+fn require_local_terminal(server: &bas::service::Target) -> Result<()> {
     anyhow::ensure!(
-        server.ip().is_loopback(),
-        "Connect to the local daemon to install or authenticate agents"
+        server.is_local(),
+        "Complete terminal authentication on the server host"
     );
     Ok(())
 }
@@ -152,6 +149,7 @@ async fn login(
     client: &mut Client,
     spec: &bas::config::AgentSpec,
     selected: Option<&str>,
+    server: &bas::service::Target,
 ) -> Result<()> {
     let checked = check(client, spec).await?;
     if checked.status() == pb::AgentCheckStatus::Connected {
@@ -233,6 +231,7 @@ async fn login(
                 return Ok(());
             }
             Some(pb::authentication_event::Kind::Terminal(payload)) => {
+                require_local_terminal(server)?;
                 let invocation: bas::authentication::Invocation = payload.decode()?;
                 use std::io::IsTerminal;
                 anyhow::ensure!(

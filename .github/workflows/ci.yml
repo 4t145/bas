@@ -25,8 +25,8 @@ jobs:
         run: nix develop -c cargo clippy --all-targets --locked -- -D warnings
       - name: Test GUI package feature set
         run: nix develop .#gui -c cargo test --features gui --bin basg --locked
-      - name: Test headless desktop
-        run: nix develop .#gui -c cargo test --features gui-tests --bin basg --locked
+      - name: Test headless desktop and combined transport features
+        run: nix develop .#gui -c cargo test --features gui-tests --all-targets --locked
       - name: Test native Wayland clipboard in a private compositor
         run: nix develop .#gui -c nix shell --inputs-from . nixpkgs#sway-unwrapped nixpkgs#python3 -c python3 tests/wayland_clipboard.py
       - name: Lint application targets
@@ -53,6 +53,8 @@ jobs:
         run: cargo build --all-targets --features gui-tests --locked
       - name: Test shared model and configuration
         run: cargo test --lib --locked
+      - name: Test local IPC and explicit TCP
+        run: cargo test --test daemon transport:: --locked
       - name: Test native installation process ownership
         run: cargo test --bin bas management::runtime::process:: --locked
       - name: Test native installation cancellation and shutdown

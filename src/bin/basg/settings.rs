@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use crate::ui::Button;
 use gds_uim::el;
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::{
     App, ClickEvent, Context, Entity, FocusHandle, Focusable, Render, Subscription, TestSupportExt,
     Window,
@@ -15,8 +16,12 @@ use gpui_kit::{
 
 mod agents;
 mod appearance;
+mod connections;
 mod form;
 pub(crate) mod window;
+
+#[cfg(all(test, feature = "gui-tests"))]
+mod tests;
 
 // Keep actions distinct from the ghost navigation items, using upstream state styling.
 fn action_button(id: impl Into<gpui_kit::ElementId>) -> Button {
@@ -52,16 +57,23 @@ fn navigation_button(
 enum Category {
     Appearance,
     Sessions,
+    Connections,
     Agents,
 }
 
 impl Category {
-    const ALL: [Self; 3] = [Self::Appearance, Self::Sessions, Self::Agents];
+    const ALL: [Self; 4] = [
+        Self::Appearance,
+        Self::Sessions,
+        Self::Connections,
+        Self::Agents,
+    ];
 
     fn id(self) -> &'static str {
         match self {
             Self::Appearance => "settings-appearance",
             Self::Sessions => "settings-sessions",
+            Self::Connections => "settings-connections",
             Self::Agents => "settings-agents",
         }
     }
@@ -70,6 +82,7 @@ impl Category {
         match self {
             Self::Appearance => crate::i18n::tr!("settings-appearance"),
             Self::Sessions => crate::i18n::tr!("settings-sessions"),
+            Self::Connections => crate::i18n::tr!("settings-connections"),
             Self::Agents => crate::i18n::tr!("settings-agents"),
         }
     }
@@ -78,6 +91,12 @@ impl Category {
         let query = query.trim().to_lowercase();
         if !query.is_empty() && appearance::AppearancePage::matches_session_query(&query) {
             return Self::Sessions;
+        }
+        if ["connection", "server", "连接", "服务器", "端点"]
+            .iter()
+            .any(|word| query.contains(word))
+        {
+            return Self::Connections;
         }
         let agents = query.split_whitespace().any(|word| {
             matches!(
@@ -109,7 +128,11 @@ pub(crate) struct Settings {
     focus: FocusHandle,
     search: Entity<InputState>,
     appearance: Entity<appearance::AppearancePage>,
+    connections: Entity<connections::Page>,
+    profiles: Entity<crate::connections::Profiles>,
     agents: Entity<agents::Agents>,
+    _agents_subscription: Subscription,
+    connection_message: String,
     category: Category,
     /// Section the sidebar points at inside each page.
     appearance_group: Option<appearance::Group>,
@@ -125,17 +148,29 @@ impl Settings {
         let editor = crate::theme::Editor::current(cx);
         let agents = agents::shared(window, cx);
         let appearance = cx.new(|cx| appearance::AppearancePage::new(editor, window, cx));
+        let profiles = crate::connections::shared(cx);
+        let connections = cx.new(|cx| connections::Page::new(window, cx));
+        let agents_subscription = cx.observe(&agents, Self::on_agents_changed);
         let subscriptions = vec![
             cx.subscribe_in(&search, window, Self::on_search),
             cx.observe(&appearance, |_, _, cx| cx.notify()),
-            cx.observe(&agents, Self::on_agents_changed),
+            cx.observe(&connections, |_, _, cx| cx.notify()),
+            cx.observe(&profiles, |_, _, cx| cx.notify()),
+            cx.observe_global_in::<crate::agents::catalog::Service>(
+                window,
+                Self::on_backend_changed,
+            ),
             cx.observe_global_in::<crate::theme::Appearance>(window, Self::on_appearance_changed),
         ];
         Self {
             focus: cx.focus_handle(),
             search,
             appearance,
+            connections,
+            profiles,
             agents,
+            _agents_subscription: agents_subscription,
+            connection_message: String::new(),
             category: Category::Appearance,
             appearance_group: None,
             agent_section: None,
@@ -155,7 +190,9 @@ impl Settings {
             let query = self.search.read(cx).value().to_string();
             if !query.trim().is_empty() {
                 let category = Category::for_query(&query);
-                if self.category != Category::Agents || category == Category::Sessions {
+                if self.category != Category::Agents
+                    || matches!(category, Category::Sessions | Category::Connections)
+                {
                     self.category = category;
                 }
                 self.expanded.insert(self.category);
@@ -173,6 +210,31 @@ impl Settings {
     }
 
     fn on_agents_changed(&mut self, _: Entity<agents::Agents>, cx: &mut Context<Self>) {
+        cx.notify();
+    }
+
+    fn on_backend_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let agents = agents::shared(window, cx);
+        if agents.entity_id() == self.agents.entity_id() {
+            return;
+        }
+        self.agents = agents;
+        self._agents_subscription = cx.observe(&self.agents, Self::on_agents_changed);
+        self.agent_section = None;
+        cx.notify();
+    }
+
+    fn choose_backend(&mut self, id: &str, cx: &mut Context<Self>) {
+        match self
+            .profiles
+            .update(cx, |profiles, cx| profiles.select(id, cx))
+        {
+            Ok(target) => {
+                self.connection_message.clear();
+                crate::connections::manage(target, cx);
+            }
+            Err(error) => self.connection_message = error,
+        }
         cx.notify();
     }
 
@@ -205,6 +267,14 @@ impl Settings {
                 cx.notify();
             }
             Category::Agents => self.select_agents(None, window, cx),
+            Category::Connections => {
+                self.category = Category::Connections;
+                self.search
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                self.connections
+                    .update(cx, |page, cx| page.focus_page(window, cx));
+                cx.notify();
+            }
         }
     }
 
@@ -227,6 +297,7 @@ impl Settings {
                     .to_owned(),
             ),
             Category::Agents => self.agents.read(cx).settings_path().map(ToOwned::to_owned),
+            Category::Connections => Some(crate::configuration::store(cx).path().to_owned()),
         }
     }
 
@@ -256,11 +327,13 @@ impl Settings {
             },
         );
         let context_id = match self.category {
-            Category::Appearance | Category::Sessions => "settings-frontend-context",
+            Category::Appearance | Category::Sessions | Category::Connections => {
+                "settings-frontend-context"
+            }
             Category::Agents => "settings-backend-context",
         };
         let context = match self.category {
-            Category::Appearance | Category::Sessions => {
+            Category::Appearance | Category::Sessions | Category::Connections => {
                 crate::i18n::tr!("settings-frontend-context").to_owned()
             }
             Category::Agents => {
@@ -285,12 +358,17 @@ impl Settings {
                         role: gpui_kit::Role::Label;
                         aria_label: $context.clone();
                         flex_1; min_w_0; truncate;
-                        @$(self.category == Category::Agents) => {
-                            hoverable_tooltip: $|window, cx| crate::ui::tooltip::view(
-                                crate::i18n::tr!("settings-backend-fixed"), window, cx
-                            );
-                        };
                     } [$context],
+                    ..$bool::then(self.category == Category::Agents, || self.backend_selector(cx)),
+                    ..$bool::then(self.category == Category::Agents, || el! {
+                        #crate::ui::icon_action("settings-open-backend", gpui_kit::assets::IconName::MessageCircle, $crate::i18n::tr!("connections-open-workspace")) {
+                            on_click: $cx.listener(|this, _, _, cx| {
+                                this.connection_message = crate::connections::open_current(cx)
+                                    .err().map(|error| error.to_string()).unwrap_or_default();
+                                cx.notify();
+                            });
+                        }
+                    }),
                     #div {
                         id: "settings-actions"; test_support;
                         flex; items_center; gap_2; flex_shrink_0;
@@ -310,11 +388,64 @@ impl Settings {
                 } [
                     $(match self.category {
                         Category::Appearance | Category::Sessions => crate::i18n::tr!("settings-frontend-description").to_owned(),
-                        Category::Agents => crate::i18n::tr!("settings-backend-description").to_owned(),
+                        Category::Connections => crate::i18n::tr!("connections-description").to_owned(),
+                        Category::Agents => crate::i18n::tr!("connections-switch-description").to_owned(),
                     }),
                 ],
             ]
         }
+    }
+
+    fn backend_selector(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        use crate::connections::presentation;
+        let profiles = self.profiles.read(cx).entries().to_vec();
+        let active = crate::connections::current(cx);
+        let selected = active
+            .as_ref()
+            .and_then(|options| self.profiles.read(cx).matching(options))
+            .cloned();
+        let label = selected
+            .as_ref()
+            .map(|profile| profile.name.clone())
+            .or_else(|| {
+                active
+                    .as_ref()
+                    .map(|options| presentation::endpoint(&options.target))
+            })
+            .unwrap_or_else(|| crate::i18n::tr!("connections-choose").into());
+        let hint = active.as_ref().map_or_else(
+            || label.clone(),
+            |options| format!("{label} · {}", presentation::tooltip(&options.target)),
+        );
+        let owner = cx.entity().downgrade();
+        let button = el! { Button("settings-backend-selector") {
+            small; ghost; min_w_0; max_w: $px(200.);
+            accessibility_label: $hint.clone();
+            tooltip: hint;
+        } [
+            ..$active.as_ref().map(|options| presentation::icon(&options.target).size(px(crate::ui::ICON))),
+            #div { min_w_0; truncate; } [$label],
+            Icon(IconName::ChevronDown) { xsmall; },
+        ] };
+        el! { $button {
+            dropdown_menu: $move |menu, _, _| {
+                let mut menu = crate::ui::menu(menu).check_side(gpui_kit::component::Side::Right);
+                for profile in &profiles {
+                    let owner = owner.clone();
+                    let id = profile.id.clone();
+                    menu = menu.item(presentation::menu_item(profile)
+                        .checked(selected.as_ref().is_some_and(|selected| selected.id == profile.id))
+                        .on_click(move |_, _, cx| {
+                            let _ = owner.update(cx, |this, cx| this.choose_backend(&id, cx));
+                        }));
+                }
+                let owner = owner.clone();
+                menu.separator().item(PopupMenuItem::new(crate::i18n::tr!("connections-manage"))
+                    .on_click(move |_, window, cx| {
+                        let _ = owner.update(cx, |this, cx| this.select_category(Category::Connections, window, cx));
+                    }))
+            };
+        } }.into_any_element()
     }
 
     /// Point the appearance page at one of its sections without hiding the others.
@@ -365,7 +496,7 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Vec<gpui_kit::AnyElement> {
         match category {
-            Category::Sessions => Vec::new(),
+            Category::Sessions | Category::Connections => Vec::new(),
             Category::Appearance => appearance::Group::ALL
                 .into_iter()
                 .map(|item| {
@@ -411,11 +542,11 @@ impl Settings {
         let selected = self.category == category;
         let pointing_at_section = match category {
             Category::Appearance => self.appearance_group.is_some(),
-            Category::Sessions => false,
+            Category::Sessions | Category::Connections => false,
             Category::Agents => self.agent_section.is_some(),
         };
         let sections = self.section_navigation(category, selected, searching, cx);
-        if category == Category::Sessions {
+        if matches!(category, Category::Sessions | Category::Connections) {
             return el! { #div { pl: crate::ui::COMPACT_CONTROL.px; flex; } [
                 #navigation_button($category.id(), $category.title()) {
                     flex_1; selected: selected;
@@ -497,6 +628,12 @@ impl Render for Settings {
         let feedback = match self.category {
             Category::Appearance | Category::Sessions => self.appearance.read(cx).message.clone(),
             Category::Agents => self.agents.read(cx).save_status().unwrap_or_default(),
+            Category::Connections => self.connections.read(cx).status(cx),
+        };
+        let feedback = if self.connection_message.is_empty() {
+            feedback
+        } else {
+            self.connection_message.clone()
         };
         let feedback_hint = feedback.clone();
         el! {
@@ -537,12 +674,12 @@ impl Render for Settings {
                             .into_iter()
                             .map(|category| el! {
                                 #div { flex; flex_col; gap_1; } [
-                                    ..$bool::then(category != Category::Sessions, || el! { #div {
+                                    ..$bool::then(!matches!(category, Category::Sessions | Category::Connections), || el! { #div {
                                         mt_2; text_size: $crate::ui::SMALL;
                                         text_color: $cx.theme().muted_foreground;
                                     } [
                                         $(match category {
-                                            Category::Appearance | Category::Sessions => crate::i18n::tr!("settings-scope-frontend"),
+                                            Category::Appearance | Category::Sessions | Category::Connections => crate::i18n::tr!("settings-scope-frontend"),
                                             Category::Agents => crate::i18n::tr!("settings-scope-backend"),
                                         }),
                                     ] }),
@@ -573,6 +710,7 @@ impl Render for Settings {
                             Category::Appearance => self.appearance.clone().into_any_element(),
                             Category::Sessions => self.appearance.update(cx, |page, cx| page.render_sessions(window, cx)),
                             Category::Agents => self.agents.clone().into_any_element(),
+                            Category::Connections => self.connections.clone().into_any_element(),
                         }),
                     ],
                 ],

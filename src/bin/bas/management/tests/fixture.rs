@@ -85,6 +85,7 @@ pub fn manager_at(directory: &std::path::Path, url: &str) -> Arc<Manager> {
     fs::create_dir_all(&root).expect("manager data directory");
     Arc::new(Manager {
         store: Some(Store::at(directory.join("settings.json"))),
+        profile: uuid::Uuid::new_v4().to_string(),
         root,
         url: format!("{url}/registry.json"),
         client: reqwest::Client::builder()

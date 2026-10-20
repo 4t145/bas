@@ -1,19 +1,19 @@
 //! The Tokio side of the desktop client. GPUI only exchanges owned messages.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use bas::{
     acp,
     model::*,
-    service::{Client, pb},
+    service::{Client, pb, tls::ConnectionOptions as Target},
 };
 use tokio::{
     runtime::Handle,
     sync::{Notify, mpsc},
     task::{AbortHandle, JoinHandle, JoinSet},
 };
-use tonic::{Code, transport::Endpoint};
+use tonic::Code;
 
 mod elicitations;
 mod failure;
@@ -237,19 +237,22 @@ pub(super) struct Connection {
 }
 
 impl Connection {
-    pub fn new(server: SocketAddr, runtime: &Handle) -> (Self, mpsc::Receiver<Update>) {
+    pub fn new(server: Target, runtime: &Handle) -> (Self, mpsc::Receiver<Update>) {
         let (commands, receiver) = mpsc::unbounded_channel();
         let (updates, events) = mpsc::channel(EVENT_CAPACITY);
         let task = runtime.spawn(async move {
-            let endpoint = Endpoint::from_shared(format!("http://{server}"))
-                .expect("a socket address produces a valid HTTP URI")
-                .connect_timeout(REQUEST_TIMEOUT);
-            run(
-                Client::new(endpoint.connect_lazy()).with_payload_limit(),
-                receiver,
-                updates,
-            )
-            .await;
+            let channel = match server.channel_lazy(REQUEST_TIMEOUT) {
+                Ok(channel) => channel,
+                Err(error) => {
+                    let _ = updates
+                        .send(Update::Catalog(Err(Failure::from(anyhow::Error::from(
+                            error,
+                        )))))
+                        .await;
+                    return;
+                }
+            };
+            run(Client::new(channel).with_payload_limit(), receiver, updates).await;
         });
         (
             Self {

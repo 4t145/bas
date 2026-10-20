@@ -57,11 +57,13 @@ clap = { version = "4", features = ["derive", "env"] }
 dirs = "6"
 email_address = { version = "0.2", default-features = false }
 futures = "0.3"
+hyper-util = { version = "0.1", features = ["tokio"] }
 fluent-bundle = { version = "=0.16.0", optional = true }
 unic-langid = { version = "0.9", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "stream"] }
 regex = "1"
 rodio = { version = "=0.21.1", optional = true, default-features = false, features = ["playback", "flac", "mp3", "mp4", "vorbis", "wav", "tracing"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "0.10"
 tar = "0.4"
 flate2 = "1"
@@ -111,8 +113,9 @@ tokio = { version = "1", features = [
 ] }
 tokio-stream = { version = "0.1", features = ["net", "sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-tonic = "0.14"
+tonic = { version = "0.14", features = ["tls-ring"] }
 tonic-prost = "0.14"
+tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
@@ -124,6 +127,8 @@ protoc-bin-vendored = "3"
 tonic-prost-build = "0.14"
 
 [dev-dependencies]
+# MIT/Apache-2.0; runtime-generated test certificates, never fixture keys.
+rcgen = "=0.13.2"
 # Test-only external SQLite writer for lock-contention regression coverage.
 rusqlite = "=0.40.2"
 tempfile = "3"
@@ -142,3 +147,11 @@ png = { version = "0.18", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 process-wrap = { version = "=10.0.1", default-features = false, features = ["tokio1", "job-object", "kill-on-drop"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Pipes",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }

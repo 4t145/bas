@@ -182,6 +182,11 @@ while IFS= read -r request; do
                 printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
             elif [ "$BAS_FIXTURE_MODE" = corrupt_prompt ]; then
                 printf '%s\n' 'not json'
+            elif [ "$BAS_FIXTURE_MODE" = file_read ]; then
+                printf '{"jsonrpc":"2.0","id":"read","method":"fs/read_text_file","params":{"sessionId":"fixture","path":"%s.input"}}\n' "$BAS_FIXTURE_PID"
+                read_response
+                printf '%s\n' "$response" > "$BAS_FIXTURE_PID.file-read"
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$prompt_id"
             elif [ "$BAS_FIXTURE_MODE" = prompt_error ]; then
                 printf '\n   \n'
                 printf '%s\n' '{"jsonrpc":"2.0","method":"fixture/unknown","params":{}}'

@@ -191,7 +191,7 @@ impl Workspace {
             (if state == RowStatus::Unread { 7 } else { 6 }) - usize::from(draft)
                 + usize::from(can_close)
                 + usize::from(stopped),
-            std::rc::Rc::new(move |menu, window, _| {
+            std::rc::Rc::new(move |menu, window, cx| {
                 let parent = window.window_handle();
                 let pin_owner = owner.clone();
                 let bookmark_owner = owner.clone();
@@ -263,11 +263,11 @@ impl Workspace {
                         }),
                     )
                     .icon(if draft {
-                        IconName::Trash
+                        crate::ui::delete_icon(cx)
                     } else if archived {
-                        IconName::ArchiveRestore
+                        Icon::new(IconName::ArchiveRestore)
                     } else {
-                        IconName::Archive
+                        Icon::new(IconName::Archive)
                     })
                     .disabled(disabled)
                     .on_click(move |_, window, cx| {
@@ -330,7 +330,7 @@ impl Workspace {
                             crate::i18n::tr!("session-delete"),
                             Some(Box::new(shortcuts::DeleteThread)),
                         )
-                        .icon(IconName::Trash)
+                        .icon(crate::ui::delete_icon(cx))
                         .disabled(disabled)
                         .on_click(move |_, window, cx| {
                             menus::in_parent(parent, window, cx, |window, cx| {

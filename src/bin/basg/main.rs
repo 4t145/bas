@@ -10,6 +10,7 @@ mod branding;
 mod clipboard;
 mod configuration;
 mod connection;
+mod connections;
 mod conversation;
 mod elicitation;
 mod history;
@@ -21,22 +22,24 @@ mod theme;
 mod ui;
 mod workspace;
 
-use std::{net::SocketAddr, path::PathBuf};
+#[cfg(test)]
+mod tests;
+
+use bas::service::tls::ConnectionOptions as Target;
+use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
 use clap::Parser;
-use gpui_kit::{
-    AppContext, Bounds, WindowBounds, WindowDecorations, WindowKind, WindowOptions, prelude::*, px,
-    size, transparent_black,
-};
+use gpui_kit::{AppContext, prelude::*, transparent_black};
 
 const NETWORK_THREADS: usize = 2;
 
 #[derive(Parser)]
 #[command(name = "basg", about = "BasG 会话与 Agent 工作区")]
 struct Args {
-    #[arg(long, env = "BAS_SERVER", default_value = bas::service::DEFAULT_ADDRESS)]
-    server: SocketAddr,
+    /// Override the saved connection: local, unix:///path, pipe://NAME, or tcp://HOST[:PORT].
+    #[arg(long, env = "BAS_SERVER")]
+    server: Option<Target>,
     /// Default working directory for newly created sessions.
     #[arg(long)]
     cwd: Option<PathBuf>,
@@ -53,7 +56,7 @@ struct Args {
     #[arg(long, env = "BAS_SETTINGS_FILE")]
     settings_file: Option<PathBuf>,
     #[cfg(feature = "gui-tests")]
-    #[arg(long, hide = true, value_parser = ["empty", "startup", "agent-menu", "sample", "layout", "inline-wrap", "connecting", "disconnected", "menus", "files", "images", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "tool-details", "activity-artifacts", "activity-artifacts-collapsed", "thread-feedback", "markdown-actions", "markdown-copy-hover", "subtle-actions", "turn-navigation", "turn-navigation-hover", "turn-navigation-many", "usage", "usage-details", "usage-hover", "agent-hover", "attachment-hint", "app-menu", "thread-menu", "clipboard", "settings", "settings-agents", "agent-onboarding"])]
+    #[arg(long, hide = true, value_parser = ["empty", "startup", "agent-menu", "sample", "layout", "inline-wrap", "connecting", "disconnected", "menus", "files", "images", "picker", "thoughts", "completed", "reply-preview", "attachments", "attachment-preview", "multiline", "multiline-hover", "tool-details", "activity-artifacts", "activity-artifacts-collapsed", "thread-feedback", "markdown-actions", "markdown-copy-hover", "subtle-actions", "turn-navigation", "turn-navigation-hover", "turn-navigation-many", "usage", "usage-details", "usage-hover", "agent-hover", "attachment-hint", "app-menu", "thread-menu", "clipboard", "settings", "settings-agents", "settings-connections", "agent-onboarding"])]
     preview_panel: Option<String>,
     #[cfg(all(feature = "gui-tests", target_os = "linux"))]
     #[arg(long, hide = true)]
@@ -87,9 +90,19 @@ fn main() -> Result<()> {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            agents::init(args.server, handle.clone(), cx);
-            agents::metadata::init(args.server, handle.clone(), cx);
             configuration::init(args.settings_file, cx);
+            let profiles = connections::shared(cx);
+            let server = match profiles.read(cx).startup_target(args.server) {
+                Ok(server) => server,
+                Err(error) => {
+                    tracing::error!(%error, "cannot select frontend connection; refusing to fall back");
+                    cx.quit();
+                    return;
+                }
+            };
+            agents::init(server.clone(), handle.clone(), cx);
+            agents::metadata::init(server.clone(), handle.clone(), cx);
+            connections::init_windows(handle.clone(), cwd.clone(), !args.window, cx);
             theme::init(args.theme_file, cx);
             theme::watch(cx);
             application::init(cx);
@@ -103,11 +116,16 @@ fn main() -> Result<()> {
             })
             .detach();
             #[cfg(feature = "gui-tests")]
-            if let Some(panel @ ("settings" | "settings-agents" | "agent-onboarding")) =
-                args.preview_panel.as_deref()
+            if let Some(
+                panel @ ("settings"
+                | "settings-agents"
+                | "settings-connections"
+                | "agent-onboarding"),
+            ) = args.preview_panel.as_deref()
             {
                 let opened = match panel {
                     "settings-agents" => settings::window::open_agent("embedded", cx),
+                    "settings-connections" => settings::window::open_connections(cx),
                     "agent-onboarding" => settings::window::open_catalog(cx),
                     _ => settings::window::open(cx),
                 };
@@ -117,35 +135,35 @@ fn main() -> Result<()> {
                 }
                 return;
             }
-            let bounds = Bounds::centered(None, workspace::initial_size(!args.window), cx);
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                kind: WindowKind::Normal,
-                titlebar: cfg!(target_os = "macos")
-                    .then(gpui_kit::component::TitleBar::title_bar_options),
-                app_owns_titlebar_drag: cfg!(target_os = "macos"),
-                window_decorations: Some(WindowDecorations::Client),
-                window_background: cx.global::<theme::Appearance>().background,
-                window_min_size: Some(size(px(420.), px(80.))),
-                app_id: Some("org.bas.Gui".into()),
-                ..Default::default()
-            };
-            if let Err(error) = cx.open_window(options, |window, cx| {
+            let options = connections::window_options(!args.window, cx);
+            let opened = cx.open_window(options, |window, cx| {
                 let view = cx.new(|cx| {
                     #[cfg(feature = "gui-tests")]
                     if let Some(preview) = &args.preview_panel {
                         return workspace::Workspace::preview(preview, !args.window, window, cx);
                     }
-                    workspace::Workspace::new(args.server, cwd, !args.window, &handle, window, cx)
+                    workspace::Workspace::new(
+                        server.clone(),
+                        cwd,
+                        !args.window,
+                        &handle,
+                        window,
+                        cx,
+                    )
                 });
+                let view = connections::workspace_view(view, window, cx);
                 cx.new(|cx| {
                     theme::window_root(view, window, cx)
                         .bordered(false)
                         .bg(transparent_black())
                 })
-            }) {
-                tracing::error!(%error, "cannot open the BasG window");
-                cx.quit();
+            });
+            match opened {
+                Ok(window) => connections::register(server, window, cx),
+                Err(error) => {
+                    tracing::error!(%error, "cannot open the BasG window");
+                    cx.quit();
+                }
             }
         });
     Ok(())

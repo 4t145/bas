@@ -6,10 +6,6 @@ pub(in crate::authentication) enum Failure {
     MissingRequest,
     #[error("invalid authentication payload: {0}")]
     InvalidPayload(String),
-    #[error("could not read authentication configuration")]
-    ConfigUnreadable,
-    #[error("authentication registration changed")]
-    RegistrationChanged,
     #[error("authentication input ended before start")]
     InputEnded,
     #[error("authentication input closed")]
@@ -29,8 +25,6 @@ impl Failure {
         match self {
             Self::MissingRequest => crate::i18n::tr!("auth-empty-request").into(),
             Self::InvalidPayload(message) => message.clone(),
-            Self::ConfigUnreadable => crate::i18n::tr!("auth-check-config").into(),
-            Self::RegistrationChanged => crate::i18n::tr!("auth-config-changed").into(),
             Self::InputEnded => crate::i18n::tr!("auth-ended").into(),
             Self::InputClosed => crate::i18n::tr!("auth-connection-closed").into(),
             Self::StreamEnded => crate::i18n::tr!("auth-disconnected").into(),

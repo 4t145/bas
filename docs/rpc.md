@@ -12,6 +12,11 @@ gRPC 保留会话管理与后台运行所需的信封。`AcpPayload.json` 是 UT
 ToolCall、ConfigOption 或 StopReason，也不经过会把 JSON 整数转为 double 的 Struct。
 SDK 已知字段、annotations 和 `_meta` 保留原有语义；对未知字段和无效可选项的处理遵循 SDK。
 
+ACP `fs/read_text_file` 读取服务端所在机器上的 UTF-8 文本文件，不是图片读取接口。
+非 UTF-8 数据会返回 `InvalidParams`，错误消息明确说明文本限制；文件系统错误保留具体原因。
+图片通过 ACP `ImageContent` 内容块传输，是否支持输入图片由智能体声明的 prompt capability 决定。
+TCP、mTLS 和本地 IPC 不改变这两条路径的含义。
+
 | gRPC 接口或字段 | ACP 类型 / Bas 职责 |
 | --- | --- |
 | ListAgents、CreateSession、ListSessions、GetSession、DeleteSession | 后端选择、进程与会话生命周期 |
@@ -144,7 +149,14 @@ GUI 遇到认证需求时重新执行 `CheckAgent`，取得完整初始化响应
 `ListAgentCatalog` 包含未安装、缺失程序和不支持的分发条目，不改变 `ListAgents`
 只列出可启动配置的含义。`catalog_json` 使用公开 `bas::management::Catalog` 的 Serde 类型。
 `refresh=true` 更新官方目录；失败时保留上次有效缓存并返回 warning。
-远端目录不携带完整启动配置，避免暴露用户配置中的环境变量。
+本地与远程目录均携带启动配置；所有已接入客户端共享此 daemon 的执行环境。
+
+`GetAgentConfiguration` 返回 Agent 注册数组、当前 daemon profile 标识和配置段 revision。
+`SaveAgentConfiguration` 必须携带读取时的 profile 和 revision，仅写入 `daemon.agents`。
+profile 不符或启动时使用固定目录时返回 `FAILED_PRECONDITION`；
+配置已被其他客户端修改时返回 `ABORTED`，不会覆盖新值。
+服务端解析托管注册、校验完整目录并保存，再更新运行中的目录。
+服务端路径不是客户端本机路径；接口不支持任意文件或前端配置上传。
 
 `InstallAgent` 从 Registry ID 解析固定版本和平台分发，在 daemon 主机安装并保存启动配置。
 `AgentOperation` 的 phase/message 表示进度；`complete=true` 且 spec_json 非空表示注册已完成。
@@ -152,7 +164,7 @@ GUI 遇到认证需求时重新执行 `CheckAgent`，取得完整初始化响应
 取消后应重新读取目录确定状态。daemon 关闭也会结束安装。
 安装与移除保留现有会话；更新产生独立启动路径。
 
-安装、移除和认证只接受 loopback 连接；显式目录覆盖时托管安装不可用。
+安装、移除、检查和认证支持所有已启用传输；显式目录覆盖时配置编辑和托管安装不可用。
 `AuthenticateAgent` 同样要求配置快照一致，重新握手核对当前广告的 agent 方法 ID，
 在同一连接调用 authenticate 和 session/new。terminal 方法应由客户端在交互终端执行，
 然后重新检查 ACP 连接，不能传给这个 RPC。

@@ -5,28 +5,33 @@ use gpui_kit::{AssetSource, SharedString};
 pub(super) const OUTLINE: &str = "branding/ferris-outline.svg";
 pub(super) const OUTLINE_LIGHT: &str = "branding/ferris-outline-light.svg";
 pub(super) const DIMENSIONAL: &str = "branding/ferris-dimensional.svg";
+pub(super) const SECURE_CONNECTION: &str = "icons/server-lock.svg";
 
-struct BrandingAsset {
+struct EmbeddedAsset {
     path: &'static str,
     bytes: &'static [u8],
 }
 
-const BRANDING: &[BrandingAsset] = &[
-    BrandingAsset {
+const EMBEDDED: &[EmbeddedAsset] = &[
+    EmbeddedAsset {
         path: OUTLINE,
         bytes: include_bytes!("../../../assets/branding/ferris-outline.svg"),
     },
-    BrandingAsset {
+    EmbeddedAsset {
         path: OUTLINE_LIGHT,
         bytes: include_bytes!("../../../assets/branding/ferris-outline-light.svg"),
     },
-    BrandingAsset {
+    EmbeddedAsset {
         path: DIMENSIONAL,
         bytes: include_bytes!("../../../assets/branding/ferris-dimensional.svg"),
     },
-    BrandingAsset {
+    EmbeddedAsset {
         path: "branding/ferris-dimensional-32.svg",
         bytes: include_bytes!("../../../assets/branding/ferris-dimensional-32.svg"),
+    },
+    EmbeddedAsset {
+        path: SECURE_CONNECTION,
+        bytes: include_bytes!("../../../assets/icons/server-lock.svg"),
     },
 ];
 
@@ -43,6 +48,10 @@ gpui_kit::assets::icon_assets!(
         Square,
         Folder,
         FolderPlus,
+        Monitor,
+        Server,
+        Cable,
+        Lock,
         Maximize2,
         Minimize2,
         Send,
@@ -89,7 +98,7 @@ pub(super) struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
-        if let Some(asset) = BRANDING.iter().find(|asset| asset.path == path) {
+        if let Some(asset) = EMBEDDED.iter().find(|asset| asset.path == path) {
             return Ok(Some(Cow::Borrowed(asset.bytes)));
         }
         if let Some(bytes) = ExtraIcons.load(path)? {
@@ -106,7 +115,7 @@ impl AssetSource for Assets {
         paths.extend(ExtraIcons.list(path)?);
         paths.extend(RegistryIcons.list(path)?);
         paths.extend(
-            BRANDING
+            EMBEDDED
                 .iter()
                 .filter(|asset| asset.path.starts_with(path))
                 .map(|asset| asset.path.into()),

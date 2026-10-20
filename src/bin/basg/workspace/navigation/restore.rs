@@ -48,12 +48,12 @@ pub(in crate::workspace) enum Error {
 }
 
 impl Store {
-    pub fn discover(server: SocketAddr) -> Option<Self> {
+    pub fn discover(server: &Target) -> Option<Self> {
         let root = bas::config::paths::state_root()?;
-        Some(Self::open(root.join("basg").join(format!(
-            "{}.json",
-            server.to_string().replace([':', '[', ']'], "_")
-        ))))
+        Some(Self::open(
+            root.join("basg")
+                .join(format!("{}.json", server.state_key().ok()?)),
+        ))
     }
 
     pub fn open(path: PathBuf) -> Self {

@@ -4,16 +4,20 @@ use gpui_kit::{
     AnyElement, App, ClickEvent, CursorStyle, ElementId, InteractiveElement, Interactivity,
     IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window,
     component::{
-        Disableable, Icon, Selectable, Sizable, Size,
-        button::{Button as ComponentButton, ButtonVariant, ButtonVariants},
+        ActiveTheme, Disableable, Icon, Selectable, Sizable, Size,
+        button::{Button as ComponentButton, ButtonCustomVariant, ButtonVariant, ButtonVariants},
     },
 };
+
+#[cfg(all(test, feature = "gui-tests"))]
+mod tests;
 
 #[derive(IntoElement)]
 pub(crate) struct Button {
     inner: ComponentButton,
     disabled: bool,
     loading: bool,
+    destructive: bool,
 }
 
 impl Button {
@@ -22,6 +26,7 @@ impl Button {
             inner: ComponentButton::new(id).line_height(gpui_kit::relative(1.)),
             disabled: false,
             loading: false,
+            destructive: false,
         }
     }
 
@@ -58,6 +63,11 @@ impl Button {
         self
     }
 
+    pub(crate) fn destructive(mut self, destructive: bool) -> Self {
+        self.destructive = destructive;
+        self
+    }
+
     pub(crate) fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -66,7 +76,15 @@ impl Button {
         self
     }
 
-    pub(crate) fn into_component(mut self) -> ComponentButton {
+    fn into_component(mut self, cx: &App) -> ComponentButton {
+        if self.destructive {
+            self.inner = self.inner.custom(
+                ButtonCustomVariant::new(cx)
+                    .foreground(cx.theme().danger)
+                    .hover(cx.theme().danger.opacity(0.12))
+                    .active(cx.theme().danger.opacity(0.2)),
+            );
+        }
         // Explicit styles (e.g. passive status icons) win only while enabled.
         let cursor = if self.disabled || self.loading {
             CursorStyle::Arrow
@@ -137,6 +155,6 @@ impl gpui_kit::component::menu::DropdownMenu for Button {}
 
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        self.into_component().render(window, cx)
+        self.into_component(cx).render(window, cx)
     }
 }

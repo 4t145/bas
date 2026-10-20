@@ -29,19 +29,62 @@ fn catalog(entries: Vec<Entry>) -> Catalog {
     }
 }
 
-fn address(port: u16) -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], port))
+fn address(port: u16) -> Target {
+    bas::service::Target::from(std::net::SocketAddr::from(([127, 0, 0, 1], port))).into()
+}
+
+#[gpui_kit::test]
+fn ipc_and_tcp_metadata_have_distinct_cache_entries(cx: &mut TestAppContext) {
+    let secure = |identity: &str| bas::service::tls::ConnectionOptions {
+        target: "mtls://same-server:7338".parse().expect("target"),
+        tls: Some(bas::service::tls::ClientTls {
+            ca: "/certs/ca.pem".into(),
+            certificate: format!("/certs/{identity}.pem").into(),
+            private_key: format!("/certs/{identity}.key").into(),
+            server_name: None,
+        }),
+    };
+    let targets = [
+        bas::service::Target::Local.into(),
+        bas::service::Target::Unix("/tmp/first.sock".into()).into(),
+        bas::service::Target::Unix("/tmp/second.sock".into()).into(),
+        bas::service::Target::Pipe("bas-test".into()).into(),
+        address(bas::service::DEFAULT_PORT),
+        secure("first"),
+        secure("second"),
+    ];
+    cx.update(|cx| {
+        for (index, target) in targets.iter().enumerate() {
+            for_test(
+                target.clone(),
+                &catalog(vec![entry(
+                    "agent",
+                    Source::Registry,
+                    &format!("{index}.svg"),
+                    None,
+                )]),
+                cx,
+            );
+        }
+        let shared = entity(cx).expect("shared metadata");
+        for (index, target) in targets.iter().enumerate() {
+            assert_eq!(
+                shared.read(cx).icon(target, "agent"),
+                Some(format!("{index}.svg")),
+            );
+        }
+    });
 }
 
 #[gpui_kit::test]
 fn metadata_is_shared_but_isolated_by_server_and_retains_removed_thread_artwork(
     cx: &mut TestAppContext,
 ) {
-    let first = address(7337);
-    let second = address(7338);
+    let first = address(bas::service::DEFAULT_PORT);
+    let second = address(bas::service::DEFAULT_PORT.wrapping_add(1));
     cx.update(|cx| {
         for_test(
-            first,
+            first.clone(),
             &catalog(vec![entry(
                 "same-agent",
                 Source::Registry,
@@ -54,7 +97,7 @@ fn metadata_is_shared_but_isolated_by_server_and_retains_removed_thread_artwork(
     let shared = cx.update(|cx| entity(cx).expect("shared metadata"));
     cx.update(|cx| {
         for_test(
-            second,
+            second.clone(),
             &catalog(vec![entry(
                 "same-agent",
                 Source::Registry,
@@ -69,21 +112,21 @@ fn metadata_is_shared_but_isolated_by_server_and_retains_removed_thread_artwork(
         );
         let metadata = shared.read(cx);
         assert_eq!(
-            metadata.icon(first, "same-agent").as_deref(),
+            metadata.icon(&first, "same-agent").as_deref(),
             Some("first.svg")
         );
         assert_eq!(
-            metadata.icon(second, "same-agent").as_deref(),
+            metadata.icon(&second, "same-agent").as_deref(),
             Some("second.svg")
         );
         assert_eq!(
-            metadata.icon(first, "embedded").as_deref(),
+            metadata.icon(&first, "embedded").as_deref(),
             Some(crate::assets::OUTLINE)
         );
-        assert!(metadata.icon(first, "old-unknown").is_none());
-        publish(first, &catalog(Vec::new()), cx);
+        assert!(metadata.icon(&first, "old-unknown").is_none());
+        publish(first.clone(), &catalog(Vec::new()), cx);
         assert_eq!(
-            shared.read(cx).icon(first, "same-agent").as_deref(),
+            shared.read(cx).icon(&first, "same-agent").as_deref(),
             Some("first.svg")
         );
     });
@@ -93,10 +136,10 @@ fn metadata_is_shared_but_isolated_by_server_and_retains_removed_thread_artwork(
 fn pending_catalog_task_survives_initialization_and_failure_preserves_loaded_icons(
     cx: &mut TestAppContext,
 ) {
-    let server = address(7337);
+    let server = address(bas::service::DEFAULT_PORT);
     cx.update(|cx| {
         for_test(
-            server,
+            server.clone(),
             &catalog(vec![entry("pi-acp", Source::Registry, "old.svg", None)]),
             cx,
         )
@@ -110,7 +153,7 @@ fn pending_catalog_task_survives_initialization_and_failure_preserves_loaded_ico
             .expect("server state")
             .loaded = false;
         metadata.begin_request(
-            server,
+            server.clone(),
             async move {
                 receive
                     .await
@@ -118,7 +161,7 @@ fn pending_catalog_task_survives_initialization_and_failure_preserves_loaded_ico
             },
             cx,
         );
-        metadata.ensure(server, cx);
+        metadata.ensure(server.clone(), cx);
         assert!(
             !metadata.servers[&server].queued,
             "another window must not queue a duplicate initial request"
@@ -135,14 +178,14 @@ fn pending_catalog_task_survives_initialization_and_failure_preserves_loaded_ico
     cx.run_until_parked();
     cx.update(|cx| {
         assert_eq!(
-            shared.read(cx).icon(server, "pi-acp").as_deref(),
+            shared.read(cx).icon(&server, "pi-acp").as_deref(),
             Some("new.svg")
         );
         assert!(!shared.read(cx).servers[&server].requested);
         assert!(shared.read(cx).servers[&server].task.is_none());
         shared.update(cx, |metadata, cx| {
             metadata.begin_request(
-                server,
+                server.clone(),
                 std::future::ready(Err("fixture offline".into())),
                 cx,
             )
@@ -151,7 +194,7 @@ fn pending_catalog_task_survives_initialization_and_failure_preserves_loaded_ico
     cx.run_until_parked();
     cx.update(|cx| {
         assert_eq!(
-            shared.read(cx).icon(server, "pi-acp").as_deref(),
+            shared.read(cx).icon(&server, "pi-acp").as_deref(),
             Some("new.svg")
         )
     });

@@ -59,20 +59,6 @@ fn catalog(path: std::path::PathBuf) -> Catalog {
 }
 
 #[test]
-fn local_settings_must_match_the_daemon_file() {
-    let directory = tempfile::tempdir().expect("fixture directory");
-    let path = directory.path().join("settings.json");
-    let mut catalog = catalog(path.clone());
-    assert!(settings_match(&catalog, &path));
-    assert!(!settings_match(
-        &catalog,
-        &directory.path().join("other.json")
-    ));
-    catalog.settings_path = None;
-    assert!(!settings_match(&catalog, &path));
-}
-
-#[test]
 fn registry_search_matches_names_descriptions_and_ids() {
     let catalog = catalog("/fixture/settings.json".into());
     assert!(matches_query(&catalog.entries[0], "CODEX acp"));

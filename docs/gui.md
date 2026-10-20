@@ -165,7 +165,8 @@ Agent 提供 Form 时显示字段、默认值与校验错误；提供 URL 时展
 以分隔线区分，菜单项不加省略号。菜单入口复用现有会话、工作区和会话管理操作。
 菜单沿用 UI 字体与主题选中态；右侧快捷键提示来自实际注册的按键绑定，不是静态文字。
 应用内 `Ctrl+,` 打开设置、`Ctrl+Q` 打开退出确认（macOS 使用 `Cmd`），独立设置窗口中也有效。
-关于窗口使用 96px 的 v4 拟物彩色 logo，与桌面启动器的风格一致。
+关于窗口使用 96px 的 v4 拟物彩色 logo，与桌面启动器的风格一致，
+并显示应用版本和 build tag。Nix 安装版的标识基于源码快照，详见 [构建标识说明](build-tags.md)。
 展开窗口按窗口管理器能力提供最小化、最大化／还原和关闭按钮；macOS 使用原生信号灯。
 Wayland 下不显示合成器未提供的最小化、最大化操作，小窗切换仍是另一个操作。
 关闭窗口不停止 daemon；“查看更新”打开项目发布页面供手动检查，不会自动下载或安装。
@@ -180,7 +181,7 @@ Linux / NixOS 可在仓库根目录安装到当前用户的 Nix profile：
 
 ```sh
 make install-basg
-basg --server 127.0.0.1:7337 --cwd /path/to/project
+basg --server local --cwd /path/to/project
 # 完整窗口
 basg --window
 ```
@@ -231,7 +232,7 @@ GUI 与 daemon 独立运行，关闭 GUI 不会停止 daemon 或后台 Agent。
 
 ```sh
 nix develop .#gui -c cargo run --features gui --bin basg -- \
-  --server 127.0.0.1:7337 --cwd /path/to/project
+  --server local --cwd /path/to/project
 
 # --window 直接进入窗口模式；--compact 是默认最小模式的显式写法
 nix develop .#gui -c cargo run --features gui --bin basg -- --window
@@ -833,3 +834,7 @@ nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-pane
 nix develop .#gui -c cargo run --features gui-tests --bin basg -- --preview-panel reply-preview
 # 加 --window 查看完整窗口布局
 ```
+
+连接设置页可使用 `--preview-panel settings-connections` 直接打开；它是真实设置页，
+不是固定会话数据预览。视觉验收时请传入专用的 `--settings-file` 和隔离测试服务，
+避免修改日常配置。连接列表、添加及编辑状态应同时检查 960px 和 720px 的窗口宽度。

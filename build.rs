@@ -6,7 +6,10 @@
 
 use std::path::PathBuf;
 
+mod build_metadata;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    build_metadata::emit()?;
     let protoc = protoc_bin_vendored::protoc_bin_path()?;
     let protoc_include = protoc_bin_vendored::include_path()?;
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);

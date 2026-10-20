@@ -24,26 +24,18 @@ impl Workspace {
             gds_uim::el! {
                 Button("agent-authenticate") {
                     xsmall;
-                    label: $(if self.backend.server.ip().is_loopback() {
-                        crate::i18n::tr!("auth-action")
-                    } else {
-                        crate::i18n::tr!("auth-instructions")
-                    });
+                    label: $crate::i18n::tr!("auth-action");
                     on_click: $cx.listener(Self::on_workspace_auth_open);
                 }
             },
-            if self.backend.server.ip().is_loopback() {
-                crate::i18n::tr!("auth-action")
-            } else {
-                crate::i18n::tr!("auth-view-instructions")
-            },
+            crate::i18n::tr!("auth-action"),
         )
         .into_any_element()
     }
 
     pub(in crate::workspace) fn authentication_hint(&self) -> Option<String> {
         self.selected.authentication.required.as_ref().map(|agent| {
-            if self.backend.server.ip().is_loopback() {
+            if self.backend.server.is_local() {
                 crate::i18n::tr!("auth-local-help", agent = (agent).to_string())
             } else {
                 crate::i18n::tr!(
@@ -66,24 +58,13 @@ impl Workspace {
         self.close_reply_preview(window, cx);
         self.close_menu(window, cx);
         self.record_settings_target(cx);
-        let result = if self.backend.server.ip().is_loopback() {
+        let result = {
             if cx.try_global::<crate::agents::check::Service>().is_none() {
                 crate::settings::window::open_agent(&agent, cx).map(|_| ())
             } else {
                 self.load_authentication_panel(window, cx);
                 Ok(())
             }
-        } else {
-            crate::application::open_message(
-                crate::i18n::tr!("auth-remote-title"),
-                &crate::i18n::tr!(
-                    "auth-remote-help",
-                    agent = agent.as_str(),
-                    server = self.backend.server.to_string()
-                ),
-                cx,
-            )
-            .map(|_| ())
         };
         if let Err(error) = result {
             self.selected.error = Some(crate::i18n::tr!(
@@ -102,18 +83,20 @@ impl Workspace {
         let Some(agent) = self.selected.authentication.required.clone() else {
             return;
         };
-        if !self.backend.server.ip().is_loopback()
-            || self.selected.authentication.panel.is_some()
+        if self.selected.authentication.panel.is_some()
             || self.selected.authentication.load.is_some()
         {
             return;
         }
-        let Some(catalog) = cx.try_global::<crate::agents::catalog::Service>().cloned() else {
+        let Some(runtime) = cx
+            .try_global::<crate::agents::catalog::Service>()
+            .map(|service| service.runtime().clone())
+        else {
             return;
         };
-        let Some(service) = cx.try_global::<crate::agents::check::Service>().cloned() else {
-            return;
-        };
+        let catalog =
+            crate::agents::catalog::Service::new(self.backend.server.clone(), runtime.clone());
+        let service = crate::agents::check::Service::new(self.backend.server.clone(), runtime);
         let path = crate::configuration::store(cx).path().to_owned();
         let epoch = self.selected.epoch;
         self.window.output_open = true;
@@ -150,6 +133,7 @@ impl Workspace {
                                 status,
                                 path,
                                 window.window_handle(),
+                                Some(service.clone()),
                             )
                         });
                         let expected = agent.clone();

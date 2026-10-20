@@ -1,6 +1,6 @@
 //! Process tests for configuration selection and graceful shutdown with live RPCs.
 
-use bas::service::{Client, pb};
+use bas::service::{Client, Target, pb};
 use std::{process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines},
@@ -8,6 +8,14 @@ use tokio::{
 };
 
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+#[cfg(any(unix, windows))]
+#[path = "daemon/transport.rs"]
+mod transport;
+
+#[cfg(unix)]
+#[path = "daemon/tls.rs"]
+mod tls;
 
 #[cfg(unix)]
 #[path = "daemon/archive.rs"]
@@ -60,8 +68,7 @@ struct Daemon {
     child: Child,
     _logs: Lines<BufReader<ChildStdout>>,
     startup_logs: Vec<String>,
-    #[cfg(unix)]
-    address: std::net::SocketAddr,
+    address: Target,
     client: Client,
 }
 
@@ -93,20 +100,19 @@ impl Daemon {
                         .next()
                         .expect("address value")
                         .parse()
-                        .expect("socket address");
+                        .expect("connection target");
                 }
             }
         })
         .await
         .expect("daemon becomes ready");
-        let client = Client::connect_at(address)
+        let client = Client::connect_target(&address)
             .await
             .expect("connect to daemon");
         Self {
             child,
             _logs: logs,
             startup_logs,
-            #[cfg(unix)]
             address,
             client,
         }
@@ -128,6 +134,11 @@ impl Daemon {
             .expect("shutdown is bounded")
             .expect("wait for daemon");
         assert!(status.success(), "daemon exit: {status}");
+    }
+
+    #[cfg(windows)]
+    async fn stop(&mut self) {
+        self.child.kill().await.expect("stop daemon");
     }
 }
 

@@ -4,6 +4,7 @@ use gpui_kit::{assets::IconName, component::button::ButtonCustomVariant};
 impl Agents {
     fn can_remove(&self, registration: &AgentRegistration, cx: &App) -> bool {
         self.registry.editable()
+            && self.configuration_task.is_none()
             && !self.dirty(cx)
             && !self.operations.values().any(|operation| operation.busy)
             && self
@@ -13,7 +14,7 @@ impl Agents {
             && registration
                 .as_custom()
                 .is_none_or(|spec| spec.kind != Kind::Embedded)
-            && (registration.managed().is_none() || self.managed_allowed(cx))
+            && (registration.managed().is_none() || self.catalog_service.is_some())
     }
 
     pub(super) fn remove_button(&self, id: &str, cx: &mut Context<Self>) -> Button {
@@ -78,17 +79,19 @@ impl Agents {
             return;
         }
         // Confirm the saved identity again; never remove a replacement with the same ID.
-        match self.store.load() {
-            Ok(document) if document.settings.daemon.agents.contains(&registration) => {}
-            Ok(_) => {
-                self.message = DraftError::Changed.to_string();
-                cx.notify();
-                return;
-            }
-            Err(error) => {
-                self.message = error.to_string();
-                cx.notify();
-                return;
+        if self.catalog_service.is_none() {
+            match self.store.load() {
+                Ok(document) if document.settings.daemon.agents.contains(&registration) => {}
+                Ok(_) => {
+                    self.message = DraftError::Changed.to_string();
+                    cx.notify();
+                    return;
+                }
+                Err(error) => {
+                    self.message = error.to_string();
+                    cx.notify();
+                    return;
+                }
             }
         }
         self.saved = None;

@@ -7,6 +7,7 @@ use super::{navigation as workspace_navigation, *};
 mod approval;
 mod archive;
 mod composer_queue;
+mod connections;
 mod directories;
 mod history;
 mod interruption;
@@ -55,7 +56,7 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
             Workspace::with_connection(
                 connection,
                 events,
-                "127.0.0.1:7337".parse().expect("test address"),
+                "127.0.0.1".parse().expect("test address"),
                 PathBuf::from("/tmp"),
                 false,
                 window,
@@ -77,7 +78,8 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
             )
         });
         view = Some(workspace.clone());
-        Root::new(workspace, window, cx)
+        let host = crate::connections::workspace_view(workspace, window, cx);
+        Root::new(host, window, cx)
     });
     let Command::Create(initial_create) = receiver.try_recv().expect("eager initialization") else {
         panic!("expected Create");

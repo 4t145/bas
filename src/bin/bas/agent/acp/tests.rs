@@ -18,6 +18,8 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(unix)]
 mod elicitation;
 #[cfg(unix)]
+mod files;
+#[cfg(unix)]
 mod fixture;
 #[cfg(unix)]
 mod history;

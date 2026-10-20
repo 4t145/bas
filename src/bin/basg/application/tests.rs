@@ -10,6 +10,23 @@ fn init(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn about_renders_explicit_version_and_build_tag(cx: &mut TestAppContext) {
+    init(cx);
+    let about = cx.update(|cx| open_about(cx).expect("about"));
+    cx.update_window(about.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let version = crate::i18n::tr!("app-version", version = env!("CARGO_PKG_VERSION"));
+        let tag = crate::i18n::tr!("app-build-tag", tag = env!("BAS_BUILD_TAG"));
+        assert!(window.find("about-version").visible());
+        assert_eq!(window.find("about-version").label(), Some(version.as_str()));
+        assert!(window.find("about-build-tag").visible());
+        assert_eq!(window.find("about-build-tag").label(), Some(tag.as_str()));
+        assert!(window.find("about-close").visible());
+    })
+    .expect("render build identity");
+}
+
+#[gpui_kit::test]
 fn quit_can_be_cancelled_and_reopened_without_a_workspace(cx: &mut TestAppContext) {
     init(cx);
     let about = cx.update(|cx| open_about(cx).expect("independent about"));

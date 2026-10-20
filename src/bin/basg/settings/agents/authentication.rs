@@ -41,7 +41,7 @@ impl Agents {
                     .saved
                     .as_ref()
                     .is_some_and(|saved| saved == &check.spec)
-                    && super::window::current(cx)
+                    && super::window::current_for(self.target(), cx)
                         .is_some_and(|handle| cx.windows().contains(&handle.into()));
                 match page {
                     super::Page::Onboarding => added_here,
@@ -60,6 +60,7 @@ impl Agents {
                     status.clone(),
                     self.store.path().to_owned(),
                     window.window_handle(),
+                    self.check_service.clone(),
                 )
             });
             let expected = spec.clone();
@@ -122,7 +123,7 @@ impl Agents {
             }
             .into_any_element();
         }
-        let editable = !self.dirty(cx) && self.registry.editable();
+        let editable = !self.dirty(cx) && self.catalog_service.is_some();
         gds_uim::el! {
             #div {
                 id: $format!("agents-authentication-{index}");

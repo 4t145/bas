@@ -1,13 +1,13 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap, HashSet},
-    net::SocketAddr,
     ops::Range,
     path::PathBuf,
     rc::Rc,
 };
 
 use bas::model::{SessionId, SessionMeta};
+use bas::service::tls::ConnectionOptions as Target;
 use gpui_kit::{
     AnyWindowHandle, App, Context, Entity, FollowMode, ListState, Pixels, Size, Subscription, Task,
     Window,
@@ -30,6 +30,7 @@ use super::{
 /// Window presentation and popups, not the lifetime of a selected thread.
 pub(super) struct WindowState {
     pub(super) handle: AnyWindowHandle,
+    pub(super) presented: bool,
     pub(super) menu: Option<menus::OpenMenu>,
     pub(super) usage_details: Option<SessionId>,
     pub(super) reply_preview: Option<reply::Preview>,
@@ -46,6 +47,7 @@ impl WindowState {
     pub(super) fn new(handle: AnyWindowHandle, compact: bool) -> Self {
         Self {
             handle,
+            presented: true,
             menu: None,
             usage_details: None,
             reply_preview: None,
@@ -63,7 +65,7 @@ impl WindowState {
 /// One daemon connection, including the task delivering its updates.
 pub(super) struct BackendState {
     pub(super) connection: Connection,
-    pub(super) server: SocketAddr,
+    pub(super) server: Target,
     pub(super) foreground: Option<SessionId>,
     pub(super) agents: Vec<AgentSummary>,
     pub(super) metadata: Option<Entity<crate::agents::metadata::Metadata>>,
@@ -75,7 +77,7 @@ pub(super) struct BackendState {
 impl BackendState {
     pub(super) fn new(
         connection: Connection,
-        server: SocketAddr,
+        server: Target,
         metadata: Option<Entity<crate::agents::metadata::Metadata>>,
         events: Task<()>,
     ) -> Self {

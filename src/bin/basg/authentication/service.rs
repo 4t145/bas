@@ -158,12 +158,6 @@ async fn run(
     let mut client = check::verified_client(service.address(), &path)
         .await
         .map_err(Failure::External)?;
-    let saved = bas::config::Store::at(path)
-        .load()
-        .map_err(|_| Failure::ConfigUnreadable)?;
-    if !matches_registration(&saved.settings.daemon.agents, &spec) {
-        return Err(Failure::RegistrationChanged);
-    }
     let request = start_input(&spec, &method)?;
     let (send, receive) = mpsc::channel(16);
     send.send(request).await.map_err(|_| Failure::InputEnded)?;
@@ -186,22 +180,6 @@ async fn run(
             }
         }
     }
-}
-
-pub(super) fn matches_registration(
-    registrations: &[bas::config::AgentRegistration],
-    spec: &AgentSpec,
-) -> bool {
-    let mut matching = registrations
-        .iter()
-        .filter(|registration| registration.id() == &spec.id);
-    let Some(registration) = matching.next() else {
-        return false;
-    };
-    matching.next().is_none()
-        && registration
-            .resolve()
-            .is_ok_and(|resolved| resolved == *spec)
 }
 
 pub(super) fn terminal(

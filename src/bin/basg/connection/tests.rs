@@ -95,6 +95,20 @@ struct Service {
 
 #[tonic::async_trait]
 impl Bas for Service {
+    async fn get_agent_configuration(
+        &self,
+        _: Request<pb::GetAgentConfigurationRequest>,
+    ) -> Result<Response<pb::AgentConfiguration>, Status> {
+        Err(Status::unimplemented("unrelated agent configuration"))
+    }
+
+    async fn save_agent_configuration(
+        &self,
+        _: Request<pb::SaveAgentConfigurationRequest>,
+    ) -> Result<Response<pb::AgentConfiguration>, Status> {
+        Err(Status::unimplemented("unrelated agent configuration"))
+    }
+
     async fn logout_agent(
         &self,
         _: Request<pb::LogoutAgentRequest>,

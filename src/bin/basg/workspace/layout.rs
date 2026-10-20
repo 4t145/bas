@@ -40,6 +40,9 @@ impl Workspace {
     }
 
     pub(super) fn resize_window(&mut self, window: &mut Window, cx: &App) {
+        if !self.window.presented {
+            return;
+        }
         let command_count = self
             .command_candidates(cx)
             .len()
@@ -98,11 +101,12 @@ impl Workspace {
         if window.bounds().size != size {
             window.resize(size);
         }
-        window.set_window_title(if self.window.compact {
+        let title = if self.window.compact {
             crate::i18n::tr!("app-quick-input")
         } else {
             "BasG"
-        });
+        };
+        window.set_window_title(&format!("{title} — {}", self.backend.server));
     }
 
     pub(super) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {

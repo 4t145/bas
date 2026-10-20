@@ -312,7 +312,8 @@ pub trait Host: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Backend`] when the path cannot be read.
+    /// Returns [`Error::Acp`] for non-UTF-8 data and [`Error::Backend`] when the
+    /// path cannot be read.
     async fn read_text_file(&self, request: FileReadRequest) -> Result<String, Error>;
 
     /// Writes a UTF-8 file on the backend's behalf.
@@ -391,6 +392,13 @@ impl Host for LocalHost {
         let content = tokio::fs::read_to_string(&request.path)
             .await
             .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::InvalidData {
+                    let mut response = acp::Error::invalid_params();
+                    response.message =
+                        "fs/read_text_file only supports UTF-8 text, not images or other binary files"
+                            .into();
+                    return Error::Acp(response);
+                }
                 Error::with_source(
                     "host",
                     format!("cannot read {}", request.path.display()),

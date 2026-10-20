@@ -23,7 +23,7 @@ impl Agents {
 
     fn can_logout(&self, spec: &AgentSpec, cx: &App) -> bool {
         spec.kind == Kind::Acp
-            && self.registry.verified_local()
+            && self.catalog_service.is_some()
             && !self.dirty(cx)
             && !self.logging_out(spec)
             && !self.status(spec).is_some_and(Status::busy)
@@ -58,7 +58,7 @@ impl Agents {
         if !self.can_logout(&spec, cx) {
             return;
         }
-        let Some(service) = cx.try_global::<catalog::Service>().cloned() else {
+        let Some(service) = self.catalog_service.clone() else {
             return;
         };
         let request = service.logout(spec.clone(), self.store.path().to_owned());

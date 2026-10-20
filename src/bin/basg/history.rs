@@ -2,7 +2,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
-    net::SocketAddr,
     path::PathBuf,
     rc::Rc,
 };
@@ -30,7 +29,7 @@ pub(crate) type OpenSession = Rc<dyn Fn(SessionSnapshot, &mut App) -> bool>;
 
 #[derive(Clone)]
 pub(crate) struct OpenRequest {
-    pub server: SocketAddr,
+    pub server: bas::service::tls::ConnectionOptions,
     pub agents: Vec<AgentSummary>,
     pub agent: Option<String>,
     pub cwd: Option<PathBuf>,
@@ -66,7 +65,7 @@ enum Operation {
 }
 
 pub(crate) struct Browser {
-    server: SocketAddr,
+    server: bas::service::tls::ConnectionOptions,
     connection: Connection,
     agents: Vec<AgentSummary>,
     agent: Option<String>,

@@ -75,6 +75,24 @@ impl Service {
 
 #[tonic::async_trait]
 impl Bas for Service {
+    async fn get_agent_configuration(
+        &self,
+        _request: Request<pb::GetAgentConfigurationRequest>,
+    ) -> Result<Response<pb::AgentConfiguration>, Status> {
+        Ok(Response::new(self.manager()?.configuration()?))
+    }
+
+    async fn save_agent_configuration(
+        &self,
+        request: Request<pb::SaveAgentConfigurationRequest>,
+    ) -> Result<Response<pb::AgentConfiguration>, Status> {
+        Ok(Response::new(
+            self.manager()?
+                .save_configuration(request.into_inner(), &self.registry)
+                .await?,
+        ))
+    }
+
     type AuthenticateAgentInteractiveStream =
         Pin<Box<dyn Stream<Item = Result<pb::AuthenticationEvent, Status>> + Send + 'static>>;
 
@@ -82,7 +100,6 @@ impl Bas for Service {
         &self,
         request: Request<tonic::Streaming<pb::AuthenticationInput>>,
     ) -> Result<Response<Self::AuthenticateAgentInteractiveStream>, Status> {
-        local_management(&request)?;
         let mut input = request.into_inner();
         let first = tokio::time::timeout(std::time::Duration::from_secs(30), input.message())
             .await
@@ -174,19 +191,10 @@ impl Bas for Service {
     ) -> Result<Response<pb::ListAgentCatalogResponse>, Status> {
         let manager = self.manager()?;
         let registrations = self.registry.catalog().registrations().cloned().collect();
-        let local = request
-            .remote_addr()
-            .is_some_and(|address| address.ip().is_loopback());
-        let mut catalog = manager
+        let catalog = manager
             .catalog(registrations, request.into_inner().refresh)
             .await
             .map_err(|error| Status::unavailable(error.to_string()))?;
-        if !local {
-            catalog.can_install = false;
-            for entry in &mut catalog.entries {
-                entry.spec = None;
-            }
-        }
         Ok(Response::new(pb::ListAgentCatalogResponse {
             catalog_json: serde_json::to_vec(&catalog)
                 .map_err(|_| Status::internal("Could not encode agent catalog"))?,
@@ -200,7 +208,6 @@ impl Bas for Service {
         &self,
         request: Request<pb::InstallAgentRequest>,
     ) -> Result<Response<Self::InstallAgentStream>, Status> {
-        local_management(&request)?;
         let manager = self.manager()?;
         let registry = Arc::clone(&self.registry);
         let id = request.into_inner().id;
@@ -253,7 +260,6 @@ impl Bas for Service {
         &self,
         request: Request<pb::RemoveAgentRequest>,
     ) -> Result<Response<pb::RemoveAgentResponse>, Status> {
-        local_management(&request)?;
         let manager = self.manager()?;
         manager
             .remove(&request.into_inner().id)
@@ -277,7 +283,6 @@ impl Bas for Service {
         &self,
         request: Request<pb::LogoutAgentRequest>,
     ) -> Result<Response<pb::LogoutAgentResponse>, Status> {
-        local_management(&request)?;
         let request = request.into_inner();
         let expected: AgentSpec =
             serde_json::from_slice(&request.expected_spec_json).map_err(|_| {
@@ -308,7 +313,6 @@ impl Bas for Service {
         &self,
         request: Request<pb::AuthenticateAgentRequest>,
     ) -> Result<Response<pb::AuthenticateAgentResponse>, Status> {
-        local_management(&request)?;
         let request = request.into_inner();
         let expected: AgentSpec =
             serde_json::from_slice(&request.expected_spec_json).map_err(|_| {
@@ -1078,19 +1082,6 @@ fn submission_response(
         Err(SubmissionError::Unknown(error)) => return Err(error.into()),
     };
     Ok(Response::new(outcome.into()))
-}
-
-fn local_management<T>(request: &Request<T>) -> Result<(), Status> {
-    if request
-        .remote_addr()
-        .is_some_and(|address| address.ip().is_loopback())
-    {
-        Ok(())
-    } else {
-        Err(Status::permission_denied(
-            "Agent installation and authentication require a local daemon connection",
-        ))
-    }
 }
 
 fn decode<T: serde::de::DeserializeOwned>(request: Request<pb::AcpPayload>) -> Result<T, Status> {

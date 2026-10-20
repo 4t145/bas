@@ -6,6 +6,119 @@ pub(super) fn init(cx: &mut App) {
     crate::theme::init_default(cx);
 }
 
+#[gpui_kit::test]
+fn configuration_requests_disable_conflicting_editor_actions(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("settings");
+    let store = Store::at(directory.path().join("settings.json"));
+    let spec = AgentSpec::acp("custom", Command::new("/fixture/agent", []));
+    let mut document = store.load().expect("document");
+    store
+        .save_agents(
+            &mut document,
+            vec![AgentSpec::embedded().into(), spec.clone().into()],
+        )
+        .expect("saved agents");
+    let before = std::fs::read(store.path()).expect("original settings");
+    cx.update(|cx| {
+        init(cx);
+        crate::application::init(cx);
+    });
+    let mut page = None;
+    let window = cx.open_window(size(px(760.), px(680.)), |window, cx| {
+        let view = cx.new(|cx| Agents::new(store.clone(), window, cx));
+        page = Some(view.clone());
+        gpui_kit::component::Root::new(view, window, cx)
+    });
+    let page = page.expect("page");
+    cx.update_window(window.into(), |_, window, cx| {
+        page.update(cx, |page, cx| {
+            page.configuration_task =
+                Some(cx.spawn(async |_, _| std::future::pending::<()>().await));
+        });
+        click(window, "agents-remove-custom", cx);
+        assert_eq!(
+            cx.windows().len(),
+            1,
+            "busy removal does not open confirmation"
+        );
+        assert_eq!(std::fs::read(store.path()).expect("settings"), before);
+        page.update(cx, |page, cx| {
+            page.configuration_task.take();
+            page.edit(spec.clone(), Some(spec.id.clone()), window, cx);
+            page.form.program.update(cx, |input, cx| {
+                input.set_value("/fixture/changed", window, cx)
+            });
+            page.configuration_task =
+                Some(cx.spawn(async |_, _| std::future::pending::<()>().await));
+        });
+        click(window, "agents-save", cx);
+        click(window, "agents-cancel", cx);
+        assert!(
+            page.read(cx).dirty(cx),
+            "pending save cannot discard the draft"
+        );
+        assert_eq!(std::fs::read(store.path()).expect("settings"), before);
+        page.update(cx, |page, _| {
+            page.configuration_task.take();
+        });
+        click(window, "agents-save", cx);
+        assert!(!page.read(cx).dirty(cx));
+        assert_ne!(std::fs::read(store.path()).expect("saved settings"), before);
+    })
+    .expect("configuration controls");
+}
+
+#[gpui_kit::test]
+fn switching_management_preserves_backend_drafts_and_notifications(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("settings");
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let first: bas::service::tls::ConnectionOptions =
+        "192.0.2.1:4554".parse().expect("first target");
+    let second: bas::service::tls::ConnectionOptions =
+        "192.0.2.2:4554".parse().expect("second target");
+    cx.update(|cx| {
+        init(cx);
+        crate::configuration::init(Some(directory.path().join("settings.json")), cx);
+        crate::agents::init(first.clone(), runtime.handle().clone(), cx);
+    });
+    cx.open_window(size(px(760.), px(680.)), |window, cx| {
+        let original = shared(window, cx);
+        original.update(cx, |page, cx| {
+            page.form
+                .id
+                .update(cx, |input, cx| input.set_value("unsaved", window, cx));
+            page.editor = Editor::Add(AgentSpec::acp("", Command::new("", [])));
+            page.query = "original query".into();
+        });
+        crate::agents::init(second.clone(), runtime.handle().clone(), cx);
+        let other = shared(window, cx);
+        assert_ne!(original.entity_id(), other.entity_id());
+        assert!(other.read(cx).query.is_empty());
+        original.update(cx, |page, cx| {
+            assert_eq!(page.target(), Some(first.clone()));
+            assert_eq!(
+                page.check_service.as_ref().expect("pinned check").address(),
+                first
+            );
+            page.notify_agent_change(Some("ready".into()), cx);
+        });
+        assert_eq!(
+            cx.global::<crate::agents::Changes>().server,
+            Some(first.clone())
+        );
+        crate::agents::init(first.clone(), runtime.handle().clone(), cx);
+        let restored = shared(window, cx);
+        assert_eq!(original.entity_id(), restored.entity_id());
+        assert_eq!(
+            restored.read(cx).form.id.read(cx).value().to_string(),
+            "unsaved"
+        );
+        assert_eq!(restored.read(cx).query, "original query");
+        assert!(restored.read(cx).dirty(cx));
+        gpui_kit::component::Root::new(original, window, cx)
+    });
+}
+
 pub(super) fn managed_fixture(directory: &std::path::Path, spec: &AgentSpec) -> AgentRegistration {
     let path = directory.join(bas::config::INSTALLATION_FILE);
     let bytes = serde_json::to_vec(&serde_json::json!({

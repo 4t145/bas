@@ -92,7 +92,7 @@ GUI 源码运行方式见 [本机启动](docs/gui.md#本机启动)。
 
 ```console
 $ cargo build --release
-$ ./target/release/bas                         # 默认监听 127.0.0.1:7337
+$ ./target/release/bas                         # 默认使用同用户本地 IPC，不监听 TCP
 $ ./target/release/bast agents
 $ ./target/release/bast session create --title demo
 ```
@@ -116,12 +116,14 @@ bast agents
 
 ## 配置
 
-应用外观和 ACP 后端统一保存在 `bas/settings.json`，可在设置窗口中编辑。
+应用外观、前端服务连接和 ACP 后端统一保存在 `bas/settings.json`，可在设置窗口中编辑。
+服务连接列表及后端切换见 [服务连接类型](docs/connections.md#在-basg-中管理和切换服务)；
+关于窗口显示应用版本和 [build tag](docs/build-tags.md)。
 服务监听、权限及容量等启动参数仍通过命令行或环境变量设置，命令行同名参数优先。
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `BAS_LISTEN` | `127.0.0.1:7337` | gRPC 监听地址（默认仅回环） |
+| `BAS_LISTEN` | `local` | 监听目标；支持本地 IPC 或显式 TCP，多目标以 `;` 分隔，见 [连接类型](docs/connections.md) |
 | `BAS_AGENTS` | 未设置 | 简写后端目录，设置后覆盖 JSON 配置，见下 |
 | `BAS_SETTINGS_FILE` | 用户配置目录下的 `bas/settings.json` | GUI 与 daemon 共用配置；Linux 默认 `~/.config`，跨平台目录见 [GUI 说明](docs/gui.md#统一设置中的外观偏好) |
 | `BAS_AGENTS_FILE` | 未设置 | 显式兼容旧版独立 agent 数组；设置后覆盖统一文件的 agent 目录 |
@@ -169,7 +171,7 @@ JSON 支持完整参数数组，示例见 [contrib/settings.json](contrib/settin
 
 ```sh
 make install-basg
-basg --server 127.0.0.1:7337
+basg
 ```
 
 安装包包含图形运行库与桌面入口，bas 服务单独运行。`make install` 同时安装 daemon、CLI 和 GUI；
@@ -216,7 +218,8 @@ $ bast session restore <id>                   # 恢复到普通列表
 $ bast session remove <id>                    # 永久删除：停止 Agent 并遗忘会话
 ```
 
-`--server` 可指定守护进程地址，默认 `127.0.0.1:7337`。
+`--server` 或 `BAS_SERVER` 可指定连接目标，默认 `local`。本地 IPC 不需要配对；
+TCP 保留但需要显式开启，格式与升级方式见 [服务连接类型](docs/connections.md)。
 归档不取消正在执行的回合，但归档期间不能发起新回合。会话和归档状态仍保存在
 daemon 内存中，受现有历史容量限制；归档不提供跨 daemon 重启的磁盘持久化。
 
@@ -284,4 +287,8 @@ GUI 使用 Agent 返回的 `configOptions` 构建选项控件，并展示图片�
 - **权限**：默认拒绝工具权限申请；`--permissions allow` 可开启自动批准。该策略不隔离
   后端进程的文件访问。GUI 连接审批订阅后由用户选择原生允许／拒绝选项；没有审批客户端
   的会话行为及请求取消规则见 [GUI 说明](docs/gui.md#数据与验证)。
-- **传输**：当前为回环 TCP，Unix domain socket 尚未实现。
+- **传输**：默认同用户本地 IPC（Unix socket / Windows Named Pipe），TCP 可显式开启；
+  支持多个监听入口，见 [服务连接类型](docs/connections.md)。
+- **远程接入**：[手动证书 mTLS](docs/mtls.md) 已实现；配对、账号服务和 Relay 仍按分期推进；
+  一个服务实例提供共享执行环境，不在服务端内部做多用户隔离。范围、认证方向及验收场景见
+  [远程接入、账号服务与 Relay 规划](docs/design/remote-access.md)。

@@ -17,7 +17,7 @@ use gds_uim::el;
 use gpui_kit::{
     App, Rems,
     assets::IconName,
-    component::{ActiveTheme, Sizable, button::*, menu::PopupMenu},
+    component::{ActiveTheme, Icon, Sizable, button::*, menu::PopupMenu},
     prelude::*,
     px,
 };
@@ -48,12 +48,17 @@ pub(crate) fn icon_button(id: impl Into<gpui_kit::ElementId>, icon: IconName) ->
             ghost;
             xsmall;
             icon: icon;
+            destructive: $(matches!(icon, IconName::Trash));
             w: COMPACT_CONTROL.px;
             h: COMPACT_CONTROL.px;
             p_0;
             flex_shrink_0;
         }
     }
+}
+
+pub(crate) fn delete_icon(cx: &App) -> Icon {
+    Icon::new(IconName::Trash).text_color(cx.theme().danger)
 }
 
 pub(crate) fn action_button(id: impl Into<gpui_kit::ElementId>) -> Button {

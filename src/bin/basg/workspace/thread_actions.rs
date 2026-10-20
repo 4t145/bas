@@ -105,7 +105,9 @@ impl Workspace {
 
     pub(super) fn operation_error(&mut self, title: &str, message: String, cx: &mut Context<Self>) {
         self.selected.error = Some(message.clone());
-        if let Err(error) = crate::application::open_message(title, &message, cx) {
+        if self.window.presented
+            && let Err(error) = crate::application::open_message(title, &message, cx)
+        {
             tracing::error!(%error, %message, "cannot show operation failure");
         }
         cx.notify();

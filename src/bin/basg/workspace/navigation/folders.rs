@@ -115,8 +115,10 @@ impl Workspace {
         self.navigation.picker.waiting_activation = true;
         cx.defer_in(window, |this, window, cx| {
             this.close_menu(window, cx);
-            window.activate_window();
-            this.resume_workspace_picker(window, cx);
+            if this.window.presented {
+                window.activate_window();
+                this.resume_workspace_picker(window, cx);
+            }
         });
         cx.notify();
     }
@@ -126,13 +128,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.navigation.picker.waiting_activation || !window.is_window_active() {
+        if !self.window.presented
+            || !self.navigation.picker.waiting_activation
+            || !window.is_window_active()
+        {
             return;
         }
         self.navigation.picker.waiting_activation = false;
         // Wait past the native activation event so Linux has recorded the dialog's parent.
         cx.on_next_frame(window, |this, window, cx| {
-            if window.is_window_active() {
+            if this.window.presented && window.is_window_active() {
                 this.prompt_local_workspace(window, cx);
             } else {
                 this.navigation.picker.waiting_activation = true;
@@ -167,7 +172,7 @@ impl Workspace {
                             return;
                         }
                         if let Some(path) = paths.into_iter().next() {
-                            if this.window.compact {
+                            if this.window.presented && this.window.compact {
                                 this.toggle_mode(window, cx);
                             }
                             this.new_thread(Some(groups::normalize(&path)), window, cx);

@@ -42,7 +42,7 @@ impl Workspace {
         };
         let view = cx.entity().downgrade();
         let metadata = self.backend.metadata.clone();
-        let server = self.backend.server;
+        let server = self.backend.server.clone();
         let parent = self.window.handle;
         let icon = gds_uim::el! {
             $self.agent_icon("agent-picker-icon", &selected, cx) {
@@ -79,11 +79,12 @@ impl Workspace {
                         let label = id.clone();
                         let metadata = metadata.clone();
                         let view = view.clone();
+                        let server = server.clone();
                         menu = menu.item(
                             PopupMenuItem::element(move |_, cx| {
                                 let artwork = metadata
                                     .as_ref()
-                                    .and_then(|metadata| metadata.read(cx).icon(server, &label))
+                                    .and_then(|metadata| metadata.read(cx).icon(&server, &label))
                                     .unwrap_or_default();
                                 gds_uim::el! {
                                     #div {

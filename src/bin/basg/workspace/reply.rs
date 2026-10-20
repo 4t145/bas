@@ -104,7 +104,8 @@ impl Workspace {
             .conversation
             .as_ref()
             .and_then(|conversation| conversation.last_reply);
-        if window.is_window_active()
+        if self.window.presented
+            && window.is_window_active()
             && (!self.window.compact || self.window.output_open)
             && (self.selected.timeline.list.is_following_tail()
                 || visible_reply.is_some_and(|reply| {

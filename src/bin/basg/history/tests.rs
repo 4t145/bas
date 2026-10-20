@@ -35,7 +35,7 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
     let (updates, events) = mpsc::channel(64);
     let opened = Rc::new(RefCell::new(Vec::new()));
     let recorded = opened.clone();
-    let server = "127.0.0.1:7337".parse().expect("server");
+    let server: bas::service::tls::ConnectionOptions = "127.0.0.1".parse().expect("server");
     let (_window, browser) = cx.update(|cx| {
         gpui_kit::init(cx);
         crate::configuration::init(Some(path), cx);
@@ -44,7 +44,7 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
         window::bind_keys(cx);
         let _handle = window::open_connected(
             OpenRequest {
-                server,
+                server: server.clone(),
                 agents: agents(),
                 agent: Some("codex-acp".into()),
                 cwd: Some("/repo".into()),

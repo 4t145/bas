@@ -1,5 +1,6 @@
 use super::{
-    AgentRegistration, AgentSpec, Appearance, Settings, validate_agents, validate_registrations,
+    AgentRegistration, AgentSpec, Appearance, Frontend, Settings, validate_agents,
+    validate_registrations,
 };
 use serde::de::DeserializeOwned;
 use std::{
@@ -75,6 +76,7 @@ struct Loaded {
 enum Section {
     Appearance(Appearance),
     Agents(Vec<AgentRegistration>),
+    Frontend(Frontend),
 }
 impl Store {
     pub fn new(path: Option<PathBuf>) -> Self {
@@ -121,6 +123,11 @@ impl Store {
         agents: Vec<AgentRegistration>,
     ) -> Result<(), Error> {
         self.save(document, Section::Agents(agents))
+    }
+    /// # Errors
+    /// Rejects conflicts, busy locks, links, invalid documents and I/O failures.
+    pub fn save_frontend(&self, document: &mut Document, frontend: Frontend) -> Result<(), Error> {
+        self.save(document, Section::Frontend(frontend))
     }
     fn read(&self) -> Result<Loaded, Error> {
         let mut snapshot = Snapshot { files: Vec::new() };
@@ -213,6 +220,13 @@ impl Store {
                 settings.daemon.agents = agents;
                 "daemon.agents"
             }
+            Section::Frontend(frontend) => {
+                if settings.frontend != document.baseline.frontend {
+                    return Err(self.conflict("frontend"));
+                }
+                settings.frontend = frontend;
+                "frontend"
+            }
         };
         validate(&self.path, &settings)?;
         let bytes = serde_json::to_vec_pretty(&settings).map_err(|source| Error::Json {
@@ -271,7 +285,8 @@ fn validate(path: &Path, settings: &Settings) -> Result<(), Error> {
         .appearance
         .validate()
         .map_err(|e| invalid(path, e))?;
-    validate_registrations(&settings.daemon.agents).map_err(|e| invalid(path, e))
+    validate_registrations(&settings.daemon.agents).map_err(|e| invalid(path, e))?;
+    settings.frontend.validate().map_err(|e| invalid(path, e))
 }
 fn reject_links(path: &Path) -> Result<(), Error> {
     for ancestor in path.ancestors().filter(|p| !p.as_os_str().is_empty()) {

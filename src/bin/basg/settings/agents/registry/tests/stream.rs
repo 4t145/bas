@@ -2,7 +2,6 @@
 //! The fixture never downloads or executes a registry distribution.
 
 use std::{
-    net::SocketAddr,
     pin::Pin,
     sync::{
         Arc, Mutex,
@@ -11,11 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::agents::check;
-use bas::service::pb;
+use bas::service::{Target, pb, transport::Listener};
 use futures::{Stream, channel::mpsc};
 use gpui_kit::{AnyWindowHandle, Entity, TestAppContext, px, size, test::TestWindowExt};
-use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::task::AbortOnDropHandle;
 use tonic::{Request, Response, Status as RpcStatus, transport::Server};
 
@@ -24,6 +21,7 @@ use super::*;
 type ProgressStream = Pin<Box<dyn Stream<Item = Result<pb::AgentOperation, RpcStatus>> + Send>>;
 
 struct FixtureService {
+    store: bas::config::Store,
     catalog: Arc<Mutex<Catalog>>,
     stream: Mutex<Option<mpsc::UnboundedReceiver<Result<pb::AgentOperation, RpcStatus>>>>,
     started: Arc<AtomicBool>,
@@ -32,11 +30,14 @@ struct FixtureService {
 
 #[derive(Default)]
 struct Probes {
+    configuration_error: Option<RpcStatus>,
+    catalog_error: Option<RpcStatus>,
     authentication_error: Option<RpcStatus>,
     response: Option<pb::CheckAgentResponse>,
     checks: Vec<pb::CheckAgentRequest>,
     logins: Vec<pb::AuthenticateAgentRequest>,
     logouts: Vec<pb::LogoutAgentRequest>,
+    removals: Vec<String>,
     logout_error: Option<RpcStatus>,
     answers: Vec<pb::ElicitationAnswer>,
     unrelated: Vec<&'static str>,
@@ -48,6 +49,54 @@ macro_rules! fixture_service {
     ($($method:ident($request:ty) -> $response:ty;)*) => {
         #[tonic::async_trait]
         impl pb::bas_server::Bas for FixtureService {
+            async fn get_agent_configuration(
+                &self, _: Request<pb::GetAgentConfigurationRequest>,
+            ) -> Result<Response<pb::AgentConfiguration>, RpcStatus> {
+                if let Some(error) = self.probes.lock().expect("probes").configuration_error.clone() {
+                    return Err(error);
+                }
+                let document = self.store.load().expect("fixture settings");
+                let registrations_json = serde_json::to_vec(&document.settings.daemon.agents).expect("agents");
+                Ok(Response::new(pb::AgentConfiguration {
+                    profile: self.store.path().display().to_string(),
+                    revision: String::from_utf8(registrations_json.clone()).expect("JSON"),
+                    registrations_json,
+                }))
+            }
+
+            async fn save_agent_configuration(
+                &self, request: Request<pb::SaveAgentConfigurationRequest>,
+            ) -> Result<Response<pb::AgentConfiguration>, RpcStatus> {
+                let request = request.into_inner();
+                let baseline = self.get_agent_configuration(Request::new(pb::GetAgentConfigurationRequest {})).await?.into_inner();
+                if request.profile != baseline.profile || request.revision != baseline.revision {
+                    return Err(RpcStatus::aborted("configuration changed"));
+                }
+                let mut document = self.store.load().expect("fixture document");
+                let agents = serde_json::from_slice(&request.registrations_json).expect("registrations");
+                self.store.save_agents(&mut document, agents).expect("fixture save");
+                self.get_agent_configuration(Request::new(pb::GetAgentConfigurationRequest {})).await
+            }
+
+            async fn remove_agent(
+                &self, request: Request<pb::RemoveAgentRequest>,
+            ) -> Result<Response<pb::RemoveAgentResponse>, RpcStatus> {
+                let id = request.into_inner().id;
+                let mut document = self.store.load().expect("fixture document");
+                if !document.settings.daemon.agents.iter()
+                    .any(|agent| agent.id().as_str() == id && agent.managed().is_some()) {
+                    return Err(RpcStatus::failed_precondition("not a managed registration"));
+                }
+                let mut agents = document.settings.daemon.agents.clone();
+                agents.retain(|agent| agent.id().as_str() != id);
+                if agents.is_empty() {
+                    agents.push(bas::config::AgentSpec::embedded().into());
+                }
+                self.store.save_agents(&mut document, agents).expect("fixture remove");
+                self.probes.lock().expect("probes").removals.push(id);
+                Ok(Response::new(pb::RemoveAgentResponse {}))
+            }
+
             type InstallAgentStream = ProgressStream;
             type AuthenticateAgentInteractiveStream = Pin<Box<dyn Stream<Item = Result<pb::AuthenticationEvent, RpcStatus>> + Send>>;
             type WatchElicitationsStream = Pin<Box<dyn Stream<Item = Result<pb::ElicitationSnapshot, RpcStatus>> + Send>>;
@@ -70,6 +119,9 @@ macro_rules! fixture_service {
                 &self,
                 _: Request<pb::ListAgentCatalogRequest>,
             ) -> Result<Response<pb::ListAgentCatalogResponse>, RpcStatus> {
+                if let Some(error) = self.probes.lock().expect("probes").catalog_error.clone() {
+                    return Err(error);
+                }
                 let catalog = self.catalog.lock().expect("fixture catalog");
                 Ok(Response::new(pb::ListAgentCatalogResponse {
                     catalog_json: serde_json::to_vec(&*catalog).expect("serialize catalog"),
@@ -177,7 +229,6 @@ fixture_service! {
     restart_session(pb::GetSessionRequest) -> pb::GetSessionResponse;
     set_session_directories(pb::SetSessionDirectoriesRequest) -> pb::GetSessionResponse;
     list_agents(pb::ListAgentsRequest) -> pb::ListAgentsResponse;
-    remove_agent(pb::RemoveAgentRequest) -> pb::RemoveAgentResponse;
     create_session(pb::CreateSessionRequest) -> pb::CreateSessionResponse;
     list_sessions(pb::ListSessionsRequest) -> pb::ListSessionsResponse;
     get_session(pb::GetSessionRequest) -> pb::GetSessionResponse;
@@ -200,30 +251,68 @@ fixture_service! {
 
 struct Fixture {
     runtime: tokio::runtime::Runtime,
-    address: SocketAddr,
+    address: Target,
     progress: Option<mpsc::UnboundedSender<Result<pb::AgentOperation, RpcStatus>>>,
     started: Arc<AtomicBool>,
     catalog: Arc<Mutex<Catalog>>,
     probes: Arc<Mutex<Probes>>,
     store: bas::config::Store,
     _server_task: AbortOnDropHandle<()>,
+    _endpoint_directory: tempfile::TempDir,
 }
 
 impl Fixture {
     fn new(path: std::path::PathBuf) -> Self {
+        Self::with_transport(path, false)
+    }
+
+    fn with_transport(path: std::path::PathBuf, tcp: bool) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("fixture runtime");
+        let endpoint_directory = tempfile::tempdir().expect("endpoint directory");
+        #[cfg(unix)]
+        let address = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                endpoint_directory.path(),
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .expect("private socket directory");
+            Target::Unix(
+                endpoint_directory
+                    .path()
+                    .canonicalize()
+                    .expect("canonical endpoint directory")
+                    .join("service.sock"),
+            )
+        };
+        #[cfg(windows)]
+        let address = Target::Pipe(format!(
+            "bas-gui-{}-{}",
+            std::process::id(),
+            endpoint_directory
+                .path()
+                .file_name()
+                .expect("unique directory")
+                .to_string_lossy()
+        ));
+        let address = if tcp {
+            "tcp://127.0.0.1:0".parse().expect("TCP fixture")
+        } else {
+            address
+        };
         let listener = runtime
-            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .block_on(Listener::bind(&address))
             .expect("local fixture listener");
-        let address = listener.local_addr().expect("fixture address");
+        let address = listener.target().clone();
         let (progress, stream) = mpsc::unbounded();
         let catalog = Arc::new(Mutex::new(catalog(path.clone())));
         let started = Arc::new(AtomicBool::new(false));
         let probes = Arc::new(Mutex::new(Probes::default()));
         let service = FixtureService {
+            store: bas::config::Store::at(path.clone()),
             catalog: catalog.clone(),
             stream: Mutex::new(Some(stream)),
             started: started.clone(),
@@ -232,7 +321,7 @@ impl Fixture {
         let server_task = AbortOnDropHandle::new(runtime.spawn(async move {
             Server::builder()
                 .add_service(pb::bas_server::BasServer::new(service))
-                .serve_with_incoming(TcpListenerStream::new(listener))
+                .serve_with_incoming(listener.incoming())
                 .await
                 .expect("fixture server");
         }));
@@ -245,23 +334,44 @@ impl Fixture {
             probes,
             store: bas::config::Store::at(path),
             _server_task: server_task,
+            _endpoint_directory: endpoint_directory,
         }
     }
 
     fn open(&self, cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Agents>) {
         cx.update(super::super::super::tests::init);
+        cx.update(|cx| {
+            crate::agents::init(
+                self.address.clone().into(),
+                self.runtime.handle().clone(),
+                cx,
+            );
+        });
         let mut page = None;
         let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
             let view = cx.new(|cx| Agents::new(self.store.clone(), window, cx));
             view.update(cx, |page, cx| {
-                page.apply_catalog(self.catalog.lock().expect("catalog").clone(), true, cx);
+                let agents = self
+                    .store
+                    .load()
+                    .expect("fixture settings")
+                    .settings
+                    .daemon
+                    .agents;
+                let registrations_json = serde_json::to_vec(&agents).expect("registrations");
+                page.accept_configuration(pb::AgentConfiguration {
+                    profile: self.store.path().display().to_string(),
+                    revision: String::from_utf8(registrations_json.clone()).expect("JSON"),
+                    registrations_json,
+                })
+                .expect("configuration");
+                page.configuration_task = None;
+                page.registry.load = Load::Idle;
+                page.apply_catalog(self.catalog.lock().expect("catalog").clone(), cx);
             });
             page = Some(view.clone());
             Root::new(view, window, cx)
         });
-        // Initialize after opening the page, so the only first network operation
-        // is the install action exercised below.
-        cx.update(|cx| cx.set_global(Service::new(self.address, self.runtime.handle().clone())));
         let page = page.expect("fixture page");
         // Installed agents are managed in Settings, not the add window.
         if self.catalog.lock().expect("catalog").entries[0]
@@ -319,6 +429,181 @@ impl Fixture {
 }
 
 #[gpui_kit::test]
+fn fetched_registrations_survive_remote_catalog_failure(cx: &mut TestAppContext) {
+    use bas::config::{AgentSpec, agent::Command};
+    let directory = tempfile::tempdir().expect("settings");
+    let fixture = Fixture::with_transport(directory.path().join("server.json"), true);
+    let custom = AgentSpec::acp("custom", Command::new("/server/custom", []));
+    let managed_spec = AgentSpec::acp("managed", Command::new("/server/managed", []));
+    let managed = super::super::super::tests::managed_fixture(directory.path(), &managed_spec);
+    // The registration remains readable, but neither the server catalog nor the client
+    // can resolve this descriptor. Configuration recovery must not require it.
+    std::fs::remove_file(&managed.managed().expect("managed").installation.path)
+        .expect("missing descriptor");
+    let mut document = fixture.store.load().expect("settings");
+    fixture
+        .store
+        .save_agents(&mut document, vec![custom.clone().into(), managed.clone()])
+        .expect("registrations");
+    fixture.probes.lock().expect("probes").catalog_error =
+        Some(RpcStatus::unavailable("managed descriptor unavailable"));
+    cx.update(super::super::super::tests::init);
+    cx.update(|cx| {
+        crate::agents::init(
+            fixture.address.clone().into(),
+            fixture.runtime.handle().clone(),
+            cx,
+        )
+    });
+    let mut page = None;
+    let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        // This store is deliberately unrelated to the daemon's settings.
+        let view = cx.new(|cx| {
+            Agents::new(
+                bas::config::Store::at(directory.path().join("client.json")),
+                window,
+                cx,
+            )
+        });
+        page = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let page = page.expect("page");
+    fixture.pump_until(cx, |cx| {
+        let page = page.read(cx);
+        page.configuration.is_some()
+            && !page.registry.loading()
+            && page.message.contains("managed descriptor unavailable")
+    });
+    cx.update_window(window.into(), |_, _, cx| {
+        page.update(cx, |page, cx| {
+            assert!(page.registry.editable());
+            assert!(page.registry.catalog.is_none());
+            let entries = page.configuration_entries();
+            assert_eq!(entries.len(), 2);
+            assert_eq!(entries[0].id, "managed");
+            assert_eq!(entries[0].status, Status::Missing);
+            assert!(entries[0].spec.is_none());
+            assert_eq!(entries[1].spec.as_ref(), Some(&custom));
+
+            let mut cached = catalog("/server/settings.json".into());
+            cached.can_install = false;
+            cached.entries = vec![entries[0].clone()];
+            cached.entries[0].name = "Managed display name".into();
+            page.apply_catalog(cached, cx);
+            assert!(
+                page.registry.editable(),
+                "editing does not require install capability"
+            );
+            page.refresh_registry(false, cx);
+        });
+    })
+    .expect("fallback cards");
+    fixture.pump_until(cx, |cx| !page.read(cx).registry.loading());
+    cx.update_window(window.into(), |_, window, cx| {
+        page.update(cx, |page, cx| {
+            assert_eq!(page.configuration_entries()[0].name, "Managed display name");
+            page.edit(custom.clone(), Some(custom.id.clone()), window, cx);
+            page.editor.mark_delete();
+            page.save(cx);
+        });
+    })
+    .expect("remove custom configuration despite catalog outage");
+    fixture.pump_until(cx, |cx| page.read(cx).configuration_task.is_none());
+    assert_eq!(
+        fixture.store.load().expect("saved").settings.daemon.agents,
+        vec![managed]
+    );
+    cx.update(|cx| page.update(cx, |page, cx| page.remove_managed("managed".into(), cx)));
+    fixture.pump_until(cx, |_| {
+        fixture.probes.lock().expect("probes").removals == ["managed"]
+    });
+    assert_eq!(
+        fixture
+            .store
+            .load()
+            .expect("removed")
+            .settings
+            .daemon
+            .agents,
+        vec![AgentSpec::embedded().into()]
+    );
+    assert!(!directory.path().join("client.json").exists());
+}
+
+#[gpui_kit::test]
+fn old_daemon_configuration_error_has_no_local_write_fallback(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("settings");
+    let fixture = Fixture::with_transport(directory.path().join("server.json"), true);
+    let (_, page) = fixture.open(cx);
+    fixture.probes.lock().expect("probes").configuration_error =
+        Some(RpcStatus::unimplemented("older service"));
+    cx.update(|cx| {
+        page.update(cx, |page, cx| {
+            page.configuration = None;
+            page.document = None;
+            page.fetch_configuration(cx);
+        })
+    });
+    fixture.pump_until(cx, |cx| page.read(cx).configuration_task.is_none());
+    cx.update(|cx| {
+        assert!(page.read(cx).document.is_none());
+        assert_eq!(
+            page.read(cx).message,
+            crate::i18n::tr!("agent-config-upgrade")
+        );
+    });
+    assert!(
+        !fixture.store.path().exists(),
+        "no client-local fallback file"
+    );
+}
+
+#[gpui_kit::test]
+fn remote_configuration_save_stays_with_its_backend_after_switching(cx: &mut TestAppContext) {
+    use bas::config::{AgentSpec, agent::Command};
+    let directory = tempfile::tempdir().expect("settings");
+    let fixture = Fixture::with_transport(directory.path().join("server.json"), true);
+    let (window, page) = fixture.open(cx);
+    cx.update_window(window, |_, window, cx| {
+        page.update(cx, |page, cx| {
+            page.edit(
+                AgentSpec::acp("remote-custom", Command::new("/server/agent", [])),
+                None,
+                window,
+                cx,
+            );
+        });
+        crate::agents::init(
+            "tcp://192.0.2.1:4554".parse().expect("other backend"),
+            fixture.runtime.handle().clone(),
+            cx,
+        );
+        page.update(cx, |page, cx| page.save(cx));
+    })
+    .expect("save through remote editor");
+    fixture.pump_until(cx, |cx| page.read(cx).configuration_task.is_none());
+    assert!(
+        fixture
+            .store
+            .load()
+            .expect("daemon-side persisted settings")
+            .settings
+            .daemon
+            .agents
+            .iter()
+            .any(|agent| agent.id().as_str() == "remote-custom")
+    );
+    cx.update(|cx| {
+        assert_eq!(
+            page.read(cx).target().expect("owned target").target,
+            fixture.address
+        );
+        assert!(page.read(cx).message.is_empty());
+    });
+}
+
+#[gpui_kit::test]
 fn grpc_transport_failure_ends_the_gui_operation(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("settings directory");
     let fixture = Fixture::new(directory.path().join("settings.json"));
@@ -358,7 +643,12 @@ fn authentication_form_round_trips_over_the_owned_interactive_stream(cx: &mut Te
     }
     let (window, page) = fixture.open(cx);
     cx.update(|cx| {
-        check::init(fixture.address, fixture.runtime.handle().clone(), cx);
+        // Management can switch before this backend's panel is even created.
+        crate::agents::init(
+            "192.0.2.1:4554".parse().expect("other target"),
+            fixture.runtime.handle().clone(),
+            cx,
+        );
         let raw = serde_json::json!({"protocolVersion":1,"authMethods":[{"id":"form-login","name":"Configure provider"}]});
         let methods = bas::authentication::methods(&raw, None).expect("method");
         page.update(cx, |page, cx| {

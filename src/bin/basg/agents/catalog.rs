@@ -1,6 +1,7 @@
 //! Daemon-owned discovery and installation; no settings-page state or presentation.
 
-use std::{net::SocketAddr, path::Path, time::Duration};
+use bas::service::tls::ConnectionOptions as Target;
+use std::time::Duration;
 
 use bas::{
     config::AgentSpec,
@@ -19,12 +20,12 @@ const CATALOG_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Clone)]
 pub(crate) struct Service {
-    server: SocketAddr,
+    server: Target,
     runtime: Handle,
 }
 impl Global for Service {}
 
-pub(super) fn init(server: SocketAddr, runtime: Handle, cx: &mut App) {
+pub(super) fn init(server: Target, runtime: Handle, cx: &mut App) {
     cx.set_global(Service { server, runtime });
 }
 
@@ -59,12 +60,53 @@ impl Updates {
 }
 
 impl Service {
-    pub(crate) fn new(server: SocketAddr, runtime: Handle) -> Self {
+    pub(crate) fn configuration(
+        &self,
+        save: Option<pb::SaveAgentConfigurationRequest>,
+    ) -> impl Future<Output = Result<pb::AgentConfiguration, String>> + use<> {
+        let server = self.server.clone();
+        let (send, receive) = oneshot::channel();
+        let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
+            let result = tokio::time::timeout(CATALOG_TIMEOUT, async {
+                let mut client = Client::connect_options(&server)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let response = match save {
+                    Some(request) => client.save_agent_configuration(request).await,
+                    None => {
+                        client
+                            .get_agent_configuration(pb::GetAgentConfigurationRequest {})
+                            .await
+                    }
+                };
+                response
+                    .map(|response| response.into_inner())
+                    .map_err(|error| {
+                        if error.code() == tonic::Code::Unimplemented {
+                            crate::i18n::tr!("agent-config-upgrade").to_owned()
+                        } else {
+                            error.message().to_owned()
+                        }
+                    })
+            })
+            .await
+            .unwrap_or_else(|_| Err(crate::i18n::tr!("agent-config-timeout").into()));
+            let _ = send.send(result);
+        }));
+        async move {
+            let _task = task;
+            receive
+                .await
+                .unwrap_or_else(|_| Err(crate::i18n::tr!("agent-config-ended").into()))
+        }
+    }
+
+    pub(crate) fn new(server: Target, runtime: Handle) -> Self {
         Self { server, runtime }
     }
 
-    pub(crate) fn address(&self) -> SocketAddr {
-        self.server
+    pub(crate) fn address(&self) -> Target {
+        self.server.clone()
     }
 
     pub(crate) fn runtime(&self) -> &Handle {
@@ -72,18 +114,19 @@ impl Service {
     }
 
     pub(crate) fn local(&self) -> bool {
-        self.server.ip().is_loopback()
+        // A forwarded loopback port does not establish ownership of local files.
+        self.server.is_local()
     }
 
     pub(crate) fn catalog(
         &self,
         refresh: bool,
     ) -> impl Future<Output = Result<Catalog, String>> + use<> {
-        let server = self.server;
+        let server = self.server.clone();
         let (send, receive) = oneshot::channel();
         let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
             let result = tokio::time::timeout(CATALOG_TIMEOUT, async {
-                let mut client = Client::connect_at(server)
+                let mut client = Client::connect_options(&server)
                     .await
                     .map_err(|error| error.to_string())?;
                 let response = client
@@ -106,14 +149,11 @@ impl Service {
     }
 
     pub(crate) fn install(&self, id: String) -> Updates {
-        let server = self.server;
+        let server = self.server.clone();
         let (send, receiver) = mpsc::unbounded();
         let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
             let result = async {
-                if !server.ip().is_loopback() {
-                    return Err(crate::i18n::tr!("agent-install-remote").into());
-                }
-                let mut client = Client::connect_at(server)
+                let mut client = Client::connect_options(&server)
                     .await
                     .map_err(|error| error.to_string())?;
                 let mut stream = client
@@ -148,14 +188,11 @@ impl Service {
     }
 
     pub(crate) fn remove(&self, id: String) -> impl Future<Output = Result<(), String>> + use<> {
-        let server = self.server;
+        let server = self.server.clone();
         let (send, receive) = oneshot::channel();
         let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
             let result = async {
-                if !server.ip().is_loopback() {
-                    return Err(crate::i18n::tr!("agent-remove-remote").into());
-                }
-                let mut client = Client::connect_at(server)
+                let mut client = Client::connect_options(&server)
                     .await
                     .map_err(|error| error.to_string())?;
                 client
@@ -180,7 +217,7 @@ impl Service {
         spec: AgentSpec,
         settings_path: std::path::PathBuf,
     ) -> impl Future<Output = Result<(), String>> + use<> {
-        let server = self.server;
+        let server = self.server.clone();
         let (send, receive) = oneshot::channel();
         let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
             let result = tokio::time::timeout(CATALOG_TIMEOUT, async {
@@ -213,15 +250,6 @@ impl Service {
                 .unwrap_or_else(|_| Err(crate::i18n::tr!("agent-logout-unknown").into()))
         }
     }
-}
-
-/// Both sides must name the same file before the GUI writes local configuration.
-pub(crate) fn settings_match(catalog: &Catalog, path: &Path) -> bool {
-    catalog.settings_path.as_ref().is_some_and(|daemon_path| {
-        let canonical =
-            |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-        canonical(daemon_path) == canonical(path)
-    })
 }
 
 #[cfg(all(test, feature = "gui-tests"))]

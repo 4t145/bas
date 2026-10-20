@@ -12,17 +12,32 @@ mod removal;
 mod status;
 pub(super) mod window;
 
-struct SharedAgents(Entity<Agents>);
+#[derive(Default)]
+struct SharedAgents(HashMap<Option<bas::service::tls::ConnectionOptions>, Entity<Agents>>);
 impl gpui_kit::Global for SharedAgents {}
 
 pub(super) fn shared(window: &mut Window, cx: &mut App) -> Entity<Agents> {
     use gpui_kit::AppContext;
-    if let Some(shared) = cx.try_global::<SharedAgents>() {
-        return shared.0.clone();
+    let target = selected_target(cx);
+    if let Some(agents) = cx
+        .try_global::<SharedAgents>()
+        .and_then(|shared| shared.0.get(&target))
+    {
+        return agents.clone();
     }
     let agents = cx.new(|cx| Agents::new(crate::configuration::store(cx), window, cx));
-    cx.set_global(SharedAgents(agents.clone()));
+    if !cx.has_global::<SharedAgents>() {
+        cx.set_global(SharedAgents::default());
+    }
+    cx.update_global::<SharedAgents, _>(|shared, _| {
+        shared.0.insert(target, agents.clone());
+    });
     agents
+}
+
+fn selected_target(cx: &App) -> Option<bas::service::tls::ConnectionOptions> {
+    cx.try_global::<catalog::Service>()
+        .map(catalog::Service::address)
 }
 use crate::agents::{Status, catalog, check};
 use bas::config::{
@@ -168,8 +183,12 @@ enum DraftError {
 }
 
 pub(super) struct Agents {
+    catalog_service: Option<catalog::Service>,
+    check_service: Option<check::Service>,
     store: Store,
-    document: Option<Document>,
+    document: Option<AgentDocument>,
+    configuration: Option<bas::service::pb::AgentConfiguration>,
+    configuration_task: Option<Task<()>>,
     editor: Editor,
     /// Keep native draft inputs and their subscriptions alive across page navigation.
     form: Form<Entity<InputState>>,
@@ -201,6 +220,11 @@ enum Editor {
         baseline: AgentSpec,
         intent: EditIntent,
     },
+}
+
+struct AgentDocument {
+    settings: bas::config::Settings,
+    local: Option<Document>,
 }
 
 enum EditIntent {
@@ -248,8 +272,119 @@ pub(super) struct Section {
 }
 
 impl Agents {
+    fn accept_configuration(
+        &mut self,
+        configuration: bas::service::pb::AgentConfiguration,
+    ) -> Result<(), String> {
+        let agents = serde_json::from_slice(&configuration.registrations_json)
+            .map_err(|error| format!("Invalid agent configuration: {error}"))?;
+        let mut settings = bas::config::Settings::default();
+        settings.daemon.agents = agents;
+        self.document = Some(AgentDocument {
+            settings,
+            local: None,
+        });
+        self.configuration = Some(configuration);
+        self.registration_errors.clear();
+        Ok(())
+    }
+
+    fn fetch_configuration(&mut self, cx: &mut Context<Self>) {
+        if self.configuration_task.is_some() {
+            return;
+        }
+        if self.dirty(cx) {
+            self.refresh_registry(false, cx);
+            return;
+        }
+        let Some(service) = self.catalog_service.clone() else {
+            return;
+        };
+        let request = service.configuration(None);
+        self.configuration_task = Some(cx.spawn(async move |page, cx| {
+            let result = request.await;
+            let _ = page.update(cx, |page, cx| {
+                page.configuration_task = None;
+                match result.and_then(|configuration| page.accept_configuration(configuration)) {
+                    Ok(()) => {
+                        page.message.clear();
+                        page.editor = Editor::Idle;
+                        page.refresh_registry(false, cx);
+                    }
+                    Err(error) => {
+                        page.message = error;
+                        page.refresh_registry(false, cx);
+                    }
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    fn save_configuration(&mut self, cx: &mut Context<Self>) {
+        if self.configuration_task.is_some() {
+            return;
+        }
+        let Some(service) = self.catalog_service.clone() else {
+            return;
+        };
+        let saved_id = self.form.id.read(cx).value().to_string();
+        let deleting = self.editor.deleting();
+        let request = self.candidate(cx).and_then(|agents| {
+            let baseline = self.configuration.as_ref().ok_or(DraftError::NotLoaded)?;
+            Ok(bas::service::pb::SaveAgentConfigurationRequest {
+                profile: baseline.profile.clone(),
+                revision: baseline.revision.clone(),
+                registrations_json: serde_json::to_vec(&agents)
+                    .expect("serializable registrations"),
+            })
+        });
+        let request = match request {
+            Ok(request) => service.configuration(Some(request)),
+            Err(error) => {
+                self.message = error.to_string();
+                cx.notify();
+                return;
+            }
+        };
+        self.configuration_task = Some(cx.spawn(async move |page, cx| {
+            let result = request.await;
+            let _ = page.update(cx, |page, cx| {
+                page.configuration_task = None;
+                match result.and_then(|configuration| page.accept_configuration(configuration)) {
+                    Ok(()) => {
+                        page.editor = Editor::Idle;
+                        page.message.clear();
+                        page.notify_agent_change(None, cx);
+                        page.saved = if deleting {
+                            None
+                        } else {
+                            page.catalog()
+                                .into_iter()
+                                .find(|spec| spec.id.as_str() == saved_id)
+                        };
+                        if let Some(spec) = page.saved.clone() {
+                            page.start_check(spec, true, cx);
+                        }
+                        page.refresh_registry(false, cx);
+                    }
+                    Err(error) => page.message = error,
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn target(&self) -> Option<bas::service::tls::ConnectionOptions> {
+        self.catalog_service.as_ref().map(catalog::Service::address)
+    }
+
     pub(super) fn settings_path(&self) -> Option<&std::path::Path> {
-        self.registry.verified_local().then(|| self.store.path())
+        self.catalog_service
+            .as_ref()
+            .filter(|service| service.local())
+            .and_then(|_| self.registry.catalog.as_ref()?.settings_path.as_deref())
     }
 
     pub(super) fn localize(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -278,8 +413,12 @@ impl Agents {
             .collect();
         subscriptions.push(cx.subscribe(&registry_search, |_, _, _: &InputEvent, cx| cx.notify()));
         let mut page = Self {
+            catalog_service: cx.try_global::<catalog::Service>().cloned(),
+            check_service: cx.try_global::<check::Service>().cloned(),
             store,
             document: None,
+            configuration: None,
+            configuration_task: None,
             editor: Editor::Idle,
             form,
             message: String::new(),
@@ -334,7 +473,10 @@ impl Agents {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        self.document = Some(document);
+        self.document = Some(AgentDocument {
+            settings: document.settings.clone(),
+            local: Some(document),
+        });
     }
 
     pub(super) fn display_catalog(&self) -> Vec<AgentSpec> {
@@ -346,7 +488,13 @@ impl Agents {
 
     pub(super) fn configuration_entries(&self) -> Vec<bas::management::Entry> {
         use bas::management::{Entry, Source, Status};
-        let mut entries: Vec<_> = if self.registry.editable() {
+        let mut entries: Vec<_> = if self.configuration.is_some() {
+            self.document
+                .iter()
+                .flat_map(|document| &document.settings.daemon.agents)
+                .map(|registration| self.remote_configuration_entry(registration))
+                .collect()
+        } else if self.registry.editable() && self.catalog_service.is_none() {
             self.document
                 .iter()
                 .flat_map(|document| &document.settings.daemon.agents)
@@ -409,6 +557,39 @@ impl Agents {
         entries
     }
 
+    fn remote_configuration_entry(
+        &self,
+        registration: &AgentRegistration,
+    ) -> bas::management::Entry {
+        if let Some(spec) = registration.as_custom() {
+            return self.configured_entry(spec);
+        }
+        if let Some(entry) = self.registry.catalog.as_ref().and_then(|catalog| {
+            catalog.entries.iter().find(|entry| {
+                entry.id == registration.id().as_str()
+                    && entry.source == bas::management::Source::Registry
+            })
+        }) {
+            return entry.clone();
+        }
+        // Registration identity is available even when its server-side descriptor is not.
+        bas::management::Entry {
+            id: registration.id().to_string(),
+            name: registration.id().to_string(),
+            description: String::new(),
+            version: String::new(),
+            repository: String::new(),
+            license: String::new(),
+            license_url: String::new(),
+            icon: String::new(),
+            installed_version: None,
+            source: bas::management::Source::Registry,
+            status: bas::management::Status::Missing,
+            message: crate::i18n::tr!("agent-catalog-missing").into(),
+            spec: None,
+        }
+    }
+
     pub(super) fn open_installation(&mut self, cx: &mut Context<Self>) {
         self.pending_reveal = None;
         self.refresh_registry(false, cx);
@@ -455,6 +636,16 @@ impl Agents {
                 // before launching a connection/authentication probe.
                 self.pending_reveal = Some(id.to_owned());
                 self.refresh_registry(false, cx);
+            } else if self.catalog_service.is_some() {
+                if let Some(spec) = self
+                    .registry
+                    .catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.entries.iter().find(|entry| entry.id == id))
+                    .and_then(|entry| entry.spec.clone())
+                {
+                    self.start_check(spec, true, cx);
+                }
             } else {
                 match managed.resolve() {
                     Ok(spec) => self.start_check(spec, true, cx),
@@ -523,7 +714,7 @@ impl Agents {
             );
             return;
         }
-        let Some(service) = cx.try_global::<check::Service>().cloned() else {
+        let Some(service) = self.check_service.clone() else {
             self.checks.insert(
                 spec.id.clone(),
                 Check {
@@ -535,11 +726,6 @@ impl Agents {
             );
             return;
         };
-        if !self.registry.editable() {
-            self.message = crate::i18n::tr!("agent-catalog-readonly").into();
-            cx.notify();
-            return;
-        }
         self.authentications.remove(&spec.id);
         let request = service.request(spec.clone(), connect, self.store.path().to_owned());
         let expected = spec.clone();
@@ -672,6 +858,15 @@ impl Agents {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
+        if self.catalog_service.is_some() {
+            if self.dirty(cx) {
+                self.message = crate::i18n::tr!("agent-save-before-reload").into();
+            } else {
+                self.fetch_configuration(cx);
+            }
+            cx.notify();
+            return;
+        }
         if self.dirty(cx) {
             self.message = crate::i18n::tr!("agent-save-before-reload").into();
         } else {
@@ -681,7 +876,7 @@ impl Agents {
                     self.editor = Editor::Idle;
                     self.message.clear();
                     self.checks.clear();
-                    if cx.try_global::<catalog::Service>().is_some() {
+                    if self.catalog_service.is_some() {
                         self.refresh_registry(false, cx);
                     } else {
                         for spec in self.catalog() {
@@ -705,7 +900,7 @@ impl Agents {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.registry.editable() {
+        if !self.registry.editable() || self.configuration_task.is_some() {
             self.message = crate::i18n::tr!("agent-edit-mismatch").into();
         } else if selected
             .as_ref()
@@ -810,19 +1005,34 @@ impl Agents {
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
+        if self.configuration_task.is_some() {
+            return;
+        }
+        if self.catalog_service.is_some() {
+            self.save_configuration(cx);
+            return;
+        }
         let connected = self.draft_connected(cx);
         let deleting = self.editor.deleting();
         let saved_id: bas::model::AgentId = self.form.id.read(cx).value().to_string().into();
         let result = self.candidate(cx).and_then(|catalog| {
             self.store
                 .save_agents(
-                    self.document.as_mut().ok_or(DraftError::NotLoaded)?,
+                    self.document
+                        .as_mut()
+                        .and_then(|document| document.local.as_mut())
+                        .ok_or(DraftError::NotLoaded)?,
                     catalog,
                 )
                 .map_err(DraftError::Store)
         });
         match result {
             Ok(()) => {
+                if let Some(document) = self.document.as_mut()
+                    && let Some(local) = &document.local
+                {
+                    document.settings = local.settings.clone();
+                }
                 self.editor = Editor::Idle;
                 self.saved = None;
                 self.message.clear();
@@ -1001,6 +1211,7 @@ impl Agents {
     fn cancel_button(&self, cx: &mut Context<Self>) -> crate::ui::Button {
         button("agents-cancel")
             .label(crate::i18n::tr!("action-cancel"))
+            .disabled(self.configuration_task.is_some())
             .on_click(cx.listener(Self::on_cancel_edit))
     }
 
@@ -1015,7 +1226,7 @@ impl Agents {
                 #div { flex_1; },
                 $self.cancel_button(cx),
                 $button("agents-save") {
-                    disabled: $(!self.registry.editable() || self.document.is_none());
+                    disabled: $(!self.registry.editable() || self.document.is_none() || self.configuration_task.is_some());
                     label: $crate::i18n::tr!("agent-save");
                     on_click: $cx.listener(Self::on_save);
                 },
@@ -1033,7 +1244,7 @@ impl Agents {
                     #div { flex; flex_col; gap_1; } [
                         #div { text_size: $crate::ui::SMALL; } [ $label ],
                         #div { id: $id; test_support; } [
-                            $crate::ui::input::placeholder(input, Input::new(input).small().disabled(self.editor.deleting() || !self.registry.editable()))
+                            $crate::ui::input::placeholder(input, Input::new(input).small().disabled(self.editor.deleting() || !self.registry.editable() || self.configuration_task.is_some()))
                         ],
                     ]
                 }),
@@ -1055,11 +1266,14 @@ impl Agents {
     }
 
     fn on_cancel_edit(&mut self, _: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.configuration_task.is_some() {
+            return;
+        }
         self.editor = Editor::Idle;
         if let Some(catalog) = self.registry.catalog.clone()
-            && let Some(service) = cx.try_global::<catalog::Service>()
+            && self.catalog_service.is_some()
         {
-            self.apply_catalog(catalog, service.local(), cx);
+            self.apply_catalog(catalog, cx);
         }
         self.message = crate::i18n::tr!("agent-edit-cancelled").into();
         cx.notify();
@@ -1153,6 +1367,8 @@ impl Agents {
                             on_click: $cx.listener(Self::on_add_agent);
                         },
                         #item::action("agents-reload", $gpui_kit::assets::IconName::RefreshCw, $crate::i18n::tr!("settings-refresh-agents")) {
+                            disabled: $self.configuration_task.is_some();
+                            loading: $self.configuration_task.is_some();
                             on_click: $cx.listener(Self::on_reload_agents);
                         },
                     ],

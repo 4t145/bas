@@ -261,7 +261,7 @@ impl Connection {
             }
             request.session_id = session.to_string().into();
             let content = read_host.read_text_file(request).await
-                .map_err(agent_client_protocol::Error::into_internal_error)?;
+                .map_err(file_error)?;
             responder.respond(v1::ReadTextFileResponse::new(content))?;
             Ok(())
         }, on_receive_request!())
@@ -272,7 +272,7 @@ impl Connection {
             }
             request.session_id = session.to_string().into();
             host.write_text_file(request).await
-                .map_err(agent_client_protocol::Error::into_internal_error)?;
+                .map_err(file_error)?;
             responder.respond(v1::WriteTextFileResponse::new())?;
             Ok(())
         }, on_receive_request!())
@@ -423,6 +423,13 @@ impl Connection {
                     .compaction(v1::CompactionCapabilities::new())
                     .notices(v1::NoticeCapabilities::new()),
             )
+    }
+}
+
+fn file_error(error: Error) -> v1::Error {
+    match error {
+        Error::Acp(error) => error,
+        error => v1::Error::internal_error().data(error.report()),
     }
 }
 

@@ -168,7 +168,12 @@ impl Workspace {
                     &title.split_whitespace().collect::<Vec<_>>().join(" "),
                     expanded,
                     index,
-                    Some(status::activity_icon(format!("tool-kind-{id}"), tool_icon(tool.kind), cx.theme().muted_foreground, false)),
+                    Some(status::activity_icon(
+                        format!("tool-kind-{id}"),
+                        tool_icon(tool.kind),
+                        if tool.kind == bas::model::ToolKind::Delete { cx.theme().danger } else { cx.theme().muted_foreground },
+                        false,
+                    )),
                     cx,
                 ) { w_full; },
             ]

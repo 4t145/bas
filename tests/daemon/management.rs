@@ -19,6 +19,122 @@ struct Fixture {
     _server: AbortOnDropHandle<()>,
 }
 
+pub(super) async fn edit_configuration(client: &mut Client, path: &std::path::Path) {
+    let baseline = client
+        .get_agent_configuration(pb::GetAgentConfigurationRequest {})
+        .await
+        .expect("fetch daemon-owned agent section")
+        .into_inner();
+    let mut spec = AgentSpec::embedded();
+    spec.description = "Edited through RPC".into();
+    let agents = vec![bas::config::AgentRegistration::from(spec.clone())];
+    let request = pb::SaveAgentConfigurationRequest {
+        profile: baseline.profile.clone(),
+        revision: baseline.revision.clone(),
+        registrations_json: serde_json::to_vec(&agents).expect("registrations"),
+    };
+    let saved = client
+        .save_agent_configuration(request.clone())
+        .await
+        .expect("save agent section")
+        .into_inner();
+    assert_ne!(saved.revision, baseline.revision);
+    assert_eq!(
+        client
+            .get_agent_configuration(pb::GetAgentConfigurationRequest {})
+            .await
+            .expect("readback")
+            .into_inner(),
+        saved
+    );
+    assert_eq!(
+        bas::config::Store::at(path.to_owned())
+            .load()
+            .expect("persisted document")
+            .settings
+            .daemon
+            .agents,
+        agents
+    );
+    let stale = client
+        .save_agent_configuration(request)
+        .await
+        .expect_err("stale edit rejected");
+    assert_eq!(stale.code(), tonic::Code::Aborted);
+    let wrong_profile = client
+        .save_agent_configuration(pb::SaveAgentConfigurationRequest {
+            profile: "different-daemon-profile".into(),
+            revision: saved.revision.clone(),
+            registrations_json: saved.registrations_json.clone(),
+        })
+        .await
+        .expect_err("wrong profile rejected");
+    assert_eq!(wrong_profile.code(), tonic::Code::FailedPrecondition);
+    let invalid = client
+        .save_agent_configuration(pb::SaveAgentConfigurationRequest {
+            profile: saved.profile.clone(),
+            revision: saved.revision.clone(),
+            registrations_json: b"[]".to_vec(),
+        })
+        .await
+        .expect_err("invalid empty catalog rejected before persistence");
+    assert_eq!(invalid.code(), tonic::Code::InvalidArgument);
+    assert_eq!(
+        client
+            .get_agent_configuration(pb::GetAgentConfigurationRequest {})
+            .await
+            .expect("no overwrite")
+            .into_inner(),
+        saved
+    );
+    let check = client
+        .check_agent(pb::CheckAgentRequest {
+            agent: spec.id.to_string(),
+            expected_spec_json: serde_json::to_vec(&spec).expect("spec"),
+            connect: false,
+        })
+        .await
+        .expect("saved catalog published")
+        .into_inner();
+    assert_eq!(check.status(), pb::AgentCheckStatus::Connected);
+}
+
+#[tokio::test]
+async fn tcp_configuration_edit_persists_and_conflicts_do_not_overwrite() {
+    let directory = tempfile::tempdir().expect("settings fixture");
+    let fixture = Fixture::new(directory.path()).await;
+    let mut daemon = start(directory.path(), &fixture).await;
+    edit_configuration(&mut daemon.client, &directory.path().join("settings.json")).await;
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn fixed_catalog_configuration_is_read_only() {
+    let mut command = command();
+    command.args([
+        "--listen",
+        "127.0.0.1:0",
+        "--notify",
+        "never",
+        "--log-backend",
+        "stdout",
+    ]);
+    let mut daemon = Daemon::start(command).await;
+    let error = daemon
+        .client
+        .get_agent_configuration(pb::GetAgentConfigurationRequest {})
+        .await
+        .expect_err("fixed startup catalog");
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    let error = daemon
+        .client
+        .save_agent_configuration(pb::SaveAgentConfigurationRequest::default())
+        .await
+        .expect_err("cannot write fixed startup catalog");
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    daemon.stop().await;
+}
+
 impl Fixture {
     async fn new(directory: &std::path::Path) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

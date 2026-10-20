@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
 
     ::tracing::info!(
         backend = %backend,
-        listen = %config.listen,
+        listen = ?config.listen,
         agents = config.agents.len(),
         "bas starting"
     );
@@ -80,13 +80,44 @@ async fn run(config: Config) -> Result<()> {
             .as_ref()
             .and_then(|source| source.settings_store()),
     )?);
-    let listener = tokio::net::TcpListener::bind(config.listen)
-        .await
-        .with_context(|| format!("cannot listen on {}", config.listen))?;
-    let local = listener
-        .local_addr()
-        .context("cannot read the bound address")?;
+    let mut listeners = Vec::new();
+    let mut bound = Vec::new();
     let stopping = tokio_util::sync::CancellationToken::new();
+    let tls = config.tls.as_ref().map(|tls| tls.load()).transpose()?;
+    for target in &config.listen {
+        let mut server = tonic::transport::Server::builder();
+        let bind_target = match target {
+            bas::service::Target::Mtls(address) => {
+                server = server.tls_config(
+                    tls.clone()
+                        .context("mTLS listener requires server TLS configuration")?,
+                )?;
+                bas::service::Target::Tcp(address.clone())
+            }
+            _ => target.clone(),
+        };
+        let listener = bas::service::transport::Listener::bind(&bind_target)
+            .await
+            .with_context(|| format!("cannot listen on {target}"))?;
+        bound.push(match (target, listener.target()) {
+            (bas::service::Target::Mtls(_), bas::service::Target::Tcp(address)) => {
+                bas::service::Target::Mtls(address.clone())
+            }
+            _ => listener.target().clone(),
+        });
+        listeners.push(
+            server
+                .add_service(
+                    service::Service::new(Arc::clone(&registry))
+                        .with_manager(Arc::clone(&manager))
+                        .into_server(),
+                )
+                .serve_with_incoming_shutdown(
+                    listener.incoming(),
+                    stopping.clone().cancelled_owned(),
+                ),
+        );
+    }
     let catalog_watcher = config.catalog_source.map(|source| {
         config::watch_catalog(
             source,
@@ -95,20 +126,13 @@ async fn run(config: Config) -> Result<()> {
             stopping.clone(),
         )
     });
-    let server = tonic::transport::Server::builder()
-        .add_service(
-            service::Service::new(Arc::clone(&registry))
-                .with_manager(Arc::clone(&manager))
-                .into_server(),
-        )
-        .serve_with_incoming_shutdown(
-            tokio_stream::wrappers::TcpListenerStream::new(listener),
-            stopping.clone().cancelled_owned(),
-        );
+    let server = async { futures::future::try_join_all(listeners).await.map(|_| ()) };
     tokio::pin!(server);
     let watchdog = system::spawn_watchdog();
     system::ready();
-    ::tracing::info!(address = %local, "serving the bas.v1.Bas service");
+    for target in &bound {
+        ::tracing::info!(address = %target, "serving the bas.v1.Bas service");
+    }
     let (server_result, signal_result) = tokio::select! {
         result = &mut server => (Some(result), Ok(())),
         result = shutdown => (None, result),

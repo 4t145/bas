@@ -18,7 +18,7 @@ impl Command {
     ///
     /// Returns an error when the daemon rejects the request or the connection
     /// fails mid-call.
-    pub async fn run(self, client: &mut Client, server: std::net::SocketAddr) -> Result<()> {
+    pub async fn run(self, client: &mut Client, server: &bas::service::Target) -> Result<()> {
         match self {
             Command::Agents => agents::list(client).await,
             Command::Agent(command) => agents::manage(command, client, server).await,

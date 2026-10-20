@@ -25,7 +25,7 @@ struct OpenWindow {
 }
 
 #[derive(Default)]
-struct Windows(BTreeMap<SocketAddr, OpenWindow>);
+struct Windows(BTreeMap<bas::service::tls::ConnectionOptions, OpenWindow>);
 impl Global for Windows {}
 
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -49,7 +49,7 @@ pub(crate) fn open(request: OpenRequest, cx: &mut App) -> anyhow::Result<WindowH
     let service = cx
         .try_global::<crate::agents::catalog::Service>()
         .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("agent-history-unavailable")))?;
-    let (connection, events) = Connection::new(request.server, service.runtime());
+    let (connection, events) = Connection::new(request.server.clone(), service.runtime());
     open_connected(request, connection, events, cx)
 }
 
@@ -78,7 +78,7 @@ pub(crate) fn open_connected(
     if let Some(handle) = reopen(request.clone(), cx) {
         return Ok(handle);
     }
-    let server = request.server;
+    let server = request.server.clone();
     let mut browser = None;
     let handle = cx.open_window(window_options(cx), |window, cx| {
         window.set_window_title(crate::i18n::tr!("agent-history-title"));
@@ -125,7 +125,10 @@ fn window_options(cx: &App) -> WindowOptions {
 }
 
 #[cfg(all(test, feature = "gui-tests"))]
-pub(super) fn browser(server: SocketAddr, cx: &App) -> WeakEntity<Browser> {
+pub(super) fn browser(
+    server: bas::service::tls::ConnectionOptions,
+    cx: &App,
+) -> WeakEntity<Browser> {
     cx.global::<Windows>().0[&server].browser.clone()
 }
 

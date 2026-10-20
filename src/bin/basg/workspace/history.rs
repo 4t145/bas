@@ -12,7 +12,7 @@ impl Workspace {
         let owner = cx.entity().downgrade();
         let parent = self.window.handle;
         crate::history::OpenRequest {
-            server: self.backend.server,
+            server: self.backend.server.clone(),
             agents: self.backend.agents.clone(),
             agent: Some(agent),
             cwd: self
@@ -36,7 +36,9 @@ impl Workspace {
                     .update(cx, |_, window, cx| {
                         owner.update(cx, |this, cx| {
                             this.adopt_agent_session(snapshot, window, cx);
-                            window.activate_window();
+                            if this.window.presented {
+                                window.activate_window();
+                            }
                         })
                     })
                     .is_ok_and(|result| result.is_ok())

@@ -41,6 +41,7 @@ impl Agents {
         };
         let id = spec.id.to_string();
         let manage_id = id.clone();
+        let target = self.target();
         let owner = cx.entity().downgrade();
         Some(gds_uim::el! { #div {
             id: "agents-save-feedback"; test_support; flex; flex_col; gap_2;
@@ -63,9 +64,10 @@ impl Agents {
                     small; icon: IconName::Settings; label: $crate::i18n::tr!("agent-manage");
                     on_click: $move |_, _, cx| {
                         let id = manage_id.clone();
+                        let target = target.clone();
                         let owner = owner.clone();
                         cx.defer(move |cx| {
-                            if let Err(error) = crate::settings::window::open_agent_management(&id, cx) {
+                            if let Err(error) = crate::settings::window::open_agent_management(&id, target, cx) {
                                 let _ = owner.update(cx, |page, cx| { page.message = error.to_string(); cx.notify(); });
                             }
                         });

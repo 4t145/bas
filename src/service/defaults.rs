@@ -1,7 +1,12 @@
-/// Default address used by the daemon and its clients.
-///
-/// The service listens on loopback because sessions can access local files.
-pub const DEFAULT_ADDRESS: &str = "127.0.0.1:7337";
+/// Default connection type. Resolves to same-user local IPC, never TCP.
+pub const DEFAULT_TARGET: &str = "local";
+
+/// Default port for TCP and mTLS targets that omit an explicit port.
+pub const DEFAULT_PORT: u16 = 7337;
+
+/// Conventional address for explicitly enabled, unauthenticated TCP.
+pub static DEFAULT_ADDRESS: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("127.0.0.1:{DEFAULT_PORT}"));
 
 /// Recent replayable events requested by clients unless configured otherwise.
 pub const DEFAULT_REPLAY: usize = 32;

@@ -20,6 +20,7 @@ pub(crate) const RELEASES_URL: &str = "https://github.com/4t145/bas/releases";
 const HOME_URL: &str = "https://github.com/4t145/bas";
 const WIDTH: f32 = 480.;
 const HEIGHT: f32 = 420.;
+const ABOUT_HEIGHT: f32 = 480.;
 
 actions!(application, [OpenSettings, Quit]);
 
@@ -211,6 +212,11 @@ impl InfoWindow {
 /// Returns a platform error when opening a native window fails.
 fn open_host(host: Host, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     let kind = host.kind;
+    let height = if matches!(kind, InfoWindow::About) {
+        ABOUT_HEIGHT
+    } else {
+        HEIGHT
+    };
     if !cx.has_global::<OpenWindows>() {
         cx.set_global(OpenWindows::default());
     }
@@ -226,10 +232,10 @@ fn open_host(host: Host, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
             kind: kind.window_kind(),
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
-                size(px(WIDTH), px(HEIGHT)),
+                size(px(WIDTH), px(height)),
                 cx,
             ))),
-            window_min_size: Some(size(px(WIDTH), px(HEIGHT))),
+            window_min_size: Some(size(px(WIDTH), px(height))),
             window_decorations: Some(WindowDecorations::Client),
             window_background: cx.global::<theme::Appearance>().background,
             app_id: Some("org.bas.Gui".into()),
@@ -362,16 +368,33 @@ impl Host {
     }
 
     fn about(&self) -> impl IntoElement {
+        let version = crate::i18n::tr!("app-version", version = env!("CARGO_PKG_VERSION"));
+        let build_tag = crate::i18n::tr!("app-build-tag", tag = env!("BAS_BUILD_TAG"));
         el! {
             #div {
-                flex; flex_col; items_center; gap_3; p_6;
+                id: "about-content";
+                flex; flex_col; flex_1; min_h_0; overflow_y_scroll;
+                items_center; gap_3; p_6;
             } [
                 #div {
                     id: "about-dimensional-logo";
                     test_support;
                     size: 96.0.px;
                 } [#branding::dimensional_logo { size_full; }],
-                $format!("BasG {}", env!("CARGO_PKG_VERSION")),
+                $"BasG",
+                #div {
+                    id: "about-version";
+                    test_support;
+                    role: gpui_kit::Role::Label;
+                    aria_label: $version.clone();
+                } [$version],
+                #div {
+                    id: "about-build-tag";
+                    test_support;
+                    role: gpui_kit::Role::Label;
+                    aria_label: $build_tag.clone();
+                    text_sm; whitespace_normal;
+                } [$crate::ui::tooltip::wrap_tokens(&build_tag)],
                 $crate::i18n::tr!("app-description"),
                 $crate::i18n::tr!("app-license"),
                 #crate::ui::action_button("about-home") {

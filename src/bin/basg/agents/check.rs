@@ -1,6 +1,7 @@
 //! The local daemon, not the GUI's PATH, determines backend availability.
 
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use bas::service::tls::ConnectionOptions as Target;
+use std::{path::PathBuf, time::Duration};
 
 use bas::{
     config::AgentSpec,
@@ -21,19 +22,23 @@ mod tests;
 
 #[derive(Clone)]
 pub(crate) struct Service {
-    server: SocketAddr,
+    server: Target,
     runtime: Handle,
 }
 
 impl Global for Service {}
 
-pub(crate) fn init(server: SocketAddr, runtime: Handle, cx: &mut App) {
+pub(crate) fn init(server: Target, runtime: Handle, cx: &mut App) {
     cx.set_global(Service { server, runtime });
 }
 
 impl Service {
-    pub(crate) fn address(&self) -> SocketAddr {
-        self.server
+    pub(crate) fn new(server: Target, runtime: Handle) -> Self {
+        Self { server, runtime }
+    }
+
+    pub(crate) fn address(&self) -> Target {
+        self.server.clone()
     }
 
     pub(crate) fn runtime(&self) -> Handle {
@@ -46,7 +51,7 @@ impl Service {
         connect: bool,
         settings_path: PathBuf,
     ) -> impl Future<Output = Status> + use<> {
-        let server = self.server;
+        let server = self.server.clone();
         let (send, receive) = futures::channel::oneshot::channel();
         let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
             let result = tokio::time::timeout(
@@ -67,40 +72,21 @@ impl Service {
 }
 
 /// # Errors
-/// Rejects remote endpoints, incompatible daemons, stale configuration and transport failures.
+/// Rejects incompatible daemons and transport failures; RPCs validate the expected saved spec.
 pub(crate) async fn verified_client(
-    server: SocketAddr,
-    settings_path: &std::path::Path,
+    server: Target,
+    _settings_path: &std::path::Path,
 ) -> Result<Client, String> {
-    // Local settings must never launch a command on a remotely configured daemon.
-    if !server.ip().is_loopback() {
-        return Err(crate::i18n::tr!("agent-check-local").into());
-    }
-    let mut client = Client::connect_at(server)
+    let client = Client::connect_options(&server)
         .await
         .map_err(|_| crate::i18n::tr!("service-connect-failed", server = (server).to_string()))?;
-    let response = client
-        .list_agent_catalog(pb::ListAgentCatalogRequest { refresh: false })
-        .await
-        .map_err(|error| {
-            crate::i18n::tr!(
-                "service-config-failed",
-                error = (error.message()).to_string()
-            )
-        })?
-        .into_inner();
-    let catalog: bas::management::Catalog = serde_json::from_slice(&response.catalog_json)
-        .map_err(|_| crate::i18n::tr!("agent-catalog-invalid").to_owned())?;
-    if !super::catalog::settings_match(&catalog, settings_path) {
-        return Err(crate::i18n::tr!("agent-config-mismatch").into());
-    }
     Ok(client)
 }
 
 /// # Errors
 /// Rejects mismatched daemon settings, stale specs and ACP transport failures.
 async fn request(
-    server: SocketAddr,
+    server: Target,
     spec: AgentSpec,
     connect: bool,
     settings_path: PathBuf,

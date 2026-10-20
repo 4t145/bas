@@ -6,6 +6,7 @@
   makeWrapper,
   makeDesktopItem,
   gui ? false,
+  buildTag ? null,
 }:
 let
   desktopLibraries = import ./desktop-libraries.nix { inherit pkgs; };
@@ -24,7 +25,7 @@ let
     startupWMClass = "org.bas.Gui";
   };
 in
-rustPlatform.buildRustPackage {
+rustPlatform.buildRustPackage (finalAttrs: {
   pname = if gui then "basg" else "bas";
   version = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).package.version;
 
@@ -34,6 +35,8 @@ rustPlatform.buildRustPackage {
       ../Cargo.toml
       ../Cargo.lock
       ../build.rs
+      ../build_metadata.rs
+      ../build_metadata
       ../src
       ../proto
       ../assets
@@ -41,6 +44,10 @@ rustPlatform.buildRustPackage {
       ../tests
     ];
   };
+  # Content identity survives source snapshots without .git and includes local edits.
+  BAS_BUILD_TAG =
+    if buildTag != null then buildTag
+    else "nix-source-${builtins.substring 0 32 (builtins.baseNameOf finalAttrs.src)}";
   cargoLock.lockFile = ../Cargo.lock;
   buildFeatures = lib.optionals gui [ "gui" ];
   cargoBuildFlags = lib.optionals gui [
@@ -97,4 +104,4 @@ rustPlatform.buildRustPackage {
     platforms = lib.platforms.linux;
     mainProgram = if gui then "basg" else "bast";
   };
-}
+})

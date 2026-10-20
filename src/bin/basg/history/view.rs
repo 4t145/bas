@@ -22,7 +22,7 @@ const AGENT_WIDTH: f32 = 184.;
 impl Browser {
     fn agent_icon(&self, id: &str, cx: &App) -> AnyElement {
         let artwork = crate::agents::metadata::entity(cx)
-            .and_then(|metadata| metadata.read(cx).icon(self.server, id))
+            .and_then(|metadata| metadata.read(cx).icon(&self.server, id))
             .unwrap_or_default();
         gds_uim::el! {
             crate::agents::icon::AgentIcon($format!("history-agent-icon-{id}"), artwork) {

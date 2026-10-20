@@ -5,12 +5,20 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 export BAS_PACKAGE_SOURCE="$root"
 # Include untracked source without copying environment files or build outputs.
 exec nix eval --impure --raw --expr '
+  let root = builtins.getEnv "BAS_PACKAGE_SOURCE"; in
   builtins.path {
-    path = builtins.getEnv "BAS_PACKAGE_SOURCE";
+    path = root;
     name = "bas-source";
     filter = path: type:
-      let name = builtins.baseNameOf path; in
-      !(builtins.elem name [ ".git" ".delta" ".direnv" "target" "result" "node_modules" "__pycache__" ])
+      let
+        name = builtins.baseNameOf path;
+        parent = builtins.dirOf path;
+        # Cargo outputs live beside a manifest, not in source modules named target.
+        cargoOutput = name == "target"
+          && (parent == root || builtins.pathExists (parent + "/Cargo.toml"));
+      in
+      !(builtins.elem name [ ".git" ".delta" ".direnv" "result" "node_modules" "__pycache__" ])
+      && !cargoOutput
       && builtins.match "[.]env([.].*)?" name == null;
   }
 '

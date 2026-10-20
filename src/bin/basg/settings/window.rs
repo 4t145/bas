@@ -28,6 +28,7 @@ struct OpenWindow {
 impl Global for OpenWindow {}
 
 pub(crate) fn bind_keys(cx: &mut App) {
+    super::connections::bind_keys(cx);
     cx.bind_keys([gpui_kit::KeyBinding::new(
         if cfg!(target_os = "macos") {
             "cmd-w"
@@ -44,7 +45,13 @@ pub(crate) fn bind_keys(cx: &mut App) {
 pub(crate) fn open(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     if let Some(handle) = current(cx)
         && handle
-            .update(cx, |_, window, _| window.activate_window())
+            .update(cx, |_, window, cx| {
+                // A workspace may change management context immediately before
+                // revealing an agent, before global observers have been delivered.
+                let settings = cx.global::<OpenWindow>().settings.clone();
+                let _ = settings.update(cx, |settings, cx| settings.on_backend_changed(window, cx));
+                window.activate_window();
+            })
             .is_ok()
     {
         return Ok(handle);
@@ -83,6 +90,19 @@ pub(crate) fn current(cx: &App) -> Option<WindowHandle<Root>> {
     cx.try_global::<OpenWindow>().map(|state| state.handle)
 }
 
+/// # Errors
+/// Returns an error if the settings window cannot be opened or updated.
+pub(crate) fn open_connections(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
+    let handle = open(cx)?;
+    let settings = cx.global::<OpenWindow>().settings.clone();
+    handle.update(cx, |_, window, cx| {
+        settings.update(cx, |settings, cx| {
+            settings.select_category(super::Category::Connections, window, cx);
+        })
+    })??;
+    Ok(handle)
+}
+
 /// Opens a local agent's settings and explicitly refreshes its ACP auth methods.
 ///
 /// # Errors
@@ -100,8 +120,17 @@ pub(crate) fn open_agent(agent: &str, cx: &mut App) -> anyhow::Result<WindowHand
 /// Returns an error if the settings window cannot be opened or updated.
 pub(crate) fn open_agent_management(
     agent: &str,
+    target: Option<bas::service::tls::ConnectionOptions>,
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<Root>> {
+    if let Some(target) = target {
+        crate::connections::manage(target, cx);
+    } else {
+        anyhow::ensure!(
+            crate::connections::current(cx).is_none(),
+            "The originating standalone settings context is no longer active"
+        );
+    }
     let handle = open(cx)?;
     let settings = cx.global::<OpenWindow>().settings.clone();
     handle.update(cx, |_, window, cx| {

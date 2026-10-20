@@ -85,8 +85,11 @@ class NixSourceTests(unittest.TestCase):
             shutil.copyfile(ROOT / "scripts/nix-source", script)
             kept = [
                 "src/untracked.rs",
+                "src/service/target/tests.rs",
+                "acp-test-agent/Cargo.toml",
                 "vendor/gds-uim/Cargo.toml",
                 "vendor/gds-uim/src/lib.rs",
+                "vendor/gds-uim/src/target/tests.rs",
                 ".gitmodules",
                 ".envrc",
             ]
@@ -99,6 +102,7 @@ class NixSourceTests(unittest.TestCase):
                 ".env.private",
                 "vendor/gds-uim/.env.private",
                 "target/output",
+                "acp-test-agent/target/output",
                 "vendor/gds-uim/target/output",
                 "node_modules/package/index.js",
                 "result/output",

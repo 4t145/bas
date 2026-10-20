@@ -1,7 +1,7 @@
 //! Daemon-owned ACP discovery and installation. The GUI never executes registry commands.
 
 use super::{Agents, item};
-use crate::agents::catalog::{Service, Updates, settings_match};
+use crate::agents::catalog::Updates;
 use crate::ui::Button;
 use bas::management::{Catalog, Entry, Source, Status};
 use gpui_kit::{
@@ -14,7 +14,7 @@ use gpui_kit::{
 
 const REGISTRY_URL: &str = "https://github.com/agentclientprotocol/registry";
 
-/// Refreshes retain the last catalog; only a verified local profile grants daemon-backed edits.
+/// Refreshes retain the last catalog; configuration RPC capability grants edits.
 pub(super) struct Registry {
     pub(super) catalog: Option<Catalog>,
     access: Access,
@@ -24,9 +24,8 @@ pub(super) struct Registry {
 enum Access {
     Standalone,
     AwaitingProfile,
-    LocalProfile,
+    Editable,
     OtherProfile,
-    Remote,
     Unavailable,
 }
 
@@ -53,11 +52,7 @@ impl Registry {
     }
 
     pub(super) fn editable(&self) -> bool {
-        matches!(self.access, Access::Standalone | Access::LocalProfile)
-    }
-
-    pub(super) fn verified_local(&self) -> bool {
-        matches!(self.access, Access::LocalProfile)
+        matches!(self.access, Access::Standalone | Access::Editable)
     }
 
     fn loading(&self) -> bool {
@@ -119,7 +114,7 @@ fn status_label(entry: &Entry) -> &'static str {
 
 impl Agents {
     pub(super) fn notify_agent_change(&self, ready: Option<String>, cx: &mut Context<Self>) {
-        let Some(service) = cx.try_global::<Service>().cloned() else {
+        let Some(service) = self.catalog_service.clone() else {
             return;
         };
         if cx.try_global::<crate::agents::Changes>().is_none() {
@@ -133,11 +128,13 @@ impl Agents {
         });
     }
 
-    pub(super) fn begin_chat(&self, id: String, cx: &mut Context<Self>) {
-        let Some(service) = cx.try_global::<Service>().cloned() else {
+    pub(super) fn begin_chat(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(service) = self.catalog_service.clone() else {
             return;
         };
-        if cx.try_global::<crate::agents::Changes>().is_none() {
+        if let Err(error) = crate::connections::open_for(service.address(), cx) {
+            self.message = error.to_string();
+            cx.notify();
             return;
         }
         cx.update_global::<crate::agents::Changes, _>(|changes, _| {
@@ -149,7 +146,7 @@ impl Agents {
     }
 
     pub(super) fn refresh_registry(&mut self, refresh: bool, cx: &mut Context<Self>) {
-        let Some(service) = cx.try_global::<Service>().cloned() else {
+        let Some(service) = self.catalog_service.clone() else {
             return;
         };
         if self.registry.loading() {
@@ -162,9 +159,13 @@ impl Agents {
                 let _ = page.update(cx, |page, cx| {
                     page.registry.load = Load::Idle;
                     match result {
-                        Ok(catalog) => page.apply_catalog(catalog, service.local(), cx),
+                        Ok(catalog) => page.apply_catalog(catalog, cx),
                         Err(error) => {
-                            page.registry.access = Access::Unavailable;
+                            page.registry.access = if page.configuration.is_some() {
+                                Access::Editable
+                            } else {
+                                Access::Unavailable
+                            };
                             page.message =
                                 crate::i18n::tr!("catalog-load-error", error = (error).to_string());
                         }
@@ -176,46 +177,17 @@ impl Agents {
         cx.notify();
     }
 
-    pub(super) fn apply_catalog(&mut self, catalog: Catalog, local: bool, cx: &mut Context<Self>) {
-        if let Some(service) = cx.try_global::<Service>().cloned() {
+    pub(super) fn apply_catalog(&mut self, catalog: Catalog, cx: &mut Context<Self>) {
+        if let Some(service) = &self.catalog_service {
             crate::agents::metadata::publish(service.address(), &catalog, cx);
         }
-        // The daemon's verified local profile owns agent configuration; the
-        // frontend's appearance store is not an agent configuration authority.
-        // Never reinterpret a relative path in the GUI's working directory.
-        let backend_path = catalog.settings_path.as_deref().filter(|path| {
-            catalog.can_install
-                && path.is_absolute()
-                && (path.is_file() || settings_match(&catalog, self.store.path()))
-        });
-        let dirty = self.dirty(cx);
-        let can_bind = backend_path.is_some_and(|path| path == self.store.path() || !dirty);
-        self.registry.access = if !local {
-            Access::Remote
-        } else if can_bind {
-            let path = backend_path.expect("verified backend path");
-            if path != self.store.path() {
-                self.store = bas::config::Store::at(path.to_owned());
-                self.document = None;
-                self.editor = super::Editor::Idle;
-                self.checks.clear();
-                self.authentications.clear();
-            }
-            Access::LocalProfile
+        self.registry.access = if self.configuration.is_some() {
+            Access::Editable
         } else {
             Access::OtherProfile
         };
         self.registry.catalog = Some(catalog);
-        if self.registry.editable() {
-            if !dirty {
-                match self.store.load() {
-                    Ok(document) => self.accept_document(document),
-                    Err(error) => {
-                        self.message =
-                            crate::i18n::tr!("settings-load-error", error = (error).to_string())
-                    }
-                }
-            }
+        {
             let specs: Vec<_> = self
                 .registry
                 .catalog
@@ -235,12 +207,6 @@ impl Agents {
                     self.start_check(spec, false, cx);
                 }
             }
-        } else {
-            self.message = if local {
-                crate::i18n::tr!("catalog-config-mismatch").into()
-            } else {
-                crate::i18n::tr!("catalog-remote").into()
-            };
         }
         if let Some(id) = self.pending_reveal.take()
             && self.registry.editable()
@@ -251,6 +217,7 @@ impl Agents {
 
     pub(super) fn managed_allowed(&self, cx: &App) -> bool {
         self.registry.editable()
+            && self.configuration_task.is_none()
             && !self.dirty(cx)
             && self
                 .registry
@@ -263,7 +230,7 @@ impl Agents {
         if !self.managed_allowed(cx) || self.operations.values().any(|operation| operation.busy) {
             return;
         }
-        let Some(service) = cx.try_global::<Service>().cloned() else {
+        let Some(service) = self.catalog_service.clone() else {
             return;
         };
         self.start_install_updates(id.clone(), service.install(id), cx);
@@ -292,7 +259,7 @@ impl Agents {
                     if let Ok(operation) = update
                         && operation.complete
                     {
-                        if !page.dirty(cx) {
+                        if !page.dirty(cx) && page.catalog_service.is_none() {
                             match page.store.load() {
                                 Ok(document) => page.accept_document(document),
                                 Err(error) => {
@@ -310,7 +277,7 @@ impl Agents {
                         }
                     }
                     if finished {
-                        page.refresh_registry(false, cx);
+                        page.fetch_configuration(cx);
                     }
                     cx.notify();
                 });
@@ -351,10 +318,14 @@ impl Agents {
     }
 
     pub(super) fn remove_managed(&mut self, id: String, cx: &mut Context<Self>) {
-        if !self.managed_allowed(cx) || self.operations.values().any(|operation| operation.busy) {
+        if !self.registry.editable()
+            || self.configuration_task.is_some()
+            || self.dirty(cx)
+            || self.operations.values().any(|operation| operation.busy)
+        {
             return;
         }
-        let Some(service) = cx.try_global::<Service>().cloned() else {
+        let Some(service) = self.catalog_service.clone() else {
             return;
         };
         let request = service.remove(id.clone());
@@ -372,7 +343,7 @@ impl Agents {
                     };
                 }
                 page.notify_agent_change(None, cx);
-                page.refresh_registry(false, cx);
+                page.fetch_configuration(cx);
                 cx.notify();
             });
         });

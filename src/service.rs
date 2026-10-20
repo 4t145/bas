@@ -7,6 +7,10 @@
 mod client;
 mod convert;
 mod defaults;
+mod target;
+
+pub mod tls;
+pub mod transport;
 
 pub mod pb {
     //! Generated protobuf messages and service stubs.
@@ -20,6 +24,7 @@ pub mod pb {
 pub use client::*;
 pub use convert::*;
 pub use defaults::*;
+pub use target::*;
 
 #[cfg(test)]
 mod tests;

@@ -1,11 +1,13 @@
 //! Strict shared settings and conflict-aware, section-scoped persistence.
 pub mod agent;
 pub mod appearance;
+pub mod connections;
 pub mod paths;
 pub mod registration;
 mod store;
 pub use agent::{AgentSpec, validate_agents};
 pub use appearance::Appearance;
+pub use connections::{ConnectionProfile, Frontend};
 pub use registration::*;
 use serde::{Deserialize, Serialize};
 pub use store::{Document, Error, Store};
@@ -15,6 +17,7 @@ pub use store::{Document, Error, Store};
 pub struct Settings {
     pub appearance: Appearance,
     pub daemon: Daemon,
+    pub frontend: Frontend,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

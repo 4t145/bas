@@ -257,7 +257,7 @@ fn stale_catalog_cannot_replace_the_agent_while_creating_or_waiting_for_login(
     assert!(fixture.commands.try_recv().is_err());
     cx.update(|cx| {
         cx.update_global::<crate::agents::Changes, _>(|changes, _| {
-            changes.server = Some("127.0.0.1:7337".parse().expect("fixture server"));
+            changes.server = Some("127.0.0.1".parse().expect("fixture server"));
             changes.ready = Some("new-agent".into());
             changes.select = None;
             changes.revision += 1;

@@ -20,6 +20,7 @@ mod message_actions;
 mod navigation;
 mod operations;
 mod outbox;
+mod presentation;
 #[cfg(feature = "gui-tests")]
 mod preview;
 mod protocol_elements;
@@ -41,11 +42,11 @@ mod usage;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    net::SocketAddr,
     path::PathBuf,
 };
 
 use bas::model::{SessionId, SessionMeta, SessionStatus};
+use bas::service::tls::ConnectionOptions as Target;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::InputEvent;
 use gpui_kit::{
@@ -145,16 +146,20 @@ pub(super) struct Workspace {
 
 impl Workspace {
     pub fn new(
-        server: SocketAddr,
+        server: Target,
         cwd: PathBuf,
         compact: bool,
         runtime: &tokio::runtime::Handle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (connection, events) = Connection::new(server, runtime);
+        let (connection, events) = Connection::new(server.clone(), runtime);
+        let store = navigation::restore::Store::discover(&server);
         let mut view = Self::with_connection(connection, events, server, cwd, compact, window, cx);
-        view.attach_restore(navigation::restore::Store::discover(server));
+        view.attach_restore(store);
+        if !compact {
+            view.window.size = window.bounds().size;
+        }
         view.resize_window(window, cx);
         view.navigation._clock = Some(cx.spawn_in(window, async move |view, cx| {
             loop {
@@ -177,7 +182,7 @@ impl Workspace {
     fn with_connection(
         connection: Connection,
         mut events: tokio::sync::mpsc::Receiver<Update>,
-        server: SocketAddr,
+        server: Target,
         cwd: PathBuf,
         compact: bool,
         window: &mut Window,
@@ -199,9 +204,11 @@ impl Workspace {
         if cx.try_global::<crate::agents::Changes>().is_none() {
             cx.set_global(crate::agents::Changes::default());
         }
-        crate::agents::metadata::ensure(server, cx);
+        crate::agents::metadata::ensure(server.clone(), cx);
         let agent_metadata = crate::agents::metadata::entity(cx);
+        let profiles = crate::connections::shared(cx);
         let mut subscriptions = vec![
+            cx.observe(&profiles, |_, _, cx| cx.notify()),
             cx.observe(&audio, |_, _, cx| cx.notify()),
             cx.on_app_quit(|this, _| {
                 this.persist_read_state();
@@ -209,11 +216,12 @@ impl Workspace {
             }),
             cx.observe_global_in::<crate::agents::Changes>(window, |this, window, cx| {
                 let changes = cx.global::<crate::agents::Changes>().clone();
-                if changes.server != Some(this.backend.server) {
+                if changes.server.as_ref() != Some(&this.backend.server) {
                     return;
                 }
                 this.command(Command::Refresh, cx);
-                if changes.target == Some(this.window.handle.window_id())
+                if this.window.presented
+                    && changes.target == Some(this.window.handle.window_id())
                     && let Some(agent) = changes.select
                 {
                     this.start_agent_chat(agent, window, cx);
@@ -356,7 +364,10 @@ impl Workspace {
     }
 
     fn sync_foreground(&mut self, window: &Window) {
-        let foreground = self.selected.id.filter(|_| window.is_window_active());
+        let foreground = self
+            .selected
+            .id
+            .filter(|_| self.window.presented && window.is_window_active());
         if self.backend.foreground != foreground {
             self.backend.foreground = foreground;
             let _ = self
@@ -437,6 +448,9 @@ impl Workspace {
     }
 
     fn focus_input(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.window.presented {
+            return;
+        }
         self.composer
             .input
             .update(cx, |input, cx| input.focus(window, cx));
@@ -610,7 +624,7 @@ impl Workspace {
             .backend
             .metadata
             .as_ref()
-            .and_then(|metadata| metadata.read(cx).icon(self.backend.server, agent))
+            .and_then(|metadata| metadata.read(cx).icon(&self.backend.server, agent))
             .unwrap_or_default();
         gds_uim::el! {
             crate::agents::icon::AgentIcon(element_id, uri) {

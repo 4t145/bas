@@ -86,7 +86,7 @@ impl Workspace {
             Update::Catalog(result) => match result {
                 Ok(mut catalog) => {
                     if !self.backend.connected {
-                        crate::agents::metadata::ensure(self.backend.server, cx);
+                        crate::agents::metadata::ensure(self.backend.server.clone(), cx);
                     }
                     self.backend.connection_ready();
                     // Session IDs are never reused. Older snapshots cannot revive

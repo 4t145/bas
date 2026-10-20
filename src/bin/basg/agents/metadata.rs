@@ -1,6 +1,7 @@
 //! Agent artwork is shared by every window, independently of session connections.
 
-use std::{collections::BTreeMap, net::SocketAddr};
+use bas::service::tls::ConnectionOptions as Target;
+use std::collections::BTreeMap;
 
 use bas::{
     config::agent::{AgentSpec, Command},
@@ -26,7 +27,7 @@ struct Server {
 
 pub(crate) struct Metadata {
     runtime: Option<Handle>,
-    servers: BTreeMap<SocketAddr, Server>,
+    servers: BTreeMap<Target, Server>,
     _changes: Subscription,
 }
 
@@ -34,11 +35,11 @@ impl Metadata {
     fn new(runtime: Option<Handle>, cx: &mut Context<Self>) -> Self {
         let changes = cx.observe_global::<crate::agents::Changes>(|this, cx| {
             let changes = cx.global::<crate::agents::Changes>();
-            let Some(server) = changes.server else {
+            let Some(server) = changes.server.clone() else {
                 return;
             };
             let revision = changes.revision;
-            let state = this.servers.entry(server).or_default();
+            let state = this.servers.entry(server.clone()).or_default();
             if state.changes_revision == Some(revision) {
                 return;
             }
@@ -53,50 +54,53 @@ impl Metadata {
     }
 
     /// Look up the agent that owns a thread; unknown agents keep the caller's fallback icon.
-    pub(crate) fn icon(&self, server: SocketAddr, agent: &str) -> Option<String> {
+    pub(crate) fn icon(&self, server: &Target, agent: &str) -> Option<String> {
         if agent == "embedded" {
             return Some(crate::assets::OUTLINE.into());
         }
-        self.servers.get(&server)?.icons.get(agent).cloned()
+        self.servers.get(server)?.icons.get(agent).cloned()
     }
 
-    fn ensure(&mut self, server: SocketAddr, cx: &mut Context<Self>) {
-        let state = self.servers.entry(server).or_default();
+    fn ensure(&mut self, server: Target, cx: &mut Context<Self>) {
+        let state = self.servers.entry(server.clone()).or_default();
         if state.loaded || state.requested {
             return;
         }
         self.refresh(server, cx);
     }
 
-    fn refresh(&mut self, server: SocketAddr, cx: &mut Context<Self>) {
+    fn refresh(&mut self, server: Target, cx: &mut Context<Self>) {
         let Some(runtime) = self.runtime.as_ref() else {
             return;
         };
-        let state = self.servers.entry(server).or_default();
+        let state = self.servers.entry(server.clone()).or_default();
         if state.requested {
             state.queued = true;
             return;
         }
-        let request = crate::agents::catalog::Service::new(server, runtime.clone()).catalog(false);
+        let request =
+            crate::agents::catalog::Service::new(server.clone(), runtime.clone()).catalog(false);
         self.begin_request(server, request, cx);
     }
 
     fn begin_request(
         &mut self,
-        server: SocketAddr,
+        server: Target,
         request: impl Future<Output = Result<Catalog, String>> + 'static,
         cx: &mut Context<Self>,
     ) {
-        self.servers.entry(server).or_default().requested = true;
+        self.servers.entry(server.clone()).or_default().requested = true;
+        let request_server = server.clone();
         let task = cx.spawn(async move |metadata, cx| {
+            let server = request_server;
             let result = request.await;
             let _ = metadata.update(cx, |metadata, cx| {
-                let state = metadata.servers.entry(server).or_default();
+                let state = metadata.servers.entry(server.clone()).or_default();
                 state.requested = false;
                 state.task = None;
                 let queued = std::mem::take(&mut state.queued);
                 if let Ok(catalog) = result {
-                    metadata.apply_catalog(server, &catalog, cx);
+                    metadata.apply_catalog(server.clone(), &catalog, cx);
                 }
                 if queued {
                     metadata.refresh(server, cx);
@@ -106,7 +110,7 @@ impl Metadata {
         self.servers.entry(server).or_default().task = Some(task);
     }
 
-    fn apply_catalog(&mut self, server: SocketAddr, catalog: &Catalog, cx: &mut Context<Self>) {
+    fn apply_catalog(&mut self, server: Target, catalog: &Catalog, cx: &mut Context<Self>) {
         let state = self.servers.entry(server).or_default();
         state.loaded = true;
         // Removed configurations can still own persisted threads; retain their last artwork.
@@ -117,7 +121,7 @@ impl Metadata {
 }
 
 /// Start one cached catalog request; subsequent windows share this entity.
-pub(crate) fn init(server: SocketAddr, runtime: Handle, cx: &mut App) {
+pub(crate) fn init(server: Target, runtime: Handle, cx: &mut App) {
     if cx.try_global::<crate::agents::Changes>().is_none() {
         cx.set_global(crate::agents::Changes::default());
     }
@@ -133,14 +137,14 @@ pub(crate) fn entity(cx: &App) -> Option<Entity<Metadata>> {
 }
 
 /// Ensure metadata once when opening/reconnecting a workspace, never from a render timer.
-pub(crate) fn ensure(server: SocketAddr, cx: &mut App) {
+pub(crate) fn ensure(server: Target, cx: &mut App) {
     if let Some(metadata) = entity(cx) {
         metadata.update(cx, |metadata, cx| metadata.ensure(server, cx));
     }
 }
 
 /// Reuse a settings catalog already fetched by another GUI action.
-pub(crate) fn publish(server: SocketAddr, catalog: &Catalog, cx: &mut App) {
+pub(crate) fn publish(server: Target, catalog: &Catalog, cx: &mut App) {
     if let Some(metadata) = entity(cx) {
         metadata.update(cx, |metadata, cx| {
             metadata.apply_catalog(server, catalog, cx)
@@ -149,7 +153,7 @@ pub(crate) fn publish(server: SocketAddr, catalog: &Catalog, cx: &mut App) {
 }
 
 #[cfg(all(test, feature = "gui-tests"))]
-pub(crate) fn for_test(server: SocketAddr, catalog: &Catalog, cx: &mut App) {
+pub(crate) fn for_test(server: Target, catalog: &Catalog, cx: &mut App) {
     if cx.try_global::<crate::agents::Changes>().is_none() {
         cx.set_global(crate::agents::Changes::default());
     }

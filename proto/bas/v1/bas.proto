@@ -9,6 +9,9 @@ package bas.v1;
 
 // Daemon administration and session I/O.
 service Bas {
+  // Edits only this daemon's agent section, never arbitrary files or frontend settings.
+  rpc GetAgentConfiguration(GetAgentConfigurationRequest) returns (AgentConfiguration);
+  rpc SaveAgentConfiguration(SaveAgentConfigurationRequest) returns (AgentConfiguration);
   // Lists the agent backends this daemon can launch.
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   // Checks a saved configuration, optionally performing an isolated ACP handshake.
@@ -89,6 +92,19 @@ message Agent {
 }
 
 message ListAgentsRequest {}
+
+message GetAgentConfigurationRequest {}
+message AgentConfiguration {
+  string profile = 1;
+  string revision = 2;
+  // Canonical JSON array of AgentRegistration, interpreted only by the daemon.
+  bytes registrations_json = 3;
+}
+message SaveAgentConfigurationRequest {
+  string profile = 1;
+  string revision = 2;
+  bytes registrations_json = 3;
+}
 
 message ListAgentSessionsRequest {
   string agent = 1;

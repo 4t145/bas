@@ -139,6 +139,25 @@ impl Client {
             Endpoint::from_shared(format!("http://{address}"))?.connect_timeout(CONNECT_TIMEOUT);
         Ok(Client::connect(endpoint).await?.with_payload_limit())
     }
+
+    /// Connects using local IPC or an explicitly selected plaintext TCP endpoint.
+    /// For mTLS, use [`Self::connect_options`] with explicit credentials.
+    ///
+    /// # Errors
+    /// Returns a transport error when the endpoint is unavailable, unsupported on
+    /// this platform, or the local peer does not belong to the current user.
+    pub async fn connect_target(target: &super::Target) -> Result<Self, tonic::transport::Error> {
+        Ok(Self::new(target.channel(CONNECT_TIMEOUT).await?).with_payload_limit())
+    }
+
+    /// Connects with explicit, pinned mTLS credential references.
+    /// # Errors
+    /// Returns configuration, file, transport or TLS authentication errors.
+    pub async fn connect_options(
+        options: &super::tls::ConnectionOptions,
+    ) -> Result<Self, super::tls::Error> {
+        Ok(Self::new(options.channel(CONNECT_TIMEOUT).await?).with_payload_limit())
+    }
 }
 
 /// Extracts a native ACP error returned in gRPC status details.

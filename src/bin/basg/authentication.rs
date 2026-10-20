@@ -23,6 +23,7 @@ pub(crate) mod terminal;
 pub(crate) struct Completed(pub Status);
 
 pub(crate) struct Authentication {
+    service: Option<check::Service>,
     spec: AgentSpec,
     settings_path: PathBuf,
     window: AnyWindowHandle,
@@ -49,6 +50,7 @@ impl Authentication {
         status: Status,
         settings_path: PathBuf,
         window: AnyWindowHandle,
+        service: Option<check::Service>,
     ) -> Self {
         let methods = match &status {
             Status::AuthenticationRequired { methods, .. } => methods.clone(),
@@ -59,6 +61,7 @@ impl Authentication {
             _ => String::new(),
         };
         Self {
+            service,
             spec,
             settings_path,
             window,
@@ -81,7 +84,7 @@ impl Authentication {
         {
             return;
         }
-        let Some(service) = cx.try_global::<check::Service>().cloned() else {
+        let Some(service) = self.service.clone() else {
             self.message = crate::i18n::tr!("auth-unavailable").into();
             self.status = Status::Failed(self.message.clone());
             cx.emit(Completed(self.status.clone()));
@@ -220,11 +223,11 @@ impl Authentication {
                     self.forms.remove(&request_id);
                 }
                 Event::Terminal(result) => {
-                    let Some(service) = cx.try_global::<check::Service>().cloned() else {
+                    let Some(service) = self.service.clone() else {
                         return;
                     };
                     match result {
-                        Ok(plan) if service.address().ip().is_loopback() => {
+                        Ok(plan) if service.address().is_local() => {
                             self.message = crate::i18n::tr!("auth-terminal-open").into();
                             let request = service::terminal(&service.runtime(), plan);
                             let generation = self.generation;

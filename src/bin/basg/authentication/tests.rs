@@ -2,54 +2,6 @@ use super::*;
 use gpui_kit::{TestAppContext, component::Root, px, size};
 use serde_json::json;
 
-#[test]
-fn authentication_requires_the_current_checksum_bound_registration() {
-    use bas::config::{AgentRegistration, InstallationRef, ManagedAgent, agent::Command};
-    let directory = tempfile::tempdir().expect("installation outside settings profile");
-    let path = directory.path().join(bas::config::INSTALLATION_FILE);
-    let spec = AgentSpec::acp("managed", Command::new("/managed/acp", []));
-    let bytes = serde_json::to_vec(&serde_json::json!({
-        "schema_version": 1,
-        "spec": spec,
-    }))
-    .expect("descriptor");
-    std::fs::write(&path, &bytes).expect("write descriptor");
-    let managed = AgentRegistration::Managed(ManagedAgent {
-        id: spec.id.clone(),
-        installation: InstallationRef::from_bytes(path.clone(), &bytes).expect("reference"),
-    });
-    assert!(service::matches_registration(
-        std::slice::from_ref(&managed),
-        &spec
-    ));
-    assert!(
-        !service::matches_registration(&[managed.clone(), spec.clone().into()], &spec),
-        "ambiguous membership fails closed"
-    );
-    std::fs::write(&path, [bytes.as_slice(), b"\n"].concat()).expect("change descriptor bytes");
-    assert!(
-        !service::matches_registration(std::slice::from_ref(&managed), &spec),
-        "even an equivalent launch config needs the registered descriptor hash"
-    );
-    std::fs::remove_file(&path).expect("remove descriptor");
-    assert!(!service::matches_registration(
-        std::slice::from_ref(&managed),
-        &spec
-    ));
-    std::fs::write(&path, &bytes).expect("restore descriptor");
-    let wrong_identity = AgentRegistration::Managed(ManagedAgent {
-        id: "another-agent".into(),
-        installation: InstallationRef::from_bytes(path, &bytes).expect("reference"),
-    });
-    let mut wrong_spec = spec.clone();
-    wrong_spec.id = "another-agent".into();
-    assert!(!service::matches_registration(
-        &[wrong_identity],
-        &wrong_spec
-    ));
-    assert!(service::matches_registration(&[spec.clone().into()], &spec));
-}
-
 fn empty_panel(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<Root>, Entity<Authentication>) {
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -66,12 +18,48 @@ fn empty_panel(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<Root>, Entity
                 },
                 "/fixture/settings.json".into(),
                 window.window_handle(),
+                None,
             )
         });
         panel = Some(entity.clone());
         Root::new(entity, window, cx)
     });
     (window, panel.expect("panel"))
+}
+
+#[gpui_kit::test]
+fn authentication_keeps_its_service_after_management_switches(cx: &mut TestAppContext) {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let first = bas::service::tls::ConnectionOptions {
+        target: "mtls://same-server:4554".parse().expect("target"),
+        tls: Some(bas::service::tls::ClientTls {
+            ca: "/certs/ca.pem".into(),
+            certificate: "/certs/first.pem".into(),
+            private_key: "/certs/first.key".into(),
+            server_name: None,
+        }),
+    };
+    let mut second = first.clone();
+    second.tls.as_mut().expect("TLS").certificate = "/certs/second.pem".into();
+    second.tls.as_mut().expect("TLS").private_key = "/certs/second.key".into();
+    let (window, _) = empty_panel(cx);
+    cx.update_window(window.into(), |_, window, cx| {
+        check::init(first.clone(), runtime.handle().clone(), cx);
+        let panel = Authentication::new(
+            AgentSpec::embedded(),
+            Status::Installed(String::new()),
+            "/fixture/settings.json".into(),
+            window.window_handle(),
+            cx.try_global::<check::Service>().cloned(),
+        );
+        check::init(second.clone(), runtime.handle().clone(), cx);
+        assert_eq!(
+            panel.service.as_ref().expect("pinned service").address(),
+            first
+        );
+        assert_eq!(cx.global::<check::Service>().address(), second);
+    })
+    .expect("authentication window");
 }
 
 #[gpui_kit::test]
