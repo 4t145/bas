@@ -315,7 +315,7 @@ impl Bas for Service {
         }
         let request = request.into_inner();
         assert_eq!(request.session, self.session.id.to_string());
-        assert_eq!(request.limit, HISTORY_PAGE_SIZE);
+        assert_eq!(request.limit, HISTORY_TURNS);
         self.history_requests
             .lock()
             .expect("requests")
@@ -330,7 +330,8 @@ impl Bas for Service {
             return history::load(self, scenario, request).await;
         }
         let upper = request.before.unwrap_or(301);
-        let lower = upper.saturating_sub(u64::from(request.limit)).max(1);
+        // Each fixture turn consists of one user message and one agent message.
+        let lower = upper.saturating_sub(u64::from(request.limit) * 2).max(1);
         let events = self
             .history
             .iter()
@@ -558,11 +559,7 @@ async fn fixture(scenario: Scenario) -> Fixture {
     let history = (1..=300)
         .map(|cursor| {
             let chunk = acp::ContentChunk::new(format!("message {cursor}").into());
-            let update = if cursor % 2 == 0
-                && matches!(
-                    scenario,
-                    Scenario::Window | Scenario::SlowPermissions | Scenario::LateTool
-                ) {
+            let update = if cursor % 2 == 0 {
                 acp::SessionUpdate::AgentMessageChunk(chunk)
             } else {
                 acp::SessionUpdate::UserMessageChunk(chunk)
@@ -753,10 +750,13 @@ async fn recent_history_and_reconnect_resume_after_the_last_live_cursor() {
         })
         .collect();
     assert_eq!(snapshots.len(), 1);
-    assert_eq!(snapshots[0].events.len(), 256);
-    assert_eq!(snapshots[0].events.first().expect("first").cursor.raw(), 45);
+    assert_eq!(snapshots[0].events.len(), 2);
+    assert_eq!(
+        snapshots[0].events.first().expect("first").cursor.raw(),
+        299
+    );
     assert_eq!(snapshots[0].events.last().expect("last").cursor.raw(), 300);
-    assert_eq!(snapshots[0].before, Some(45));
+    assert_eq!(snapshots[0].before, Some(299));
     assert_eq!(
         *fixture.attachments.lock().expect("attachment log"),
         vec![Some(300), Some(301)]

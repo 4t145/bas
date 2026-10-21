@@ -51,6 +51,13 @@ pub(super) async fn index(
                 return Err(Error::Corrupt("noncontiguous history"));
             }
             let dependency = index.observe(&event);
+            if dependency.segment_start == event.cursor {
+                sql::statement("INSERT INTO history_turns(session_id, cursor) VALUES (?1, ?2)")
+                    .bind(id.to_string())
+                    .bind(raw(event.cursor)?)
+                    .exec(&mut *tx)
+                    .await?;
+            }
             let key = dependency.context_key.unwrap_or_default();
             sql::statement("INSERT INTO history_dependencies(session_id, cursor, floor, context_key, context_start) VALUES (?1, ?2, ?3, ?4, ?5)")
                 .bind(id.to_string()).bind(raw(event.cursor)?).bind(raw(dependency.floor)?).bind(key.clone())
@@ -83,7 +90,27 @@ impl SqliteStore {
         check_window(before, limit, meta.revision)?;
         index(&mut tx, id, meta.revision).await?;
         let end = before.map_or(meta.revision.raw(), |before| before.raw().saturating_sub(1));
-        let mut start = end.saturating_sub(limit.saturating_sub(1) as u64).max(1);
+        if let Some(before) = before
+            && before.raw() > 1
+            && before <= meta.revision
+        {
+            let rows = sql::query(
+                "SELECT cursor FROM history_turns WHERE session_id = ?1 AND cursor = ?2",
+            )
+            .bind(id.to_string())
+            .bind(raw(before)?)
+            .exec(&mut tx)
+            .await?;
+            if rows.is_empty() {
+                return Err(Error::NotTurnBoundary(before));
+            }
+        }
+        let rows = sql::query("SELECT cursor FROM history_turns WHERE session_id = ?1 AND cursor <= ?2 ORDER BY cursor DESC LIMIT ?3")
+            .bind(id.to_string()).bind(end as i64).bind(i64::try_from(limit).unwrap_or(i64::MAX)).exec(&mut tx).await?;
+        let mut start = 1;
+        for row in rows {
+            start = revision(field(&mut columns(row)?)?)?.raw();
+        }
         loop {
             let row = sql::query("SELECT MIN(floor) FROM history_dependencies WHERE session_id = ?1 AND cursor >= ?2 AND cursor <= ?3")
                 .bind(id.to_string()).bind(start as i64).bind(end as i64).exec(&mut tx).await?
@@ -97,7 +124,10 @@ impl SqliteStore {
             if floor >= start {
                 break;
             }
-            start = floor;
+            let row = sql::query("SELECT cursor FROM history_turns WHERE session_id = ?1 AND cursor <= ?2 ORDER BY cursor DESC LIMIT 1")
+                .bind(id.to_string()).bind(floor as i64).exec(&mut tx).await?
+                .into_iter().next().ok_or(Error::Corrupt("missing containing turn"))?;
+            start = revision(field(&mut columns(row)?)?)?.raw();
         }
         let rows = sql::query("SELECT cursor, payload FROM events WHERE session_id = ?1 AND cursor >= ?2 AND cursor <= ?3 ORDER BY cursor")
             .bind(id.to_string()).bind(start as i64).bind(end as i64).exec(&mut tx).await?;

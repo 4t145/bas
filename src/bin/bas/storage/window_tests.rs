@@ -44,6 +44,11 @@ fn independent() -> EventKind {
     }
 }
 
+fn prompt(id: &str) -> EventKind {
+    update(json!({"sessionUpdate":"user_message_chunk", "messageId":id,
+        "content":{"type":"text","text":"prompt"}}))
+}
+
 async fn window_contract(storage: &dyn Storage) {
     let mut meta = state();
     storage.create(meta.clone(), None).await.expect("create");
@@ -59,12 +64,16 @@ async fn window_contract(storage: &dyn Storage) {
         &mut meta,
         vec![
             independent(),
+            prompt("first"),
             chunk(Some("cross-turn")),
             EventKind::TurnStarted {
                 turn: TurnId::new(),
             },
             independent(),
             chunk(Some("cross-turn")),
+            EventKind::TurnStarted {
+                turn: TurnId::new(),
+            },
             independent(),
         ],
     )
@@ -73,13 +82,13 @@ async fn window_contract(storage: &dyn Storage) {
         .window(meta.id, None, 1)
         .await
         .expect("independent suffix");
-    assert_eq!(latest.events, events[5..]);
-    assert_eq!(latest.before, Some(events[5].cursor));
+    assert_eq!(latest.events, events[6..]);
+    assert_eq!(latest.before, Some(events[6].cursor));
     let older = storage
         .window(meta.id, latest.before, 1)
         .await
         .expect("dependency expansion");
-    assert_eq!(older.events, events[1..5]);
+    assert_eq!(older.events, events[1..6]);
     assert_eq!(older.before, Some(events[1].cursor));
     assert_eq!(older.meta, meta);
     assert_eq!(older.cursor, meta.revision);
@@ -95,8 +104,12 @@ async fn window_contract(storage: &dyn Storage) {
             .await
             .expect("exclusive upper boundary")
             .events,
-        events[5..]
+        events[6..]
     );
+    assert!(matches!(
+        storage.window(meta.id, Some(events[7].cursor), 1).await,
+        Err(Error::NotTurnBoundary(_))
+    ));
     assert!(matches!(
         storage
             .window(meta.id, Some(meta.revision.next().next()), 1)
@@ -129,6 +142,7 @@ async fn presentation_contract(storage: &dyn Storage) {
     let events = append(storage, &mut meta, vec![
         update(json!({"sessionUpdate":"plan_update","plan":{"type":"markdown","planId":"p","content":"original"}})),
         update(json!({"sessionUpdate":"usage_update","used":5,"size":100})),
+        prompt("terminal"),
         update(json!({"sessionUpdate":"tool_call","toolCallId":"producer","title":"terminal",
             "_meta":{"terminal_info":{"terminal_id":"t","command":"echo original"}}})),
         update(json!({"sessionUpdate":"tool_call_update","toolCallId":"producer",
@@ -144,6 +158,7 @@ async fn presentation_contract(storage: &dyn Storage) {
     assert_eq!(window.events, events[2..]);
     assert_eq!(window.context, events[..2]);
     let next = append(storage, &mut meta, vec![
+        prompt("compaction"),
         update(json!({"sessionUpdate":"compaction_update","compactionId":"c","status":"in_progress","summary":[{"type":"text","text":"original"}]})),
         independent(),
         update(json!({"sessionUpdate":"compaction_summary_chunk","compactionId":"c","content":{"type":"text","text":"more"}})),
@@ -159,6 +174,7 @@ async fn presentation_contract(storage: &dyn Storage) {
         &mut meta,
         vec![
             update(json!({"sessionUpdate":"plan_removed","planId":"p"})),
+            prompt("after-removal"),
             independent(),
         ],
     )
@@ -194,7 +210,9 @@ async fn plan_order_contract(storage: &dyn Storage) {
         vec![
             plan("a", "first"),
             plan("b", "second"),
+            prompt("replacement"),
             plan("a", "replacement"),
+            prompt("latest"),
             independent(),
         ],
     )
@@ -203,19 +221,23 @@ async fn plan_order_contract(storage: &dyn Storage) {
         .window(meta.id, None, 1)
         .await
         .expect("ordered plans");
-    assert_eq!(window.context, events[..3]);
+    assert_eq!(
+        window.context,
+        vec![events[0].clone(), events[1].clone(), events[3].clone()]
+    );
     let window = storage
-        .window(meta.id, Some(events[3].cursor), 1)
+        .window(meta.id, Some(events[4].cursor), 1)
         .await
         .expect("replacement in page");
     assert_eq!(window.context, events[..2]);
-    assert_eq!(window.events, events[2..3]);
+    assert_eq!(window.events, events[2..4]);
     let next = append(
         storage,
         &mut meta,
         vec![
             update(json!({"sessionUpdate":"plan_removed","planId":"a"})),
             plan("a", "reinserted"),
+            prompt("reinserted"),
             independent(),
         ],
     )
@@ -246,7 +268,16 @@ async fn transitive_contract(storage: &dyn Storage) {
     let events = append(
         storage,
         &mut meta,
-        vec![tool("a"), tool("b"), tool("a"), tool("b")],
+        vec![
+            prompt("a"),
+            tool("a"),
+            prompt("b"),
+            tool("b"),
+            prompt("c"),
+            tool("a"),
+            prompt("d"),
+            tool("b"),
+        ],
     )
     .await;
     assert_eq!(
@@ -268,12 +299,24 @@ async fn dependency_closure_reaches_fixed_point() {
 async fn long_turn_contract(storage: &dyn Storage) {
     let mut meta = state();
     storage.create(meta.clone(), None).await.expect("create");
+    let previous = append(storage, &mut meta, vec![prompt("old"), chunk(Some("old"))]).await;
     let turn = TurnId::new();
-    let mut kinds = vec![EventKind::TurnStarted { turn }];
-    kinds.extend((0..300).map(|id| {
-        update(json!({
-            "sessionUpdate":"tool_call","toolCallId":format!("tool-{id}"),"title":"independent"
-        }))
+    let mut kinds = vec![
+        EventKind::TurnStarted { turn },
+        prompt("long"),
+        prompt("long"),
+    ];
+    kinds.extend((0..300).flat_map(|id| {
+        [
+            update(json!({
+                "sessionUpdate":"tool_call","toolCallId":format!("tool-{id}"),"title":"independent"
+            })),
+            chunk(Some("long-answer")),
+            update(
+                json!({"sessionUpdate":"agent_thought_chunk","messageId":"long-thought",
+                "content":{"type":"text","text":"thinking"}}),
+            ),
+        ]
     }));
     kinds.push(EventKind::TurnFinished {
         turn,
@@ -281,11 +324,21 @@ async fn long_turn_contract(storage: &dyn Storage) {
     });
     let events = append(storage, &mut meta, kinds).await;
     let window = storage
-        .window(meta.id, None, 256)
+        .window(meta.id, None, 1)
         .await
-        .expect("bounded long turn");
-    assert_eq!(window.events, events[events.len() - 256..]);
-    assert_eq!(window.context, events[..1]);
+        .expect("whole long turn");
+    assert_eq!(window.events, events);
+    assert!(window.context.is_empty());
+    assert_eq!(window.meta, meta);
+    assert_eq!(window.cursor, meta.revision);
+    let older = storage
+        .window(meta.id, window.before, 1)
+        .await
+        .expect("previous turn");
+    assert_eq!(older.events, previous);
+    assert_eq!(older.meta, meta);
+    assert_eq!(older.cursor, meta.revision);
+    assert_eq!(older.before, None);
     append(storage, &mut meta, vec![independent()]).await;
     assert!(
         storage
@@ -298,8 +351,8 @@ async fn long_turn_contract(storage: &dyn Storage) {
 }
 
 #[tokio::test]
-async fn long_turn_does_not_expand_to_its_start() {
-    long_turn_contract(&Memory::new(NonZeroUsize::new(512).expect("capacity"))).await;
+async fn long_turn_is_returned_whole_without_previous_turn() {
+    long_turn_contract(&Memory::new(NonZeroUsize::new(1024).expect("capacity"))).await;
     long_turn_contract(&LocalDb::open(":memory:").await.expect("open")).await;
 }
 
@@ -315,7 +368,7 @@ async fn memory_eviction_is_explicit_but_independent_suffix_works() {
             chunk(Some("old")),
             independent(),
             independent(),
-            independent(),
+            prompt("new"),
         ],
     )
     .await;
@@ -333,7 +386,14 @@ async fn memory_eviction_is_explicit_but_independent_suffix_works() {
         storage.window(meta.id, None, 1).await,
         Err(Error::Expired { .. })
     ));
-    append(&storage, &mut meta, vec![independent()]).await;
+    append(
+        &storage,
+        &mut meta,
+        vec![EventKind::TurnStarted {
+            turn: TurnId::new(),
+        }],
+    )
+    .await;
     assert_eq!(
         storage
             .window(meta.id, None, 1)
@@ -361,7 +421,17 @@ async fn memory_replacement_usage_does_not_require_evicted_snapshot() {
         storage.window(meta.id, None, 1).await,
         Err(Error::Expired { .. })
     ));
-    let events = append(&storage, &mut meta, vec![usage()]).await;
+    let events = append(
+        &storage,
+        &mut meta,
+        vec![
+            EventKind::TurnStarted {
+                turn: TurnId::new(),
+            },
+            usage(),
+        ],
+    )
+    .await;
     let window = storage
         .window(meta.id, None, 1)
         .await
@@ -377,10 +447,16 @@ async fn sqlite_reuses_index_across_reopen_and_builds_missing_index_once() {
     let storage = LocalDb::open(&path).await.expect("open");
     let mut meta = state();
     storage.create(meta.clone(), None).await.expect("create");
-    append(
+    let events = append(
         &storage,
         &mut meta,
-        vec![chunk(Some("old")), independent(), independent()],
+        (0..200)
+            .flat_map(|turn| {
+                let mut kinds = vec![prompt(&format!("prompt-{turn}"))];
+                kinds.extend((0..30).map(|_| chunk(Some(&format!("answer-{turn}")))));
+                kinds
+            })
+            .collect(),
     )
     .await;
     storage
@@ -401,6 +477,104 @@ async fn sqlite_reuses_index_across_reopen_and_builds_missing_index_once() {
         .window(meta.id, None, 1)
         .await
         .expect("no rescan of old payload");
-    assert_eq!(window.events.len(), 1);
+    assert_eq!(window.events, events[events.len() - 31..]);
+    assert_eq!(window.before, Some(events[events.len() - 31].cursor));
+    assert_eq!(window.meta, meta);
     assert_eq!(window.cursor, meta.revision);
+    let older = storage
+        .window(meta.id, window.before, 1)
+        .await
+        .expect("older indexed turn");
+    assert_eq!(older.events, events[events.len() - 62..events.len() - 31]);
+    assert_eq!(older.meta, meta);
+    assert_eq!(older.cursor, meta.revision);
+}
+
+async fn imported_turns_contract(storage: &dyn Storage) {
+    let mut meta = state();
+    storage.create(meta.clone(), None).await.expect("create");
+    let legacy = || {
+        update(json!({"sessionUpdate":"user_message_chunk",
+        "content":{"type":"text","text":"legacy prompt chunk"}}))
+    };
+    let events = append(
+        storage,
+        &mut meta,
+        vec![
+            independent(),
+            prompt("first"),
+            prompt("first"),
+            chunk(Some("answer")),
+            legacy(),
+            legacy(),
+            chunk(None),
+            legacy(),
+            legacy(),
+            chunk(None),
+        ],
+    )
+    .await;
+    let recent = storage
+        .window(meta.id, None, 1)
+        .await
+        .expect("last imported turn");
+    assert_eq!(recent.events, events[7..]);
+    assert_eq!(recent.before, Some(events[7].cursor));
+    let older = storage
+        .window(meta.id, recent.before, 1)
+        .await
+        .expect("older imported turn");
+    assert_eq!(older.events, events[4..7]);
+    assert_eq!(older.before, Some(events[4].cursor));
+    let first = storage
+        .window(meta.id, older.before, 1)
+        .await
+        .expect("identified multi-chunk prompt");
+    assert_eq!(first.events, events[1..4]);
+    assert_eq!(first.before, Some(events[1].cursor));
+    for window in [&recent, &older, &first] {
+        assert_eq!(window.meta, meta);
+        assert_eq!(window.cursor, meta.revision);
+        assert!(window.context.is_empty());
+    }
+    let initial = storage
+        .window(meta.id, first.before, 1)
+        .await
+        .expect("initial segment");
+    assert_eq!(initial.events, events[..1]);
+    assert_eq!(initial.before, None);
+    let two = storage.window(meta.id, None, 2).await.expect("two turns");
+    assert_eq!(two.events, events[4..]);
+    assert!(matches!(
+        storage.window(meta.id, Some(events[8].cursor), 1).await,
+        Err(Error::NotTurnBoundary(_))
+    ));
+}
+
+#[tokio::test]
+async fn imported_multichunk_prompts_page_as_complete_turns() {
+    imported_turns_contract(&Memory::new(NonZeroUsize::new(64).expect("capacity"))).await;
+    imported_turns_contract(&LocalDb::open(":memory:").await.expect("open")).await;
+}
+
+#[tokio::test]
+async fn memory_never_returns_a_turn_with_an_evicted_start() {
+    let storage = Memory::new(NonZeroUsize::new(3).expect("capacity"));
+    let mut meta = state();
+    storage.create(meta.clone(), None).await.expect("create");
+    append(
+        &storage,
+        &mut meta,
+        vec![
+            EventKind::TurnStarted {
+                turn: TurnId::new(),
+            },
+            independent(),
+            independent(),
+            independent(),
+        ],
+    )
+    .await;
+    assert!(matches!(storage.window(meta.id, None, 1).await,
+        Err(Error::Expired { requested, .. }) if requested.raw() == 1));
 }

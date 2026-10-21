@@ -58,6 +58,7 @@ impl Service {
     #[must_use]
     pub fn into_server(self) -> BasServer<Self> {
         BasServer::new(self)
+            .send_compressed(tonic::codec::CompressionEncoding::Gzip)
             .max_decoding_message_size(bas::service::MAX_MESSAGE_SIZE)
             .max_encoding_message_size(bas::service::MAX_MESSAGE_SIZE)
     }

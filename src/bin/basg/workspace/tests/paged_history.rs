@@ -25,6 +25,21 @@ fn page(meta: &SessionMeta, first: u64, last: u64) -> HistoryWindow {
     }
 }
 
+fn tall_page(meta: &SessionMeta, first: u64, last: u64) -> HistoryWindow {
+    let mut history = page(meta, first, last);
+    for event in &mut history.events {
+        if let EventKind::Acp(bas::acp::SessionUpdate::AgentMessageChunk(chunk)) = &mut event.kind {
+            chunk.content = format!(
+                "Message {}\n\n{}",
+                event.cursor.raw(),
+                "A paragraph.\n\n".repeat(30)
+            )
+            .into();
+        }
+    }
+    history
+}
+
 fn show_page(
     view: &mut Workspace,
     history: HistoryWindow,
@@ -40,6 +55,317 @@ fn show_page(
         window,
         cx,
     );
+}
+
+#[gpui_kit::test]
+fn native_scrolling_survives_pages_resync_and_cached_switch(cx: &mut TestAppContext) {
+    use gpui_kit::{PlatformInput, ScrollDelta, ScrollWheelEvent, point};
+    let fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            show_page(view, tall_page(&meta, 61, 100), window, cx);
+        });
+        window.render_frame(cx);
+        let list = fixture.view.read(cx).selected.timeline.list.clone();
+        assert!(list.is_following_tail(), "first open starts at latest");
+        let last = fixture
+            .view
+            .read(cx)
+            .selected
+            .timeline
+            .conversation
+            .as_ref()
+            .expect("conversation")
+            .items
+            .last()
+            .expect("latest")
+            .id();
+        assert!(window.find(SharedString::from(last)).visible());
+        window.dispatch_event(
+            PlatformInput::ScrollWheel(ScrollWheelEvent {
+                position: list.viewport_bounds().center(),
+                delta: ScrollDelta::Pixels(point(px(0.), px(800.))),
+                ..Default::default()
+            }),
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(
+            !list.is_following_tail(),
+            "native upward input pauses follow"
+        );
+        let anchor = {
+            let conversation = fixture
+                .view
+                .read(cx)
+                .selected
+                .timeline
+                .conversation
+                .as_ref()
+                .expect("conversation");
+            let row = &conversation.rows[list.logical_scroll_top().item_ix];
+            conversation.items[row.items.start].id()
+        };
+        let anchor = SharedString::from(anchor);
+        let bounds = window.find(anchor.clone()).bounds();
+        assert!(window.find(anchor.clone()).visible());
+        for before in [61, 41, 21] {
+            fixture.view.update(cx, |view, cx| {
+                view.load_older_history(cx);
+                if before == 61 {
+                    view.update(
+                        Update::Event {
+                            epoch: view.selected.epoch,
+                            event: page(&meta, 101, 101).events.remove(0),
+                        },
+                        window,
+                        cx,
+                    );
+                    show_page(view, tall_page(&meta, 81, 100), window, cx);
+                    assert_eq!(
+                        view.selected
+                            .timeline
+                            .history
+                            .as_ref()
+                            .expect("live history")
+                            .cursor,
+                        101
+                    );
+                }
+            });
+            window.render_frame(cx);
+            assert_eq!(window.find(anchor.clone()).bounds(), bounds, "live append");
+            fixture.view.update(cx, |view, cx| {
+                view.update(
+                    Update::OlderHistory {
+                        epoch: view.selected.epoch,
+                        before,
+                        result: Ok(tall_page(&meta, before - 20, before - 1)),
+                    },
+                    window,
+                    cx,
+                );
+            });
+            for _ in 0..3 {
+                window.render_frame(cx);
+                assert_eq!(
+                    window.find(anchor.clone()).bounds(),
+                    bounds,
+                    "page {before}"
+                );
+                assert!(!list.is_following_tail());
+            }
+        }
+        fixture.view.update(cx, |view, cx| {
+            show_page(view, tall_page(&meta, 81, 110), window, cx);
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            window.find(anchor.clone()).bounds(),
+            bounds,
+            "safe-window resync"
+        );
+        assert!(!list.is_following_tail());
+        // A response must not suspend the native wheel handler until repaint.
+        fixture.view.update(cx, |view, cx| {
+            show_page(view, tall_page(&meta, 81, 110), window, cx);
+        });
+        window.dispatch_event(
+            PlatformInput::ScrollWheel(ScrollWheelEvent {
+                position: list.viewport_bounds().center(),
+                delta: ScrollDelta::Pixels(point(px(0.), px(40.))),
+                ..Default::default()
+            }),
+            cx,
+        );
+        window.render_frame(cx);
+        let moved = window.find(anchor.clone()).bounds();
+        assert_eq!(
+            moved.top(),
+            bounds.top() + px(40.),
+            "native input during completion"
+        );
+        fixture.view.update(cx, |view, cx| {
+            let other = session();
+            view.sessions.entries.push(other.clone());
+            view.select(other.id, window, cx);
+        });
+        window.render_frame(cx);
+        fixture
+            .view
+            .update(cx, |view, cx| view.select(meta.id, window, cx));
+        window.render_frame(cx);
+        assert_eq!(window.find(anchor).bounds(), moved, "hot cache return");
+        assert!(!list.is_following_tail());
+        // Newly appended, unmeasured rows are discovered as the native list
+        // scrolls; keep scrolling until the actual bottom, not its estimate.
+        for _ in 0..20 {
+            window.dispatch_event(
+                PlatformInput::ScrollWheel(ScrollWheelEvent {
+                    position: list.viewport_bounds().center(),
+                    delta: ScrollDelta::Pixels(point(px(0.), px(-100_000.))),
+                    ..Default::default()
+                }),
+                cx,
+            );
+            window.render_frame(cx);
+            if list.is_following_tail() {
+                break;
+            }
+        }
+        assert!(
+            list.is_following_tail(),
+            "native return to bottom resumes follow"
+        );
+        fixture.view.update(cx, |view, cx| {
+            view.update(
+                Update::Event {
+                    epoch: view.selected.epoch,
+                    event: page(&meta, 111, 111).events.remove(0),
+                },
+                window,
+                cx,
+            );
+        });
+        window.render_frame(cx);
+        let latest = fixture
+            .view
+            .read(cx)
+            .selected
+            .timeline
+            .conversation
+            .as_ref()
+            .expect("conversation")
+            .items
+            .last()
+            .expect("latest")
+            .id();
+        assert!(window.find(SharedString::from(latest)).visible());
+        assert!(list.is_following_tail());
+    })
+    .expect("rendered native scrolling");
+}
+
+#[gpui_kit::test]
+fn regrouping_before_reader_preserves_pixels_and_expansion(cx: &mut TestAppContext) {
+    use gpui_kit::{PlatformInput, ScrollDelta, ScrollWheelEvent, point};
+    let fixture = fixture(cx);
+    let meta = session();
+    attach(&fixture, meta.clone(), cx);
+    let tools = |first, last, range: std::ops::RangeInclusive<u64>| {
+        let mut history = page(&meta, first, last);
+        for event in &mut history.events {
+            if range.contains(&event.cursor.raw()) {
+                event.kind = EventKind::Acp(bas::acp::SessionUpdate::ToolCall(
+                    bas::acp::ToolCall::new(format!("tool-{}", event.cursor.raw()), "Read source"),
+                ));
+            }
+        }
+        history
+    };
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.view.update(cx, |view, cx| {
+            show_page(view, tools(21, 60, 21..=23), window, cx);
+            view.selected
+                .timeline
+                .expanded
+                .insert("activity-tool-tool-21".into());
+        });
+        window.render_frame(cx);
+        let list = fixture.view.read(cx).selected.timeline.list.clone();
+        window.dispatch_event(
+            PlatformInput::ScrollWheel(ScrollWheelEvent {
+                position: list.viewport_bounds().center(),
+                delta: ScrollDelta::Pixels(point(px(0.), px(800.))),
+                ..Default::default()
+            }),
+            cx,
+        );
+        window.render_frame(cx);
+        let anchor = {
+            let conversation = fixture
+                .view
+                .read(cx)
+                .selected
+                .timeline
+                .conversation
+                .as_ref()
+                .expect("conversation");
+            let row = &conversation.rows[list.logical_scroll_top().item_ix];
+            conversation.items[row.items.start].id()
+        };
+        let anchor = SharedString::from(anchor);
+        let bounds = window.find(anchor.clone()).bounds();
+        fixture.view.update(cx, |view, cx| {
+            view.load_older_history(cx);
+            view.update(
+                Update::OlderHistory {
+                    epoch: view.selected.epoch,
+                    before: 21,
+                    result: Ok(tools(1, 20, 18..=20)),
+                },
+                window,
+                cx,
+            );
+            assert!(
+                view.selected
+                    .timeline
+                    .expanded
+                    .contains("activity-tool-tool-18")
+            );
+        });
+        for _ in 0..3 {
+            window.render_frame(cx);
+            assert_eq!(window.find(anchor.clone()).bounds(), bounds);
+            assert!(!list.is_following_tail());
+        }
+        fixture.view.update(cx, |view, cx| {
+            // A disconnected safe window may not contain the reading anchor.
+            // Keep reading mode while requesting the missing range, never tail.
+            show_page(view, page(&meta, 201, 240), window, cx);
+            assert!(view.selected.timeline.restore.is_some());
+        });
+        window.render_frame(cx);
+        assert!(
+            !list.is_following_tail(),
+            "missing anchor must not enable tail"
+        );
+        assert!(list.logical_scroll_top().item_ix < 5);
+    })
+    .expect("regrouping preceding activity");
+}
+
+#[gpui_kit::test]
+#[ignore = "manual timing with a private BAS_HISTORY_BENCH_FILE HistoryWindow JSON"]
+fn history_window_render_benchmark(cx: &mut TestAppContext) {
+    let path = std::env::var_os("BAS_HISTORY_BENCH_FILE").expect("private fixture path");
+    let bytes = std::fs::read(path).expect("read private fixture");
+    let history: HistoryWindow = serde_json::from_slice(&bytes).expect("HistoryWindow JSON");
+    let fixture = fixture(cx);
+    attach(&fixture, history.session.meta.clone(), cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        let events = history.events.len();
+        let context = history.context.len();
+        let started = std::time::Instant::now();
+        fixture.view.update(cx, |view, cx| show_page(view, history, window, cx));
+        let applied = started.elapsed();
+        let render_started = std::time::Instant::now();
+        window.render_frame(cx);
+        let first_frame = render_started.elapsed();
+        let render_started = std::time::Instant::now();
+        window.render_frame(cx);
+        let second_frame = render_started.elapsed();
+        let rows = fixture.view.read(cx).selected.timeline.list.item_count();
+        eprintln!(
+            "history benchmark: bytes={} events={events} context={context} rows={rows} apply_ms={:.3} first_frame_ms={:.3} second_frame_ms={:.3}",
+            bytes.len(),
+            applied.as_secs_f64() * 1000.,
+            first_frame.as_secs_f64() * 1000.,
+            second_frame.as_secs_f64() * 1000.,
+        );
+    }).expect("benchmark history render");
 }
 
 #[gpui_kit::test]

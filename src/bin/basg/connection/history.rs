@@ -120,7 +120,7 @@ impl Store {
             }
         }
         let window = client
-            .history_window(session, Some(before), HISTORY_PAGE_SIZE, REQUEST_TIMEOUT)
+            .history_window(session, Some(before), HISTORY_TURNS, REQUEST_TIMEOUT)
             .await
             .map_err(Failure::from)?;
         self.window(&window).await;

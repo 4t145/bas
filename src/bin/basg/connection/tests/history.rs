@@ -18,7 +18,7 @@ pub(super) async fn load(
         Scenario::Unavailable => return Err(Status::unavailable("history interrupted")),
         _ => {}
     }
-    let mut events: Vec<pb::Event> = service.history[44..].iter().map(Into::into).collect();
+    let mut events: Vec<pb::Event> = service.history[298..].iter().map(Into::into).collect();
     match scenario {
         Scenario::InvalidPayload => events[0] = pb::Event::default(),
         Scenario::WrongSession => events[0].session = SessionId::new().to_string(),
@@ -34,7 +34,7 @@ pub(super) async fn load(
         ),
         events,
         context: Vec::new(),
-        before: Some(45),
+        before: Some(299),
         cursor: 300,
     }))
 }

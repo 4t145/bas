@@ -33,9 +33,10 @@ impl Client {
         Ok(())
     }
 
-    /// Applies the shared limit for ACP image/file messages and history pages.
+    /// Applies payload limits and accepts compressed responses for large histories.
     pub fn with_payload_limit(self) -> Self {
-        self.max_decoding_message_size(super::MAX_MESSAGE_SIZE)
+        self.accept_compressed(tonic::codec::CompressionEncoding::Gzip)
+            .max_decoding_message_size(super::MAX_MESSAGE_SIZE)
             .max_encoding_message_size(super::MAX_MESSAGE_SIZE)
     }
 

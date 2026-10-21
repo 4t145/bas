@@ -8,6 +8,35 @@ use bas::{
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+#[tokio::test]
+async fn history_responses_use_gzip_and_preserve_complete_payloads() {
+    let mut fixture = fixture(vec![prompt(0), chunk("answer", &"repeat ".repeat(4096))]).await;
+    let response = fixture
+        .client
+        .load_history_window(pb::LoadHistoryWindowRequest {
+            session: fixture.session.to_string(),
+            before: None,
+            limit: 1,
+        })
+        .await
+        .expect("compressed history");
+    assert_eq!(
+        response
+            .metadata()
+            .get("grpc-encoding")
+            .map(|value| value.to_str().expect("encoding")),
+        Some("gzip"),
+    );
+    let events = response
+        .into_inner()
+        .events
+        .into_iter()
+        .map(TryInto::try_into)
+        .collect::<std::result::Result<Vec<Event>, _>>()
+        .expect("decoded full payloads");
+    assert_eq!(events, fixture.events);
+}
+
 struct Fixture {
     registry: Arc<Registry>,
     client: Client,
@@ -81,6 +110,16 @@ fn title(index: usize) -> EventKind {
     }
 }
 
+fn prompt(index: usize) -> EventKind {
+    EventKind::Acp(
+        serde_json::from_value(serde_json::json!({
+            "sessionUpdate":"user_message_chunk", "messageId":format!("prompt-{index}"),
+            "content":{"type":"text","text":"question"}
+        }))
+        .expect("user prompt"),
+    )
+}
+
 fn chunk(id: &str, text: &str) -> EventKind {
     let update: acp::SessionUpdate = serde_json::from_value(serde_json::json!({
         "sessionUpdate": "agent_message_chunk",
@@ -95,6 +134,7 @@ fn chunk(id: &str, text: &str) -> EventKind {
 async fn client_windows_expand_dependencies_and_page_back_without_rewriting_events() {
     let mut fixture = fixture(vec![
         title(0),
+        prompt(0),
         chunk("old", "hello"),
         title(2),
         chunk("old", " world"),
@@ -107,8 +147,8 @@ async fn client_windows_expand_dependencies_and_page_back_without_rewriting_even
         .expect("window");
     assert_eq!(recent.events, fixture.events[1..]);
     assert_eq!(recent.before, Some(2));
-    assert_eq!(recent.cursor, 4);
-    assert_eq!(recent.session.meta.revision.raw(), 4);
+    assert_eq!(recent.cursor, 5);
+    assert_eq!(recent.session.meta.revision.raw(), 5);
     let older = fixture
         .client
         .history_window(fixture.session, recent.before, 1, TIMEOUT)
@@ -116,7 +156,7 @@ async fn client_windows_expand_dependencies_and_page_back_without_rewriting_even
         .expect("older");
     assert_eq!(older.events, fixture.events[..1]);
     assert_eq!(older.before, None);
-    assert_eq!(older.cursor, 4);
+    assert_eq!(older.cursor, 5);
     let raw = fixture
         .client
         .load_history(pb::LoadHistoryRequest {
@@ -134,32 +174,43 @@ async fn client_windows_expand_dependencies_and_page_back_without_rewriting_even
 
 #[tokio::test]
 async fn client_windows_preserve_payloads_and_snapshot_across_pages() {
-    let mut fixture = fixture((0..600).map(title).collect()).await;
+    let mut fixture = fixture(
+        (0..600)
+            .map(|index| {
+                if index % 200 == 0 {
+                    prompt(index)
+                } else {
+                    title(index)
+                }
+            })
+            .collect(),
+    )
+    .await;
     let recent = fixture
         .client
-        .history_window(fixture.session, None, 256, TIMEOUT)
+        .history_window(fixture.session, None, 1, TIMEOUT)
         .await
         .expect("recent");
-    assert_eq!(recent.events, fixture.events[344..]);
-    assert_eq!(recent.before, Some(345));
+    assert_eq!(recent.events, fixture.events[400..]);
+    assert_eq!(recent.before, Some(401));
     assert_eq!(recent.cursor, 600);
     assert_eq!(recent.session.meta.id, fixture.session);
     assert_eq!(recent.session.meta.revision.raw(), 600);
     let older = fixture
         .client
-        .history_window(fixture.session, recent.before, 256, TIMEOUT)
+        .history_window(fixture.session, recent.before, 1, TIMEOUT)
         .await
         .expect("older");
-    assert_eq!(older.events, fixture.events[88..344]);
-    assert_eq!(older.before, Some(89));
+    assert_eq!(older.events, fixture.events[200..400]);
+    assert_eq!(older.before, Some(201));
     assert_eq!(older.cursor, recent.cursor);
     assert_eq!(older.session, recent.session);
     let oldest = fixture
         .client
-        .history_window(fixture.session, older.before, 256, TIMEOUT)
+        .history_window(fixture.session, older.before, 1, TIMEOUT)
         .await
         .expect("oldest");
-    assert_eq!(oldest.events, fixture.events[..88]);
+    assert_eq!(oldest.events, fixture.events[..200]);
     assert_eq!(oldest.before, None);
     assert_eq!(oldest.cursor, recent.cursor);
     assert_eq!(oldest.session, recent.session);
@@ -169,7 +220,15 @@ async fn client_windows_preserve_payloads_and_snapshot_across_pages() {
 #[tokio::test]
 async fn oversized_safe_window_errors_instead_of_returning_half_a_message() {
     let text = "x".repeat(bas::service::MAX_MESSAGE_SIZE / 2);
-    let mut fixture = fixture(vec![chunk("large", &text), chunk("large", &text)]).await;
+    let mut fixture = fixture(vec![
+        EventKind::TurnStarted {
+            turn: bas::model::TurnId::new(),
+        },
+        prompt(0),
+        chunk("large-a", &text),
+        chunk("large-b", &text),
+    ])
+    .await;
     let error = fixture
         .client
         .history_window(fixture.session, None, 1, TIMEOUT)

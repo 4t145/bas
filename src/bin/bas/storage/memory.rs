@@ -263,7 +263,31 @@ impl Storage for Memory {
                     evicted_through: entry.evicted_through,
                 });
             }
-            let mut start = end.saturating_sub(limit);
+            if let Some(before) = before
+                && before <= meta.revision
+                && entry
+                    .dependencies
+                    .get(end)
+                    .is_none_or(|d| d.segment_start != before)
+            {
+                return Err(Error::NotTurnBoundary(before));
+            }
+            let mut start = end;
+            for _ in 0..limit {
+                if start == 0 {
+                    break;
+                }
+                let boundary = entry.dependencies[start - 1].segment_start;
+                if boundary <= entry.evicted_through {
+                    return Err(Error::Expired {
+                        requested: boundary,
+                        evicted_through: entry.evicted_through,
+                    });
+                }
+                start = entry
+                    .events
+                    .partition_point(|event| event.cursor < boundary);
+            }
             loop {
                 let floor = entry.dependencies.range(start..end).map(|d| d.floor).min();
                 let Some(floor) = floor else { break };
@@ -273,7 +297,17 @@ impl Storage for Memory {
                         evicted_through: entry.evicted_through,
                     });
                 }
-                let expanded = entry.events.partition_point(|event| event.cursor < floor);
+                let containing = entry.events.partition_point(|event| event.cursor < floor);
+                let boundary = entry.dependencies[containing].segment_start;
+                if boundary <= entry.evicted_through {
+                    return Err(Error::Expired {
+                        requested: boundary,
+                        evicted_through: entry.evicted_through,
+                    });
+                }
+                let expanded = entry
+                    .events
+                    .partition_point(|event| event.cursor < boundary);
                 if expanded >= start {
                     break;
                 }

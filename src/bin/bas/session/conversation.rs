@@ -634,7 +634,8 @@ impl Session {
         Ok(())
     }
 
-    /// Reads committed metadata and a dependency-aligned event range together.
+    /// Reads committed metadata and `limit` complete user turns together,
+    /// expanding by whole turns for replay dependencies.
     ///
     /// # Errors
     /// Returns storage validation/retention errors without substituting a

@@ -14,6 +14,9 @@ use super::{
 
 #[path = "localdb/history.rs"]
 mod history;
+#[cfg(test)]
+#[path = "localdb/tests.rs"]
+mod tests;
 #[path = "localdb/worker.rs"]
 mod worker;
 pub use worker::LocalDb;
@@ -69,6 +72,11 @@ const MIGRATIONS: MigrationSet = MigrationSet::new(&[
         "history_dependencies",
         include_str!("migrations/0003_history_dependencies.sql"),
     ),
+    MigrationFile::new(
+        4,
+        "history_turns",
+        include_str!("migrations/0004_history_turns.sql"),
+    ),
 ]);
 
 /// Runs only on the dedicated database runtime.
@@ -110,7 +118,7 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
         .next()
         .ok_or(Error::Corrupt("missing schema version"))?;
     let version: i64 = field(&mut columns(version)?)?;
-    if !(0..=3).contains(&version) {
+    if !(0..=4).contains(&version) {
         return Err(Error::InvalidCommit("unsupported SQLite schema version"));
     }
     let tables = sql::query(
@@ -532,6 +540,7 @@ impl SqliteStore {
             "history_index",
             "history_dependencies",
             "history_context_keys",
+            "history_turns",
         ] {
             sql::statement(format!("DELETE FROM {table} WHERE session_id = ?1"))
                 .bind(id.to_string())

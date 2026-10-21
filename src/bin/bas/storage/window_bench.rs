@@ -17,7 +17,7 @@ async fn synthetic_20k_history_profile() {
     let events: Vec<_> = (0..20_000)
         .map(|index| {
             let update: acp::SessionUpdate = serde_json::from_value(serde_json::json!({
-                "sessionUpdate": "agent_message_chunk",
+                "sessionUpdate": if index % 10 == 0 { "user_message_chunk" } else { "agent_message_chunk" },
                 "messageId": format!("message-{}", index / 10),
                 "content": {"type": "text", "text": "A representative streamed text chunk."}
             }))
@@ -38,14 +38,14 @@ async fn synthetic_20k_history_profile() {
         .await
         .expect("legacy index state");
     let started = Instant::now();
-    let newest = storage.window(meta.id, None, 256).await.expect("first use");
+    let newest = storage.window(meta.id, None, 1).await.expect("first use");
     let first = started.elapsed();
-    assert_eq!(newest.events.len(), 260);
+    assert_eq!(newest.events.len(), 10);
     let started = Instant::now();
     let mut before = newest.before;
     for _ in 0..20 {
         before = storage
-            .window(meta.id, before, 256)
+            .window(meta.id, before, 1)
             .await
             .expect("older indexed window")
             .before;

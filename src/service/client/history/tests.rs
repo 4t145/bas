@@ -8,8 +8,18 @@ fn events(id: SessionId, cursors: impl IntoIterator<Item = u64>) -> Vec<pb::Even
             (&Event::new(
                 id,
                 Cursor::from_raw(cursor),
-                EventKind::TitleChanged {
-                    title: format!("{cursor}"),
+                if [5, 8].contains(&cursor) {
+                    EventKind::Acp(
+                        serde_json::from_value(serde_json::json!({
+                            "sessionUpdate":"user_message_chunk", "messageId":format!("p-{cursor}"),
+                            "content":{"type":"text","text":"prompt"}
+                        }))
+                        .expect("prompt"),
+                    )
+                } else {
+                    EventKind::TitleChanged {
+                        title: format!("{cursor}"),
+                    }
                 },
             ))
                 .into()

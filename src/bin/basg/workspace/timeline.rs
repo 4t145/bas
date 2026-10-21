@@ -83,6 +83,53 @@ impl Cache {
 }
 
 impl state::TimelineState {
+    fn row_identities(&self) -> Vec<Vec<String>> {
+        self.conversation
+            .as_ref()
+            .map_or_else(Vec::new, row_identities)
+    }
+
+    fn show(&mut self, conversation: Conversation, old: Vec<Vec<String>>) {
+        // Splice only the changed identity range. In particular, prepending a
+        // page must retain the measured suffix and its within-row scroll anchor.
+        // reset() discards that anchor and drops native input until the next paint.
+        let new = row_identities(&conversation);
+        let expanded_members: HashSet<_> = old
+            .iter()
+            .filter(|row| {
+                row.first().is_some_and(|first| {
+                    let key = if row.len() > 1 {
+                        format!("activity-{first}")
+                    } else {
+                        first.clone()
+                    };
+                    self.expanded.contains(&key)
+                })
+            })
+            .flatten()
+            .collect();
+        for row in &new {
+            if row.len() > 1 && row.iter().any(|id| expanded_members.contains(id)) {
+                self.expanded.insert(format!("activity-{}", row[0]));
+            }
+        }
+        let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+        let suffix = old[prefix..]
+            .iter()
+            .rev()
+            .zip(new[prefix..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if prefix + suffix != old.len() || old.len() != new.len() {
+            self.list
+                .splice(prefix..old.len() - suffix, new.len() - prefix - suffix);
+        }
+        // Identical identities can have updated text or tool results on resync.
+        // This public API preserves the absolute within-row anchor.
+        self.list.remeasure_items(0..new.len());
+        self.conversation = Some(conversation);
+    }
+
     fn position(&self) -> Option<Position> {
         let conversation = self.conversation.as_ref()?;
         let top = self.list.logical_scroll_top();
@@ -104,11 +151,11 @@ impl state::TimelineState {
     }
 
     fn restore_position(&mut self, position: Position) -> bool {
-        self.expanded = position.expanded.clone();
+        self.expanded.extend(position.expanded.iter().cloned());
         if position.following {
-            self.list.set_follow_mode(FollowMode::Tail);
             return true;
         }
+        self.list.pause_following_tail();
         let row = self.conversation.as_ref().and_then(|conversation| {
             let item = conversation
                 .items
@@ -117,10 +164,15 @@ impl state::TimelineState {
             conversation.row_for_item(item)
         });
         if let Some(item_ix) = row {
-            self.list.scroll_to(ListOffset {
+            let offset = ListOffset {
                 item_ix,
                 offset_in_item: position.offset,
-            });
+            };
+            let current = self.list.logical_scroll_top();
+            if current.item_ix != offset.item_ix || current.offset_in_item != offset.offset_in_item
+            {
+                self.list.scroll_to(offset);
+            }
             true
         } else {
             let can_restore = self.history.as_ref().is_some_and(|history| {
@@ -141,8 +193,14 @@ impl Workspace {
         list.set_scroll_handler(move |_, _, cx| {
             // The list is borrowed while delivering its scroll callback.
             let view = view.clone();
+            let epoch = view.upgrade().map(|view| view.read(cx).selected.epoch);
             cx.defer(move |cx| {
                 let _ = view.update(cx, |this, cx| {
+                    if Some(this.selected.epoch) != epoch {
+                        return;
+                    }
+                    // Native input supersedes an evicted-cache restoration.
+                    this.selected.timeline.restore = None;
                     let list = &this.selected.timeline.list;
                     if !list.is_following_tail()
                         && list.logical_scroll_top().item_ix < PREFETCH_ROWS
@@ -189,6 +247,18 @@ impl Workspace {
         if self.selected.id != Some(session) {
             return;
         }
+        if self
+            .selected
+            .timeline
+            .history
+            .as_ref()
+            .is_some_and(|old| old.session.meta.id == session && old.cursor > history.cursor)
+        {
+            return;
+        }
+        let started = std::time::Instant::now();
+        let incoming_events = history.events.len();
+        let incoming_context = history.context.len();
         if let Some(old) = &self.selected.timeline.history
             && old.session.meta.id == session
             && let (Some(first), Some(previous)) = (history.events.first(), old.events.first())
@@ -217,6 +287,7 @@ impl Workspace {
             .restore
             .take()
             .or_else(|| self.selected.timeline.position());
+        let old_rows = self.selected.timeline.row_identities();
         if !cached {
             self.sessions.runtimes.observe(&history.session, false);
         }
@@ -275,6 +346,7 @@ impl Workspace {
         {
             self.record_user_prompt(session);
         }
+        let replay_started = std::time::Instant::now();
         for event in events {
             self.observe_user_prompt(&event);
             if let Some(outbox) = self.sessions.outboxes.get_mut(&session) {
@@ -282,6 +354,7 @@ impl Workspace {
             }
             conversation.apply(event);
         }
+        let replay_elapsed = replay_started.elapsed();
         if conversation.foreground_state.is_none() {
             conversation.foreground_state =
                 Some(if conversation.session.status == SessionStatus::Working {
@@ -299,14 +372,27 @@ impl Workspace {
         {
             crate::conversation::merge_meta(known, &conversation.session);
         }
+        let retained_events = history.events.len();
+        let rows = conversation.rows.len();
+        let reconcile_started = std::time::Instant::now();
         self.selected.timeline.clear_caches();
         self.selected.timeline.history = Some(history);
-        self.selected.timeline.show(conversation);
+        self.selected.timeline.show(conversation, old_rows);
         if let Some(position) = position
             && !self.selected.timeline.restore_position(position)
         {
             self.load_older_history(cx);
         }
+        tracing::debug!(
+            incoming_events,
+            incoming_context,
+            retained_events,
+            rows,
+            replay_ms = replay_elapsed.as_secs_f64() * 1000.,
+            reconcile_ms = reconcile_started.elapsed().as_secs_f64() * 1000.,
+            total_ms = started.elapsed().as_secs_f64() * 1000.,
+            "applied history window"
+        );
     }
 
     pub(super) fn load_older_history(&mut self, cx: &mut Context<Self>) {
@@ -409,4 +495,17 @@ impl Workspace {
             ]
         }.into_any_element())
     }
+}
+
+fn row_identities(conversation: &Conversation) -> Vec<Vec<String>> {
+    conversation
+        .rows
+        .iter()
+        .map(|row| {
+            conversation.items[row.items.clone()]
+                .iter()
+                .map(Item::id)
+                .collect()
+        })
+        .collect()
 }

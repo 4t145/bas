@@ -380,7 +380,12 @@ async fn delete(tx: &mut Transaction<'_>, namespace: &str, session: &str) -> Res
 fn namespace(options: &ConnectionOptions) -> Result<String, Error> {
     // Hash the enum discriminant and non-lossy path debug representation too:
     // display alone is not injective for non-UTF8 Unix socket paths.
-    let key = serde_json::to_vec(&(format!("{:?}", options.target), &options.tls))?;
+    // Event-count pages cannot supply the whole-turn boundaries used by this reader.
+    let key = serde_json::to_vec(&(
+        "user-turn-windows-v1",
+        format!("{:?}", options.target),
+        &options.tls,
+    ))?;
     Ok(format!("{:x}", Sha256::digest(key)))
 }
 

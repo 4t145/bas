@@ -93,6 +93,8 @@ pub enum Error {
     SubmissionExists(TurnId),
     #[error("history page limit must be greater than zero")]
     EmptyPage,
+    #[error("history cursor {0} is not a turn boundary")]
+    NotTurnBoundary(Cursor),
     #[error("cursor {requested} is ahead of latest {latest}")]
     Future { requested: Cursor, latest: Cursor },
     #[error("history after {requested} was evicted through {evicted_through}")]
@@ -181,10 +183,12 @@ pub trait Storage: Send + Sync {
         limit: usize,
     ) -> BoxFuture<'_, Result<Page, Error>>;
     /// Reads a dependency-complete chronological suffix strictly before `before`.
+    /// `limit` counts complete user turns (initialization is a separate segment).
+    /// Dependency expansion may include more turns; turns are never split.
     /// Metadata and cursor describe one atomic snapshot, not the historical boundary.
     ///
     /// # Errors
-    /// Fails for zero limit, missing session, future cursor, evicted dependencies,
+    /// Fails for zero limit, missing session, future/non-boundary cursor, evicted dependencies,
     /// corrupt persisted data, or backend I/O errors.
     fn window(
         &self,

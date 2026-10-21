@@ -157,3 +157,62 @@ fn live_predicate_queries_only_referenced_identities_without_mutation() {
     )));
     assert_eq!(serde_json::to_vec(&index).expect("serialize"), before);
 }
+
+#[test]
+fn turn_boundaries_share_message_identity_and_legacy_adjacency_rules() {
+    let user = |cursor, id| {
+        event(
+            cursor,
+            json!({
+                "sessionUpdate":"user_message_chunk", "messageId":id,
+                "content":{"type":"text","text":"prompt"}
+            }),
+        )
+    };
+    let mut index = DependencyIndex::default();
+    assert_eq!(
+        index
+            .observe(&chunk(1, Some("initial")))
+            .segment_start
+            .raw(),
+        1
+    );
+    assert_eq!(index.observe(&user(2, Some("p"))).segment_start.raw(), 2);
+    index.observe(&chunk(3, Some("answer")));
+    // Same user identity remains one logical prompt even across intervening activity.
+    assert_eq!(index.observe(&user(4, Some("p"))).segment_start.raw(), 2);
+    assert_eq!(index.observe(&user(5, None)).segment_start.raw(), 5);
+    index.observe(&event(6, json!({"sessionUpdate":"plan","entries":[]})));
+    assert_eq!(index.observe(&user(7, None)).segment_start.raw(), 5);
+    index.observe(&chunk(8, None));
+    assert_eq!(index.observe(&user(9, None)).segment_start.raw(), 9);
+    let turn = crate::model::TurnId::new();
+    index.observe(&Event::new(
+        SessionId::new(),
+        Cursor::from_raw(10),
+        EventKind::TurnStarted { turn },
+    ));
+    assert_eq!(
+        index
+            .observe(&user(11, Some("explicit")))
+            .segment_start
+            .raw(),
+        10
+    );
+    assert_eq!(index.observe(&user(12, None)).segment_start.raw(), 10);
+    index.observe(&Event::new(
+        SessionId::new(),
+        Cursor::from_raw(13),
+        EventKind::TurnFinished {
+            turn,
+            result: Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)),
+        },
+    ));
+    assert_eq!(
+        index
+            .observe(&user(14, Some("imported")))
+            .segment_start
+            .raw(),
+        14
+    );
+}

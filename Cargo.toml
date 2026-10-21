@@ -113,7 +113,7 @@ tokio = { version = "1", features = [
 ] }
 tokio-stream = { version = "0.1", features = ["net", "sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-tonic = { version = "0.14", features = ["tls-ring"] }
+tonic = { version = "0.14", features = ["tls-ring", "gzip"] }
 tonic-prost = "0.14"
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"

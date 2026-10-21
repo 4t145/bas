@@ -30,7 +30,8 @@ impl Global for Shared {}
 pub(crate) fn init_tracing() -> Store {
     let store = Store::new();
     let console = EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into());
-    let memory = EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,basg=debug".into());
+    let memory = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "warn,basg=debug,bas::service::client::history=debug".into());
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_filter(console))
         .with(store.layer().with_filter(memory))

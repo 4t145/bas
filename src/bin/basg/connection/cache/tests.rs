@@ -55,6 +55,57 @@ async fn open(path: &Path) -> Cache {
 }
 
 #[tokio::test]
+async fn turn_pages_do_not_reuse_event_page_cache_boundaries() {
+    use sha2::{Digest, Sha256};
+    let directory = temporary_cache();
+    let path = directory.path().join("history.sqlite");
+    let cache = open(&path).await;
+    let id = SessionId::new();
+    cache
+        .store_window(&window(id, 1, 8, None))
+        .await
+        .expect("seed cache");
+    let options = ConnectionOptions::default();
+    let old_key = serde_json::to_vec(&(format!("{:?}", options.target), &options.tls))
+        .expect("old cache key");
+    let old_namespace = format!("{:x}", Sha256::digest(old_key));
+    let mut db = rusqlite::Connection::open(&path).expect("fixture cache");
+    db.busy_timeout(std::time::Duration::from_secs(5))
+        .expect("busy timeout");
+    let current: String = db
+        .query_row("SELECT namespace FROM cache_sessions", [], |row| row.get(0))
+        .expect("current namespace");
+    assert_ne!(current, old_namespace);
+    let tx = db.transaction().expect("fixture transaction");
+    for table in ["cache_sessions", "cache_events", "cache_pages"] {
+        tx.execute(
+            &format!("UPDATE {table} SET namespace=?1 WHERE namespace=?2"),
+            rusqlite::params![old_namespace, current],
+        )
+        .expect("simulate previous event-page cache");
+    }
+    tx.commit().expect("old cache fixture");
+    assert!(
+        cache
+            .load_latest(id)
+            .await
+            .expect("load current format")
+            .is_none()
+    );
+    cache
+        .store_window(&window(id, 5, 8, Some(5)))
+        .await
+        .expect("new turn page");
+    let current = cache
+        .load_latest(id)
+        .await
+        .expect("read turn page")
+        .expect("retained");
+    assert_eq!(cursors(&current), vec![5, 6, 7, 8]);
+    assert_eq!(current.before, Some(5));
+}
+
+#[tokio::test]
 async fn reopening_preserves_pages_overlap_and_newest_frontier() {
     let directory = temporary_cache();
     let path = directory.path().join("history.sqlite");

@@ -546,7 +546,9 @@ message LoadHistoryWindowRequest {
   string session = 1;
   // Absent selects newest; otherwise selects events strictly before this cursor.
   optional uint64 before = 2;
-  // Positive target count, expanded backwards to include logical dependencies.
+  // Positive user-turn count, expanded backwards by whole turns for dependencies.
+  // Initialization before the first prompt is a separate reachable segment.
+  // A supplied before must be a turn boundary (or START / latest + 1).
   uint32 limit = 3;
 }
 

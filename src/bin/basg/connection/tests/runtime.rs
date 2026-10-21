@@ -9,8 +9,8 @@ async fn failed_runtime_delivers_recent_history_before_unavailable_without_attac
         Update::HistoryWindow { window, .. },
         Update::Stream { state: StreamState::Unavailable(message), .. },
     ] if window.session.runtime.failure.is_some()
-        && window.events.len() == 256
-        && window.events.first().expect("first retained event").cursor.raw() == 45
+        && window.events.len() == 2
+        && window.events.first().expect("first retained event").cursor.raw() == 299
         && window.events.last().expect("last retained event").cursor.raw() == 300
         && message.presentation().contains("disk full")));
     assert!(fixture.attachments.lock().expect("attachments").is_empty());

@@ -31,7 +31,7 @@ pub(super) fn late_window(
     if refreshed {
         events.push(late_event(service.session.id));
     } else {
-        events.drain(..44);
+        events.drain(..298);
     }
     let mut meta = service.session.clone();
     meta.revision = Cursor::from_raw(if refreshed { 301 } else { 300 });
@@ -46,7 +46,7 @@ pub(super) fn late_window(
         ),
         events: events.iter().map(Into::into).collect(),
         context: Vec::new(),
-        before: (!refreshed).then_some(45),
+        before: (!refreshed).then_some(299),
     }))
 }
 
@@ -67,7 +67,7 @@ async fn late_tool_update_refreshes_dependencies_before_exposing_the_update() {
         })
         .collect::<Vec<_>>();
     assert_eq!(windows.len(), 2);
-    assert_eq!(windows[0].events.len(), 256);
+    assert_eq!(windows[0].events.len(), 2);
     assert_eq!(windows[1].events.len(), 301);
     assert_eq!(windows[1].events[0].cursor.raw(), 1);
     assert_eq!(windows[1].events[300].cursor.raw(), 301);
@@ -87,7 +87,7 @@ async fn window(fixture: &Fixture) -> HistoryWindow {
     fixture
         .client
         .clone()
-        .history_window(fixture.session, None, HISTORY_PAGE_SIZE, REQUEST_TIMEOUT)
+        .history_window(fixture.session, None, HISTORY_TURNS, REQUEST_TIMEOUT)
         .await
         .expect("window")
 }
@@ -108,8 +108,8 @@ async fn cold_history_reads_one_recent_window_and_attaches_at_its_frontier() {
         })
         .collect::<Vec<_>>();
     assert_eq!(windows.len(), 1);
-    assert_eq!(windows[0].events.len(), 256);
-    assert_eq!(windows[0].before, Some(45));
+    assert_eq!(windows[0].events.len(), 2);
+    assert_eq!(windows[0].before, Some(299));
     assert!(
         fixture
             .raw_history_requests
@@ -260,12 +260,7 @@ async fn older_page_is_cache_first_and_keeps_the_requested_epoch() {
     let older = fixture
         .client
         .clone()
-        .history_window(
-            fixture.session,
-            Some(45),
-            HISTORY_PAGE_SIZE,
-            REQUEST_TIMEOUT,
-        )
+        .history_window(fixture.session, Some(299), HISTORY_TURNS, REQUEST_TIMEOUT)
         .await
         .expect("older");
     cache.store_window(&older).await.expect("older cache");
@@ -282,7 +277,7 @@ async fn older_page_is_cache_first_and_keeps_the_requested_epoch() {
         .send(Command::OlderHistory {
             session: fixture.session,
             epoch: 17,
-            before: 45,
+            before: 299,
         })
         .expect("command");
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -294,10 +289,10 @@ async fn older_page_is_cache_first_and_keeps_the_requested_epoch() {
             } = events.recv().await.expect("updates")
             {
                 assert_eq!(epoch, 17);
-                assert_eq!(before, 45);
+                assert_eq!(before, 299);
                 let window = result.expect("cached older");
-                assert_eq!(window.events.first().expect("first").cursor.raw(), 1);
-                assert_eq!(window.events.last().expect("last").cursor.raw(), 44);
+                assert_eq!(window.events.first().expect("first").cursor.raw(), 297);
+                assert_eq!(window.events.last().expect("last").cursor.raw(), 298);
                 break;
             }
         }

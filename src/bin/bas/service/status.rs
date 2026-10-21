@@ -39,7 +39,9 @@ impl From<SessionError> for Status {
                 Status::data_loss(error.to_string())
             }
             SessionError::Storage(
-                crate::storage::Error::Future { .. } | crate::storage::Error::EmptyPage,
+                crate::storage::Error::Future { .. }
+                | crate::storage::Error::EmptyPage
+                | crate::storage::Error::NotTurnBoundary(_),
             ) => Status::invalid_argument(error.to_string()),
             SessionError::Storage(_) => Status::unavailable(error.to_string()),
             SessionError::CommitTask(_) => Status::unavailable(error.to_string()),

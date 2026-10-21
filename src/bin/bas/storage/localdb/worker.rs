@@ -232,6 +232,7 @@ impl TestSql {
                     "history_index",
                     "history_dependencies",
                     "history_context_keys",
+                    "history_turns",
                 ] {
                     sql::statement(format!("DELETE FROM {table}"))
                         .exec(&mut db)

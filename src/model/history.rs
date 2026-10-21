@@ -17,6 +17,8 @@ pub struct DependencyIndex {
     incomplete: bool,
     turn_start: Option<u64>,
     interruption: Option<u64>,
+    explicit_turn: bool,
+    segment_start: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -28,6 +30,8 @@ struct Anchor {
 #[derive(Clone, Debug)]
 pub struct Dependency {
     pub floor: Cursor,
+    /// Start of the containing user turn, or the initialization segment.
+    pub segment_start: Cursor,
     pub context_key: Option<String>,
     /// First insertion of the active plan generation, or the usage snapshot.
     /// `None` with a context key denotes removal.
@@ -111,6 +115,16 @@ impl DependencyIndex {
 
     pub fn observe(&mut self, event: &Event) -> Dependency {
         let cursor = event.cursor.raw();
+        let starts_turn = matches!(event.kind, EventKind::TurnStarted { .. })
+            || (!self.explicit_turn
+                && matches!(
+                    event.kind,
+                    EventKind::Acp(acp::SessionUpdate::UserMessageChunk(_))
+                )
+                && self.reference_floor(event, cursor) == cursor);
+        if starts_turn || self.segment_start.is_none() {
+            self.segment_start = Some(cursor);
+        }
         let mut floor = cursor;
         let mut context_key = None;
         let mut removed = false;
@@ -182,17 +196,20 @@ impl DependencyIndex {
                 }
             }
             EventKind::TurnStarted { .. } => {
+                self.explicit_turn = true;
                 self.legacy = None;
                 self.turn_start = Some(cursor);
                 self.interruption = None;
                 context_key = Some("turn".into());
             }
             EventKind::TurnFinished { .. } => {
+                self.explicit_turn = false;
                 self.legacy = None;
                 context_key = Some("turn".into());
                 removed = true;
             }
             EventKind::TurnInterrupted { reason, .. } => {
+                self.explicit_turn = false;
                 self.legacy = None;
                 context_key = Some("turn".into());
                 removed = true;
@@ -203,6 +220,7 @@ impl DependencyIndex {
                 };
             }
             EventKind::Failed { .. } => {
+                self.explicit_turn = false;
                 self.legacy = None;
                 context_key = Some("turn".into());
                 removed = true;
@@ -225,6 +243,7 @@ impl DependencyIndex {
         });
         Dependency {
             floor: Cursor::from_raw(floor),
+            segment_start: Cursor::from_raw(self.segment_start.expect("observed event")),
             context_key,
             context_start,
         }

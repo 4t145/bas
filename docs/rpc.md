@@ -273,9 +273,12 @@ GUI 在归档时保留草稿和未发队列并暂停派发，恢复本身不自�
 
 `LoadHistoryWindow { session, before?, limit }` 与原有 `LoadHistory` 分开。
 `before` 缺省读取最新内容；指定时只读取严格小于该游标的事件。`limit` 必须为正，
-是目标数量而非硬截断：服务端沿消息、工具、压缩及终端依赖向前扩展，返回连续事件区间。
+单位为用户回合而非事件条数：服务端沿消息、工具、压缩及终端依赖向前扩展到完整回合，返回连续事件区间。
 ACP message ID 按角色和会话匹配，可以跨回合；没有 ID 的内容按 reducer 的相邻流式消息规则匹配。
-导入历史可以没有回合标记，不能把回合或固定事件条数当成安全切点。
+普通回合以 `TurnStarted` 开始，其后的用户消息分块不会重复计数。
+没有活动显式回合的导入历史以新逻辑用户消息的首个分块开始回合；
+同 ID/角色或相邻无 ID 分块合并为一个提示。首个回合之前的初始化是可单独读取的初始段。
+`before` 必须为回合起点（或 START、latest + 1）；回合中间的游标返回 `INVALID_ARGUMENT`。
 
 响应包含：
 
@@ -301,8 +304,8 @@ LocalDb 保存可重建的依赖索引，旧记录首次使用时可能需要构
 共享 Rust API 为 `impl Client` 成员，返回 `tonic::Status`：
 
 ```rust,ignore
-let recent = client.history_window(session, None, 256, timeout).await?;
-let older = client.history_window(session, recent.before, 256, timeout).await?;
+let recent = client.history_window(session, None, 1, timeout).await?;
+let older = client.history_window(session, recent.before, 1, timeout).await?;
 ```
 
 `HistoryWindow` 从 `bas::service` 导出，支持 Clone 和 Serde。

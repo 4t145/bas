@@ -28,7 +28,7 @@ pub(crate) use failure::{Condition, Failure, FailureContext};
 pub(crate) use model::{AgentSummary, PendingElicitation};
 
 const EVENT_CAPACITY: usize = 256;
-const HISTORY_PAGE_SIZE: u32 = 256;
+const HISTORY_TURNS: u32 = 1;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
@@ -1078,7 +1078,7 @@ async fn load_initial(
     knowledge: &mut history::Knowledge,
 ) -> Result<u64, Failure> {
     let window = client
-        .history_window(session, None, HISTORY_PAGE_SIZE, REQUEST_TIMEOUT)
+        .history_window(session, None, HISTORY_TURNS, REQUEST_TIMEOUT)
         .await?;
     let frontier = window.cursor;
     knowledge.validate(frontier)?;

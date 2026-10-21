@@ -1,7 +1,8 @@
 //! Validated raw-event history loaders shared by all frontends.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use tonic::Status;
 
@@ -26,11 +27,13 @@ pub struct HistoryWindow {
 }
 
 impl Client {
-    /// Loads a contiguous recent-first range, extending the target count to
-    /// include message, tool and other replay dependencies.
+    /// Loads `limit` complete user turns, newest first in chronological order.
+    /// Initialization is a separate segment. Replay dependencies can expand the
+    /// range by whole turns; a long turn is never silently split.
     ///
     /// # Errors
-    /// Returns `ResourceExhausted` for a safe range too large for one RPC,
+    /// Returns `InvalidArgument` for zero limit or a non-boundary `before`,
+    /// `ResourceExhausted` for a safe range too large for one RPC,
     /// `DataLoss` for expired dependencies or an
     /// invalid response, and transport/deadline errors without retrying.
     pub async fn history_window(
@@ -45,6 +48,7 @@ impl Client {
                 "history window limit must be positive",
             ));
         }
+        let started = Instant::now();
         let response = tokio::time::timeout(
             timeout,
             self.load_history_window(pb::LoadHistoryWindowRequest {
@@ -56,7 +60,17 @@ impl Client {
         .await
         .map_err(|_| deadline())??
         .into_inner();
-        decode_window(session, before, response)
+        let rpc_ms = started.elapsed().as_millis();
+        let protobuf_bytes = response.encoded_len();
+        let decoding = Instant::now();
+        let window = decode_window(session, before, response)?;
+        tracing::debug!(
+            %session, ?before, requested_turns = limit,
+            events = window.events.len(), protobuf_bytes, rpc_ms,
+            decode_ms = decoding.elapsed().as_millis(),
+            "Loaded history window"
+        );
+        Ok(window)
     }
 }
 

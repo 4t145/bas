@@ -419,12 +419,6 @@ impl TimelineState {
         self.bounds.borrow_mut().clear();
         self.list.reset(0);
     }
-
-    pub(super) fn show(&mut self, conversation: Conversation) {
-        self.list.reset(conversation.rows.len());
-        self.list.set_follow_mode(FollowMode::Tail);
-        self.conversation = Some(conversation);
-    }
 }
 
 /// The visible composition; its generation guards asynchronous editor work.
