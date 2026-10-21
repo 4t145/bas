@@ -26,6 +26,8 @@ mod history;
 #[cfg(unix)]
 mod permissions;
 #[cfg(unix)]
+mod prewarming;
+#[cfg(unix)]
 mod subagents;
 
 #[cfg(unix)]

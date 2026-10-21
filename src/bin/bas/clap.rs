@@ -74,23 +74,20 @@ impl Args {
     /// # Errors
     /// Returns an error if the selected agent catalog is invalid or empty.
     pub fn config(&self) -> Result<Config> {
-        let (agents, catalog_source) = if let Some(agents) = &self.agents {
-            (
+        let mut source = config::CatalogSource::settings(self.settings_file.clone())?;
+        if let Some(agents) = &self.agents {
+            source = source.with_agents(
                 config::parse_agents(agents)
                     .context("invalid agent catalog")?
                     .into_iter()
                     .map(Into::into)
                     .collect(),
-                None,
-            )
-        } else {
-            let mut source = match &self.agents_file {
-                Some(path) => config::CatalogSource::legacy(path.clone()),
-                None => config::CatalogSource::settings(self.settings_file.clone())?,
-            };
-            let agents = source.load()?;
-            (agents, Some(source))
-        };
+            );
+        } else if let Some(path) = &self.agents_file {
+            source = source.with_legacy_agents(path.clone());
+        }
+        let bas::config::Daemon { agents, acp } = source.load_configuration()?;
+        let catalog_source = Some(source);
         anyhow::ensure!(!agents.is_empty(), "at least one agent must be configured");
         anyhow::ensure!(
             self.storage == Storage::Localdb || self.localdb_path.is_none(),
@@ -119,6 +116,7 @@ impl Args {
             tls,
             notify: self.notify,
             agents,
+            acp,
             catalog_source,
             permissions: self.permissions,
             storage: self.storage,

@@ -1,10 +1,12 @@
 //! Strict shared settings and conflict-aware, section-scoped persistence.
+mod acp;
 pub mod agent;
 pub mod appearance;
 pub mod connections;
 pub mod paths;
 pub mod registration;
 mod store;
+pub use acp::{AcpLifecycle, MAX_ACP_POOL_RESERVE};
 pub use agent::{AgentSpec, validate_agents};
 pub use appearance::Appearance;
 pub use connections::{ConnectionProfile, Frontend};
@@ -23,11 +25,13 @@ pub struct Settings {
 #[serde(default, deny_unknown_fields)]
 pub struct Daemon {
     pub agents: Vec<AgentRegistration>,
+    pub acp: AcpLifecycle,
 }
 impl Default for Daemon {
     fn default() -> Self {
         Self {
             agents: vec![AgentSpec::embedded().into()],
+            acp: AcpLifecycle::default(),
         }
     }
 }

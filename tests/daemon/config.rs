@@ -99,11 +99,11 @@ async fn settings_file_environment_reloads_catalog_and_preserves_sessions() {
 }
 
 #[tokio::test]
-async fn explicit_agents_override_files_and_do_not_watch_them() {
+async fn explicit_agents_override_catalogs_but_keep_settings_as_policy_source() {
     let directory = tempfile::tempdir().unwrap();
     let settings = directory.path().join("settings.json");
     let legacy = directory.path().join("agents.json");
-    std::fs::write(&settings, "invalid").unwrap();
+    write_settings(&settings, "file-agent");
     std::fs::write(&legacy, "invalid").unwrap();
     let mut command = command();
     command
@@ -132,14 +132,13 @@ async fn explicit_agents_override_files_and_do_not_watch_them() {
 async fn explicit_legacy_file_precedes_settings_and_reloads() {
     let directory = tempfile::tempdir().unwrap();
     let legacy = directory.path().join("agents.json");
+    let settings = directory.path().join("settings.json");
+    write_settings(&settings, "file-agent");
     std::fs::write(&legacy, r#"[{"id":"legacy","kind":"embedded"}]"#).unwrap();
     let mut command = command();
     command
         .env_remove("BAS_AGENTS")
-        .env(
-            "BAS_SETTINGS_FILE",
-            directory.path().join("missing-settings.json"),
-        )
+        .env("BAS_SETTINGS_FILE", &settings)
         .arg("--agents-file")
         .arg(&legacy)
         .args([
@@ -168,6 +167,40 @@ async fn missing_explicit_settings_fail_instead_of_starting_embedded() {
         .await
         .unwrap();
     assert!(!output.status.success());
+}
+
+#[tokio::test]
+async fn explicit_catalog_overrides_do_not_hide_invalid_policy_sources() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings = directory.path().join("settings.json");
+    let legacy = directory.path().join("agents.json");
+    std::fs::write(&legacy, r#"[{"id":"legacy","kind":"embedded"}]"#).unwrap();
+    for contents in [
+        None,
+        Some("invalid JSON"),
+        Some(r#"{"daemon":{"acp":{"idle_timeout_secs":0}}}"#),
+    ] {
+        if let Some(contents) = contents {
+            std::fs::write(&settings, contents).unwrap();
+        }
+        for use_legacy in [false, true] {
+            let mut process = command();
+            process
+                .env_remove("BAS_AGENTS")
+                .arg("--settings-file")
+                .arg(&settings);
+            if use_legacy {
+                process.arg("--agents-file").arg(&legacy);
+            } else {
+                process.args(["--agents", "fixed=embedded"]);
+            }
+            let output = process.output().await.unwrap();
+            assert!(
+                !output.status.success(),
+                "policy source must be validated with any catalog"
+            );
+        }
+    }
 }
 
 #[tokio::test]

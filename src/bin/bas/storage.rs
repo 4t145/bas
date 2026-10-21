@@ -11,7 +11,7 @@ mod memory;
 pub use localdb::LocalDb;
 pub use memory::Memory;
 
-use bas::model::{Cursor, Event, SessionId, SessionMeta, TurnId, TurnReceipt};
+use bas::model::{AgentId, Cursor, Event, SessionId, SessionMeta, TurnId, TurnReceipt};
 use futures::future::BoxFuture;
 
 #[cfg(test)]
@@ -122,6 +122,23 @@ pub enum Error {
 
 /// Writes must finish before the daemon acknowledges or broadcasts.
 pub trait Storage: Send + Sync {
+    /// Most recently published or used ACP agent, independent of session retention.
+    ///
+    /// # Errors
+    /// Fails on corrupt persisted data or backend I/O errors.
+    fn last_used_agent(&self) -> BoxFuture<'_, Result<Option<AgentId>, Error>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Records an ACP creation only after the caller has published its session.
+    /// Readiness alone does not select an agent: unpublished creations can be canceled.
+    ///
+    /// # Errors
+    /// Fails for a missing session, corrupt persisted data, or backend I/O errors.
+    fn record_created_session(&self, _id: SessionId) -> BoxFuture<'_, Result<(), Error>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// # Errors
     /// Fails for a duplicate id, invalid initial metadata, or backend I/O errors.
     fn create(
@@ -205,6 +222,13 @@ pub trait Storage: Send + Sync {
     /// Fails on backend I/O errors; missing sessions return `false`.
     fn delete(&self, id: SessionId) -> BoxFuture<'_, Result<bool, Error>>;
     fn is_persistent(&self) -> bool;
+}
+
+fn has_acp_resume(session: &StoredSession) -> bool {
+    session
+        .resume
+        .as_ref()
+        .is_some_and(|resume| resume.acp_session_id().is_ok())
 }
 
 fn validate_create(meta: &SessionMeta) -> Result<(), Error> {

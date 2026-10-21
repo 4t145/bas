@@ -19,7 +19,11 @@ use crate::agent::{self, Agent, TurnUpdate, Update};
 use crate::storage::{self, Storage};
 
 mod directories;
+mod lifecycle;
 mod submission;
+#[cfg(test)]
+mod tests;
+pub use lifecycle::BackendUse;
 pub use submission::SubmissionError;
 
 /// A detached snapshot; notification delivery never retains the session.
@@ -75,7 +79,8 @@ struct State {
     meta: SessionMeta,
     runtime: SessionRuntime,
     failure: watch::Sender<Option<RuntimeFailure>>,
-    history: Ring,
+    // Storage owns replay retention when present; never keep a second copy here.
+    history: Option<Ring>,
     cursor: Cursor,
     active: Option<TurnId>,
     agent: Option<Box<dyn Agent>>,
@@ -91,6 +96,10 @@ struct State {
     deleted: bool,
     closing: bool,
     reloading: bool,
+    retiring: bool,
+    backend_users: usize,
+    last_backend_use: tokio::time::Instant,
+    backend_generation: u64,
 }
 
 impl Session {
@@ -119,7 +128,9 @@ impl Session {
                 meta,
                 runtime: SessionRuntime::default(),
                 failure: watch::channel(None).0,
-                history: Ring::new(limits.history_capacity),
+                history: storage
+                    .is_none()
+                    .then(|| Ring::new(limits.history_capacity)),
                 cursor,
                 active: None,
                 agent: None,
@@ -134,6 +145,10 @@ impl Session {
                 deleted: false,
                 closing: false,
                 reloading: false,
+                retiring: false,
+                backend_users: 0,
+                last_backend_use: tokio::time::Instant::now(),
+                backend_generation: 0,
             }),
             transaction: tokio::sync::Mutex::new(()),
             updates_task: Mutex::new(None),
@@ -428,17 +443,19 @@ impl Session {
     }
 
     pub(super) fn listen(self: &Arc<Self>, mut inbox: mpsc::Receiver<Update>) {
-        let state = self.lock();
+        let mut state = self.lock();
         if state.terminal() || state.deleted {
             return;
         }
+        state.backend_generation += 1;
+        let generation = state.backend_generation;
         let weak = Arc::downgrade(self);
         let task = AbortOnDropHandle::new(tokio::spawn(async move {
             while let Some(update) = inbox.recv().await {
                 let Some(session) = weak.upgrade() else {
                     return;
                 };
-                session.apply(update).await;
+                session.apply_from(generation, update).await;
                 if session.lock().terminal() {
                     return;
                 }
@@ -447,7 +464,10 @@ impl Session {
                 && session.is_restored()
             {
                 session
-                    .fail("backend update channel closed".to_owned())
+                    .apply_from(
+                        generation,
+                        Update::Failed("backend update channel closed".to_owned()),
+                    )
                     .await;
             }
         }));
@@ -524,10 +544,10 @@ impl Session {
             let state = self.lock();
             state.check_health()?;
             state.check_cursor(options.cursor)?;
-            if state.storage.is_none() {
+            if let Some(history) = &state.history {
                 let backlog = match options.cursor {
-                    Some(cursor) => state.history.page(Some(cursor), usize::MAX)?.events,
-                    None => state.history.tail(options.replay),
+                    Some(cursor) => history.page(Some(cursor), usize::MAX)?.events,
+                    None => history.tail(options.replay),
                 };
                 return Ok(Attachment::new(
                     backlog,
@@ -537,7 +557,7 @@ impl Session {
                 ));
             }
             (
-                state.storage.clone().expect("storage checked"),
+                state.storage.clone().expect("storage owns history"),
                 state.meta.id,
                 state.cursor,
                 state.events.as_ref().map(broadcast::Sender::subscribe),
@@ -573,7 +593,11 @@ impl Session {
     pub fn page(&self, after: Option<Cursor>, limit: usize) -> Result<Page, HistoryError> {
         let state = self.lock();
         state.check_cursor(after)?;
-        state.history.page(after, limit)
+        state
+            .history
+            .as_ref()
+            .expect("page helper requires a session without storage")
+            .page(after, limit)
     }
 
     /// Visits history under one snapshot lock without cloning an unbounded page.
@@ -607,14 +631,13 @@ impl Session {
         let (storage, id) = {
             let state = self.lock();
             state.check_cursor(after)?;
-            if state.storage.is_none() {
-                return state
-                    .history
+            if let Some(history) = &state.history {
+                return history
                     .visit(after, limit, visitor)
                     .map_err(SessionError::History);
             }
             (
-                state.storage.clone().expect("storage checked"),
+                state.storage.clone().expect("storage owns history"),
                 state.meta.id,
             )
         };
@@ -689,7 +712,9 @@ impl Session {
         self: &Arc<Self>,
         request: acp::CancelNotification,
     ) -> Result<(), SessionError> {
+        let backend = self.use_backend();
         self.owned(move |session| async move {
+            let _backend = backend;
             let _gate = session.transaction.lock().await;
             let result = {
                 let mut state = session.lock();
@@ -894,11 +919,21 @@ impl Session {
         tokio::join!(stop_updates, stop_agent);
     }
 
+    #[cfg(test)]
     pub(super) async fn apply(self: &Arc<Self>, update: Update) {
+        let generation = self.lock().backend_generation;
+        self.apply_from(generation, update).await;
+    }
+
+    async fn apply_from(self: &Arc<Self>, generation: u64, update: Update) {
         self.owned(move |session| async move {
             let _gate = session.transaction.lock().await;
-            if session.lock().terminal() || session.lock().deleted {
-                return;
+            {
+                let mut state = session.lock();
+                if state.terminal() || state.deleted || state.backend_generation != generation {
+                    return;
+                }
+                state.last_backend_use = tokio::time::Instant::now();
             }
             if let Update::Barrier(ack) = update {
                 let _ = ack.send(());
@@ -909,7 +944,11 @@ impl Session {
                 let _restore = session.restore_gate.lock().await;
                 return;
             }
-            if !session.lock().restored {
+            let replaying = {
+                let state = session.lock();
+                !state.restored && !state.retiring
+            };
+            if replaying {
                 if let Update::Commit { committed, .. } = update {
                     let _ = committed.send(());
                 }
@@ -973,6 +1012,7 @@ impl Session {
         .await;
     }
 
+    #[cfg(test)]
     pub(super) async fn fail(self: &Arc<Self>, message: String) {
         self.owned(move |session| async move {
             let _gate = session.transaction.lock().await;
@@ -1069,7 +1109,9 @@ impl Session {
                     _ => {}
                 }
             }
-            state.history.push(event.clone());
+            if let Some(history) = &mut state.history {
+                history.push(event.clone());
+            }
             if let Some(sender) = &state.events {
                 let _ = sender.send(event);
             }

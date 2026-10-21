@@ -11,7 +11,7 @@ use async_trait::async_trait;
 #[cfg(test)]
 use bas::model::StopReason;
 use bas::model::{AgentId, SessionId, TurnId};
-use futures::future::BoxFuture;
+use futures::{FutureExt, future::BoxFuture};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 
@@ -20,11 +20,13 @@ use super::{
     driver::{Driver as DriverTrait, spawn_worker},
 };
 
+mod activity;
 mod authentication;
 mod convert;
 mod directories;
 pub mod history;
 mod management;
+mod pool;
 mod probe;
 pub use authentication::{authenticate_expected, interactive as authenticate_interactive};
 pub use management::logout;
@@ -35,12 +37,15 @@ pub use probe::{CheckResult, check_connection, resolve_program};
 mod tests;
 
 const CLIENT_NAME: &str = "bas";
+const BIND_DRAIN_INTERVAL: Duration = Duration::from_millis(1);
 
 #[derive(Default)]
-pub struct Driver;
+pub struct Driver {
+    pool: pool::Pool,
+}
 impl Driver {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 }
 
@@ -48,6 +53,18 @@ impl Driver {
 impl DriverTrait for Driver {
     fn kind(&self) -> Kind {
         Kind::Acp
+    }
+
+    fn maintain_pool(&self, spec: Arc<super::AgentSpec>, target: usize, timeout: Duration) {
+        self.pool.maintain(spec, target, timeout);
+    }
+
+    fn invalidate_pool(&self) {
+        self.pool.invalidate();
+    }
+
+    async fn shutdown_pool(&self) {
+        self.pool.shutdown().await;
     }
 
     async fn launch(&self, request: LaunchRequest) -> Result<Box<dyn AgentTrait>, Error> {
@@ -78,6 +95,24 @@ impl Driver {
         request: LaunchRequest,
         startup: Startup,
     ) -> Result<Box<dyn AgentTrait>, Error> {
+        let warm = match self.pool.take(&request.spec) {
+            Some(warm) => warm,
+            None => Warm::initialize(request.spec.clone()).await?,
+        };
+        warm.bind(request, startup).await
+    }
+}
+
+/// A process which has only initialized; it has no session or host authority.
+struct Warm {
+    bind: oneshot::Sender<Binding>,
+    state: Arc<Mutex<State>>,
+    activity: Arc<activity::Activity>,
+    task: AbortOnDropHandle<()>,
+}
+
+impl Warm {
+    async fn initialize(spec: Arc<super::AgentSpec>) -> Result<Self, Error> {
         let (corrupt, mut corruption) = mpsc::channel(1);
         let errors = probe::ErrorCapture::default();
         let capture = errors.clone();
@@ -85,63 +120,120 @@ impl Driver {
             std::collections::BTreeSet::<String>::new(),
         ));
         let transport_requests = Arc::clone(&requests);
-        let transport =
-            convert::agent(request.spec.as_ref())?.with_debug(move |line, direction| {
-                tracing::trace!(?direction, bytes = line.len(), "ACP transport line");
-                capture.observe(line, direction);
-                if let Ok(message) = serde_json::from_str::<serde_json::Value>(line)
-                    && let Some(id) = message.get("id")
+        let activity = Arc::new(activity::Activity::default());
+        let transport_activity = activity.clone();
+        let transport = convert::agent(spec.as_ref())?.with_debug(move |line, direction| {
+            tracing::trace!(?direction, bytes = line.len(), "ACP transport line");
+            transport_activity.observe(line, direction);
+            capture.observe(line, direction);
+            if let Ok(message) = serde_json::from_str::<serde_json::Value>(line)
+                && let Some(id) = message.get("id")
+            {
+                let mut pending = transport_requests.lock().expect("ACP request IDs lock");
+                if matches!(direction, agent_client_protocol::LineDirection::Stdin)
+                    && message.get("method").is_some()
                 {
-                    let mut pending = transport_requests.lock().expect("ACP request IDs lock");
-                    if matches!(direction, agent_client_protocol::LineDirection::Stdin)
-                        && message.get("method").is_some()
-                    {
-                        pending.insert(id.to_string());
-                    } else if matches!(direction, agent_client_protocol::LineDirection::Stdout)
-                        && message.get("method").is_none()
-                    {
-                        pending.remove(&id.to_string());
-                    }
-                }
-                // The SDK answers parse errors and keeps reading. A daemon-owned peer
-                // emitting damaged protocol data must not leave a prompt hung forever.
-                // Ignore whitespace; valid unknown messages remain the SDK's concern.
-                if matches!(direction, agent_client_protocol::LineDirection::Stdout)
-                    && !line.trim().is_empty()
-                    && let Err(error) = serde_json::from_str::<serde::de::IgnoredAny>(line)
+                    pending.insert(id.to_string());
+                } else if matches!(direction, agent_client_protocol::LineDirection::Stdout)
+                    && message.get("method").is_none()
                 {
-                    let _ = corrupt.try_send(error.to_string());
+                    pending.remove(&id.to_string());
                 }
-            });
+            }
+            // The SDK answers parse errors and keeps reading. A daemon-owned peer
+            // emitting damaged protocol data must not leave a prompt hung forever.
+            // Ignore whitespace; valid unknown messages remain the SDK's concern.
+            if matches!(direction, agent_client_protocol::LineDirection::Stdout)
+                && !line.trim().is_empty()
+                && let Err(error) = serde_json::from_str::<serde::de::IgnoredAny>(line)
+            {
+                let _ = corrupt.try_send(error.to_string());
+            }
+        });
         let state = Arc::new(Mutex::new(State::default()));
         let (ready, opened) = oneshot::channel();
+        let (bind, binding) = oneshot::channel();
+        let bound = Arc::new(Context {
+            bound: std::sync::OnceLock::new(),
+            activity: activity.clone(),
+        });
         let connection = Connection {
             transport,
-            session: request.session,
-            cwd: request.cwd.clone(),
-            additional_directories: request.additional_directories,
             state: Arc::clone(&state),
-            updates: request.updates.clone(),
-            host: request.host,
-            agent: request.spec.id.clone(),
+            bound: bound.clone(),
+            agent: spec.id.clone(),
             ready,
-            startup,
+            binding,
             requests,
             errors,
         };
-        let agent = request.spec.id.clone();
-        let task = spawn_worker(request.updates.clone(), async move {
-            tokio::select! {
-                result = connection.run() => result,
-                Some(message) = corruption.recv() => Err(Error::backend(agent, format!("malformed ACP transport: {message}"))),
+        let agent = spec.id.clone();
+        let task = AbortOnDropHandle::new(tokio::spawn(async move {
+            let panic_agent = agent.clone();
+            let result = std::panic::AssertUnwindSafe(async {
+                tokio::select! {
+                    result = connection.run() => result,
+                    Some(message) = corruption.recv() => Err(Error::backend(agent, format!("malformed ACP transport: {message}"))),
+                }
+            })
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| Err(Error::backend(panic_agent, "ACP connection worker panicked")));
+            if let Err(error) = result
+                && let Some(bound) = bound.get()
+            {
+                let _ = bound.updates.send(Update::Failed(error.report())).await;
             }
-        });
-        let opened = opened.await.map_err(|_| {
+        }));
+        opened.await.map_err(|_| {
             Error::backend(
-                request.spec.id.clone(),
+                spec.id.clone(),
                 "ACP initialization failed; see daemon logs",
             )
         })??;
+        Ok(Self {
+            bind,
+            state,
+            activity,
+            task,
+        })
+    }
+
+    fn is_alive(&self) -> bool {
+        !self.task.is_finished() && !self.bind.is_closed()
+    }
+
+    async fn shutdown(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+
+    async fn bind(
+        self,
+        request: LaunchRequest,
+        startup: Startup,
+    ) -> Result<Box<dyn AgentTrait>, Error> {
+        let Self {
+            bind,
+            state,
+            activity,
+            task,
+        } = self;
+        let (ready, opened) = oneshot::channel();
+        bind.send(Binding {
+            session: request.session,
+            cwd: request.cwd.clone(),
+            additional_directories: request.additional_directories,
+            host: request.host,
+            updates: request.updates.clone(),
+            ready,
+            startup,
+        })
+        .map_err(|_| Error::backend(request.spec.id.clone(), "ACP warm connection closed"))?;
+        // Never retry after binding: session/new may already have reached the peer.
+        let opened = opened
+            .await
+            .map_err(|_| Error::backend(request.spec.id.clone(), "ACP session setup failed"))??;
         Ok(Box::new(Session {
             agent: request.spec.id.clone(),
             cwd: request.cwd,
@@ -152,6 +244,7 @@ impl Driver {
             created: opened.created,
             subagents: state.lock().await.subagents.clone(),
             state: state.clone(),
+            activity,
             updates: request.updates,
             connection_task: Some(task),
             turn_task: None,
@@ -165,27 +258,45 @@ impl Driver {
 }
 
 struct Connection {
-    session: SessionId,
     transport: AcpAgent,
-    cwd: PathBuf,
-    additional_directories: Vec<PathBuf>,
     state: Arc<Mutex<State>>,
-    updates: mpsc::Sender<Update>,
-    host: Arc<dyn Host>,
+    bound: Arc<Context>,
     agent: AgentId,
-    ready: oneshot::Sender<Result<Opened, Error>>,
-    startup: Startup,
+    ready: oneshot::Sender<Result<(), Error>>,
+    binding: oneshot::Receiver<Binding>,
     requests: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
     errors: probe::ErrorCapture,
 }
 
-struct ElicitationConnection {
+struct Binding {
+    session: SessionId,
+    cwd: PathBuf,
+    additional_directories: Vec<PathBuf>,
+    updates: mpsc::Sender<Update>,
+    host: Arc<dyn Host>,
+    ready: oneshot::Sender<Result<Opened, Error>>,
+    startup: Startup,
+}
+
+struct Bound {
     host: Arc<dyn Host>,
     session: SessionId,
     connection: uuid::Uuid,
+    updates: mpsc::Sender<Update>,
 }
 
-impl Drop for ElicitationConnection {
+struct Context {
+    bound: std::sync::OnceLock<Bound>,
+    activity: Arc<activity::Activity>,
+}
+
+impl Context {
+    fn get(&self) -> Option<&Bound> {
+        self.bound.get()
+    }
+}
+
+impl Drop for Bound {
     fn drop(&mut self) {
         self.host.cancel_elicitations(self.session, self.connection);
     }
@@ -196,54 +307,56 @@ impl Connection {
     /// Reports initialization, transport, and connection closure failures.
     async fn run(self) -> Result<(), Error> {
         let Connection {
-            session,
             transport,
-            cwd,
-            additional_directories,
             state,
-            updates,
-            host,
+            bound,
             agent,
             ready,
-            startup,
+            binding,
             requests,
             errors,
         } = self;
-        let elicitation_connection = uuid::Uuid::new_v4();
-        host.open_elicitation_connection(session, elicitation_connection);
-        let _elicitation_connection = ElicitationConnection {
-            host: Arc::clone(&host),
-            session,
-            connection: elicitation_connection,
-        };
         let notification_state = Arc::clone(&state);
-        let permission_host = Arc::clone(&host);
+        let notification_bound = Arc::clone(&bound);
+        let permission_bound = Arc::clone(&bound);
         let permission_state = Arc::clone(&state);
-        let read_host = Arc::clone(&host);
+        let read_bound = Arc::clone(&bound);
         let read_state = Arc::clone(&state);
+        let write_bound = Arc::clone(&bound);
         let write_state = Arc::clone(&state);
-        let elicitation_host = Arc::clone(&host);
-        let completion_host = Arc::clone(&host);
+        let elicitation_bound = Arc::clone(&bound);
+        let completion_bound = Arc::clone(&bound);
         let elicitation_state = Arc::clone(&state);
         let startup_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let failed = Arc::clone(&startup_failed);
         let startup_agent = agent.clone();
         Client.builder().name(CLIENT_NAME)
         .on_receive_notification(async move |notification: v1::SessionNotification, _cx| {
-            notification_state.lock().await.on_notification(notification, &updates).await
+            let Some(_activity) = notification_bound.activity.enter() else { return Ok(()); };
+            let Some(bound) = notification_bound.get() else { return Ok(()); };
+            notification_state.lock().await.on_notification(notification, &bound.updates).await
                 .map_err(agent_client_protocol::Error::into_internal_error)
         }, on_receive_notification!())
         .on_receive_request(async move |mut request: v1::RequestPermissionRequest, responder, cx| {
+            let Some(activity) = permission_bound.activity.enter() else {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            };
+            let Some(bound) = permission_bound.get() else {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            };
             if !permission_state.lock().await.accepts_session(&request.session_id) {
                 responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
                 return Ok(());
             }
-            request.session_id = session.to_string().into();
-            let host = Arc::clone(&permission_host);
+            request.session_id = bound.session.to_string().into();
+            let host = Arc::clone(&bound.host);
             let cancellation = responder.cancellation();
             // Keep inbound dispatch free to receive cancellation and other requests
             // while the user decides. Dropping the host future clears its live card.
             cx.spawn(async move {
+                let _activity = activity;
                 let response = cancellation.run_until_cancelled(async move {
                     host.request_permission(request).await
                         .map(v1::RequestPermissionResponse::new)
@@ -255,28 +368,52 @@ impl Connection {
             Ok(())
         }, on_receive_request!())
         .on_receive_request(async move |mut request: v1::ReadTextFileRequest, responder, _cx| {
+            let Some(_activity) = read_bound.activity.enter() else {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            };
+            let Some(bound) = read_bound.get() else {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            };
             if !read_state.lock().await.accepts_session(&request.session_id) {
                 responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
                 return Ok(());
             }
-            request.session_id = session.to_string().into();
-            let content = read_host.read_text_file(request).await
+            request.session_id = bound.session.to_string().into();
+            let content = bound.host.read_text_file(request).await
                 .map_err(file_error)?;
             responder.respond(v1::ReadTextFileResponse::new(content))?;
             Ok(())
         }, on_receive_request!())
         .on_receive_request(async move |mut request: v1::WriteTextFileRequest, responder, _cx| {
+            let Some(_activity) = write_bound.activity.enter() else {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            };
+            let Some(bound) = write_bound.get() else {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            };
             if !write_state.lock().await.accepts_session(&request.session_id) {
                 responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
                 return Ok(());
             }
-            request.session_id = session.to_string().into();
-            host.write_text_file(request).await
+            request.session_id = bound.session.to_string().into();
+            bound.host.write_text_file(request).await
                 .map_err(file_error)?;
             responder.respond(v1::WriteTextFileResponse::new())?;
             Ok(())
         }, on_receive_request!())
         .on_receive_request(async move |request: agent_client_protocol::UntypedMessage, responder, cx| {
+            let Some(activity) = elicitation_bound.activity.enter() else {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            };
+            let Some(bound) = elicitation_bound.get() else {
+                responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
+                return Ok(());
+            };
             if request.method != "elicitation/create" {
                 responder.respond_with_error(agent_client_protocol::Error::method_not_found())?;
                 return Ok(());
@@ -297,9 +434,12 @@ impl Connection {
                 responder.respond_with_error(agent_client_protocol::Error::invalid_params())?;
                 return Ok(());
             }
-            let host = Arc::clone(&elicitation_host);
+            let host = Arc::clone(&bound.host);
+            let session = bound.session;
+            let elicitation_connection = bound.connection;
             let cancellation = responder.cancellation();
             cx.spawn(async move {
+                let _activity = activity;
                 let response = cancellation.run_until_cancelled(async move {
                     host.elicit(session, elicitation_connection, request.params).await
                         .map_err(|error| agent_client_protocol::Error::invalid_params().data(error.to_string()))
@@ -310,9 +450,11 @@ impl Connection {
             Ok(())
         }, on_receive_request!())
         .on_receive_notification(async move |notification: agent_client_protocol::UntypedMessage, _cx| {
+            let Some(_activity) = completion_bound.activity.enter() else { return Ok(()); };
+            let Some(bound) = completion_bound.get() else { return Ok(()); };
             if notification.method == "elicitation/complete"
                 && let Some(id) = notification.params.get("elicitationId").and_then(serde_json::Value::as_str)
-            { completion_host.complete_elicitation(session, elicitation_connection, id); }
+            { bound.host.complete_elicitation(bound.session, bound.connection, id); }
             Ok(())
         }, on_receive_notification!())
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
@@ -334,6 +476,19 @@ impl Connection {
                     return Ok(());
                 }
             };
+            if ready.send(Ok(())).is_err() { return Ok(()); }
+            let Ok(Binding { session, cwd, additional_directories, updates, host, ready, startup }) = binding.await else {
+                return Ok(());
+            };
+            let elicitation_connection = uuid::Uuid::new_v4();
+            let mut authority = Some(Bound { host, session, connection: elicitation_connection, updates });
+            while !bound.activity.try_bind(|| {
+                let authority = authority.take().expect("bind authority consumed once");
+                authority.host.open_elicitation_connection(session, elicitation_connection);
+                let _ = bound.bound.set(authority);
+            }) {
+                tokio::time::sleep(BIND_DRAIN_INTERVAL).await;
+            }
             if !additional_directories.is_empty()
                 && initialized.agent_capabilities.session_capabilities.additional_directories.is_none()
             {
@@ -461,6 +616,7 @@ struct Session {
     initialization_raw: serde_json::Value,
     created: v1::NewSessionResponse,
     state: Arc<Mutex<State>>,
+    activity: Arc<activity::Activity>,
     subagents: Arc<std::sync::Mutex<bas::model::Subagents>>,
     updates: mpsc::Sender<Update>,
     connection_task: Option<AbortOnDropHandle<()>>,
@@ -474,6 +630,35 @@ struct Session {
 
 #[async_trait]
 impl AgentTrait for Session {
+    fn try_idle_reclaim(&mut self, timeout: Duration) -> bool {
+        if !self.initialized.agent_capabilities.load_session
+            && self
+                .initialized
+                .agent_capabilities
+                .session_capabilities
+                .resume
+                .is_none()
+        {
+            return false;
+        }
+        let Ok(state) = self.state.try_lock() else {
+            return false;
+        };
+        if state.active.is_some() || state.reloading {
+            return false;
+        }
+        let subagents = self.subagents.lock().expect("subagents lock");
+        if subagents
+            .iter()
+            .any(|child| child.state.is_none() || child.is_active())
+        {
+            return false;
+        }
+        // Callback admission happens before state mutation. Holding both state
+        // locks across the claim prevents an unchecked child transition.
+        self.activity.try_claim(timeout)
+    }
+
     fn subagents(&self) -> bas::model::Subagents {
         self.subagents.lock().expect("subagents lock").clone()
     }
@@ -503,11 +688,16 @@ impl AgentTrait for Session {
         request.session_id = self.acp_session.clone();
         let connection = self.connection.clone();
         let updates = self.updates.clone();
+        let activity = self.activity.clone();
         Box::pin(async move {
+            let activity = activity
+                .outbound()
+                .ok_or_else(|| Error::backend("acp", "transport released"))?;
             let (done, response) = oneshot::channel();
             connection
                 .send_request(request)
                 .on_receiving_result(async move |result| {
+                    let _activity = activity;
                     if let Ok(response) = &result {
                         commit(
                             &updates,
@@ -536,11 +726,16 @@ impl AgentTrait for Session {
         let connection = self.connection.clone();
         let updates = self.updates.clone();
         let mode = request.mode_id.clone();
+        let activity = self.activity.clone();
         Box::pin(async move {
+            let activity = activity
+                .outbound()
+                .ok_or_else(|| Error::backend("acp", "transport released"))?;
             let (done, response) = oneshot::channel();
             connection
                 .send_request(request)
                 .on_receiving_result(async move |result| {
+                    let _activity = activity;
                     if result.is_ok() {
                         commit(
                             &updates,
@@ -559,6 +754,10 @@ impl AgentTrait for Session {
     }
 
     fn prompt(&mut self, turn: TurnId, mut request: v1::PromptRequest) -> Result<(), Error> {
+        let activity = self
+            .activity
+            .outbound()
+            .ok_or_else(|| Error::backend("acp", "transport released"))?;
         request.session_id = self.acp_session.clone();
         // Keep RPC rejection distinct from a malformed success payload.
         let request = request.to_untyped_message()?;
@@ -572,6 +771,7 @@ impl AgentTrait for Session {
         let cancel_request = Arc::clone(&self.cancel_request);
         let cancel = self.cancel.clone();
         self.turn_task = Some(spawn_worker(updates.clone(), async move {
+            let _activity = activity;
             {
                 let mut state = state.lock().await;
                 state.active = Some(turn);
@@ -632,6 +832,10 @@ impl AgentTrait for Session {
     }
 
     fn cancel(&mut self, mut request: v1::CancelNotification) -> Result<(), Error> {
+        let _activity = self
+            .activity
+            .outbound()
+            .ok_or_else(|| Error::backend("acp", "transport released"))?;
         request.session_id = self.acp_session.clone();
         *self.cancel_request.lock().expect("cancel request lock") = Some(request);
         self.cancel.cancel();
@@ -651,7 +855,11 @@ impl AgentTrait for Session {
         let closed = Arc::clone(&self.closed);
         let attempted = Arc::clone(&self.close_attempted);
         let deadline = self.cancellation_grace;
+        let activity = self.activity.clone();
         Box::pin(async move {
+            let _activity = activity
+                .outbound()
+                .ok_or_else(|| Error::backend("acp", "transport released"))?;
             if closed.load(std::sync::atomic::Ordering::Acquire) {
                 return Ok(());
             }
@@ -689,6 +897,17 @@ impl AgentTrait for Session {
         {
             tracing::warn!(%error, "ACP close failed; releasing the owned process");
         }
+        self.release().await;
+    }
+
+    async fn drain_updates(&mut self) {
+        let (committed, receipt) = oneshot::channel();
+        if self.updates.send(Update::Barrier(committed)).await.is_ok() {
+            let _ = receipt.await;
+        }
+    }
+
+    async fn release(&mut self) {
         let tasks: Vec<_> = [self.turn_task.take(), self.connection_task.take()]
             .into_iter()
             .flatten()

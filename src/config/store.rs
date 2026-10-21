@@ -286,6 +286,11 @@ fn validate(path: &Path, settings: &Settings) -> Result<(), Error> {
         .validate()
         .map_err(|e| invalid(path, e))?;
     validate_registrations(&settings.daemon.agents).map_err(|e| invalid(path, e))?;
+    settings
+        .daemon
+        .acp
+        .validate(&settings.daemon.agents)
+        .map_err(|e| invalid(path, e))?;
     settings.frontend.validate().map_err(|e| invalid(path, e))
 }
 fn reject_links(path: &Path) -> Result<(), Error> {

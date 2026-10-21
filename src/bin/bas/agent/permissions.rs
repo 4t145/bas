@@ -178,6 +178,12 @@ impl Permissions {
         }
     }
 
+    pub fn has_pending(&self, session: SessionId) -> bool {
+        self.lock()
+            .get(&session)
+            .is_some_and(|entry| !entry.pending.is_empty())
+    }
+
     pub fn cancel_all(&self) {
         for entry in self.lock().values_mut() {
             entry.cancel();

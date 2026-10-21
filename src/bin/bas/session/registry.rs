@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, num::NonZeroUsize, path::PathBuf, sync::Arc, time::Duration};
 
 use bas::{
-    config::AgentRegistration,
+    config::{AcpLifecycle, AgentRegistration},
     model::{AgentId, Owner, SessionId, SessionMeta, SessionStatus},
 };
 use tokio::sync::{RwLock, mpsc};
@@ -12,6 +12,7 @@ use crate::agent::{self, Catalog, Host, Kind, LaunchRequest};
 use crate::storage::{self, ResumeData, Storage};
 
 mod history;
+mod lifecycle;
 mod restart;
 
 pub const DEFAULT_HISTORY: usize = 4096;
@@ -69,7 +70,9 @@ pub enum CreateError {
 pub struct NotFound(pub SessionId);
 
 pub struct Registry {
-    catalog: std::sync::RwLock<Arc<Catalog>>,
+    configuration: std::sync::RwLock<Configuration>,
+    last_agent: std::sync::Mutex<Option<AgentId>>,
+    maintenance: tokio::sync::Notify,
     host: Arc<dyn Host>,
     permissions: Arc<agent::permissions::Permissions>,
     elicitations: Arc<agent::elicitation::Elicitations>,
@@ -79,6 +82,11 @@ pub struct Registry {
     completions: Option<mpsc::Sender<Completion>>,
     storage: Option<Arc<dyn Storage>>,
     history_gate: tokio::sync::Mutex<()>,
+}
+
+struct Configuration {
+    catalog: Arc<Catalog>,
+    acp: AcpLifecycle,
 }
 
 /// A failed or cancelled launch has never returned its id to a client.
@@ -133,7 +141,12 @@ impl Registry {
         let elicitations = Arc::new(agent::elicitation::Elicitations::default());
         let host = elicitations.host(permissions.host(host));
         Self {
-            catalog: std::sync::RwLock::new(catalog),
+            configuration: std::sync::RwLock::new(Configuration {
+                catalog,
+                acp: AcpLifecycle::default(),
+            }),
+            last_agent: std::sync::Mutex::new(None),
+            maintenance: tokio::sync::Notify::new(),
             host,
             permissions,
             elicitations,
@@ -159,6 +172,7 @@ impl Registry {
 
     /// Rebuild metadata without launching backends.
     pub async fn recover(&mut self) -> Result<(), storage::Error> {
+        self.refresh_last_agent().await;
         let Some(storage) = &self.storage else {
             return Ok(());
         };
@@ -193,7 +207,13 @@ impl Registry {
     }
 
     pub fn catalog(&self) -> Arc<Catalog> {
-        Arc::clone(&self.catalog.read().expect("catalog lock poisoned"))
+        Arc::clone(
+            &self
+                .configuration
+                .read()
+                .expect("configuration lock poisoned")
+                .catalog,
+        )
     }
 
     pub fn startup_timeout(&self) -> Duration {
@@ -211,11 +231,18 @@ impl Registry {
     /// Publishing a catalog never mutates or stops existing sessions.
     #[cfg(test)]
     pub fn replace_catalog(&self, catalog: Arc<Catalog>) {
-        let mut current = self.catalog.write().expect("catalog lock poisoned");
-        if current.registrations().eq(catalog.registrations()) {
+        let mut current = self
+            .configuration
+            .write()
+            .expect("configuration lock poisoned");
+        if current.catalog.registrations().eq(catalog.registrations()) {
             return;
         }
-        *current = catalog;
+        current
+            .catalog
+            .maintain_pools(&BTreeMap::new(), self.limits.startup_timeout);
+        current.catalog = catalog;
+        self.maintenance.notify_one();
     }
 
     /// Read and publish while holding one generation lock, so a file watcher
@@ -227,11 +254,19 @@ impl Registry {
         &self,
         load: impl FnOnce() -> anyhow::Result<Vec<AgentRegistration>>,
     ) -> anyhow::Result<Vec<AgentRegistration>> {
-        let mut current = self.catalog.write().expect("catalog lock poisoned");
+        let mut current = self
+            .configuration
+            .write()
+            .expect("configuration lock poisoned");
         let agents = load()?;
+        current.acp.validate(&agents)?;
         let catalog = Catalog::from_registrations(agents.clone())?;
-        if !current.registrations().eq(catalog.registrations()) {
-            *current = Arc::new(catalog);
+        if !current.catalog.registrations().eq(catalog.registrations()) {
+            current
+                .catalog
+                .maintain_pools(&BTreeMap::new(), self.limits.startup_timeout);
+            current.catalog = Arc::new(catalog);
+            self.maintenance.notify_one();
         }
         Ok(agents)
     }
@@ -349,6 +384,8 @@ impl Registry {
         }
         sessions.insert(session.id(), Arc::clone(&session));
         pending.registered = true;
+        drop(sessions);
+        self.record_creation(&session).await;
         Ok(session)
     }
 
@@ -525,7 +562,15 @@ impl Registry {
 
     /// Prevents new sessions, cancels pending launches and joins every registered backend.
     pub async fn shutdown(&self) {
-        self.stopping.cancel();
+        let catalog = {
+            let current = self
+                .configuration
+                .write()
+                .expect("configuration lock poisoned");
+            self.stopping.cancel();
+            Arc::clone(&current.catalog)
+        };
+        catalog.shutdown_pools().await;
         self.permissions.cancel_all();
         self.elicitations.cancel_all();
         let sessions = std::mem::take(&mut *self.sessions.write().await);

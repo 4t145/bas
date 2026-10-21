@@ -2,6 +2,85 @@ use super::*;
 use bas::model::{EventKind, Owner};
 
 #[tokio::test]
+async fn schema_four_upgrade_starts_without_selection_and_checks_version() {
+    let mut db = toasty::Db::builder()
+        .models(toasty::models!(SessionRow, EventRow, AcceptanceRow))
+        .max_pool_size(1)
+        .build(toasty_driver_sqlite::Sqlite::in_memory())
+        .await
+        .expect("database");
+    const SCHEMA_FOUR: MigrationSet = MigrationSet::new(&[
+        MigrationFile::new(
+            1,
+            "session_history",
+            include_str!("../migrations/0001_session_history.sql"),
+        ),
+        MigrationFile::new(
+            2,
+            "accepted_prompts",
+            include_str!("../migrations/0002_accepted_prompts.sql"),
+        ),
+        MigrationFile::new(
+            3,
+            "history_dependencies",
+            include_str!("../migrations/0003_history_dependencies.sql"),
+        ),
+        MigrationFile::new(
+            4,
+            "history_turns",
+            include_str!("../migrations/0004_history_turns.sql"),
+        ),
+    ]);
+    SCHEMA_FOUR.apply(&db).await.expect("schema four");
+    let store = SqliteStore { db: db.clone() };
+    let mut legacy = SessionMeta::new(SessionId::new(), "legacy".into(), Owner::current());
+    legacy.status = bas::model::SessionStatus::Idle;
+    store
+        .create(legacy.clone(), Some(ResumeData::acp("legacy")))
+        .await
+        .expect("legacy session");
+    verify_existing_schema(&db).await.expect("valid four");
+    MIGRATIONS.apply(&db).await.expect("apply new schema");
+    assert_eq!(
+        store
+            .load(legacy.id)
+            .await
+            .expect("load")
+            .expect("session")
+            .meta,
+        legacy
+    );
+    assert_eq!(
+        store
+            .last_used_agent()
+            .await
+            .expect("no inferred selection"),
+        None
+    );
+    verify_existing_schema(&db).await.expect("valid five");
+    sql::statement("PRAGMA user_version = 6")
+        .exec(&mut db)
+        .await
+        .expect("future");
+    assert!(matches!(
+        verify_existing_schema(&db).await,
+        Err(Error::InvalidCommit(_))
+    ));
+    sql::statement("PRAGMA user_version = 5")
+        .exec(&mut db)
+        .await
+        .expect("restore");
+    sql::statement("DROP TABLE agent_selection")
+        .exec(&mut db)
+        .await
+        .expect("incomplete");
+    assert!(matches!(
+        verify_existing_schema(&db).await,
+        Err(Error::Corrupt(_))
+    ));
+}
+
+#[tokio::test]
 async fn schema_three_upgrade_preserves_authoritative_records_and_rebuilds_turns() {
     let db = toasty::Db::builder()
         .models(toasty::models!(SessionRow, EventRow, AcceptanceRow))
@@ -124,7 +203,11 @@ async fn schema_three_upgrade_preserves_authoritative_records_and_rebuilds_turns
     assert_eq!(older.before, None);
     verify_existing_schema(&store.db)
         .await
-        .expect("valid schema four");
+        .expect("valid schema five");
+    assert_eq!(
+        store.last_used_agent().await.expect("no history inference"),
+        None
+    );
     MIGRATIONS
         .apply(&store.db)
         .await

@@ -33,6 +33,10 @@ mod management;
 #[path = "daemon/storage.rs"]
 mod storage;
 
+#[cfg(unix)]
+#[path = "daemon/acp_lifecycle.rs"]
+mod acp_lifecycle;
+
 fn command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bas"));
     for key in [

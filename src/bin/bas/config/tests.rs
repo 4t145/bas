@@ -3,6 +3,46 @@ use clap::Parser;
 use super::{Notify, Storage, parse_agents};
 
 #[test]
+fn agent_overrides_still_load_and_watch_server_policy() {
+    let directory = tempfile::tempdir().expect("settings directory");
+    let settings = directory.path().join("settings.json");
+    let legacy = directory.path().join("agents.json");
+    let spec = crate::agent::AgentSpec::acp("a", crate::agent::Command::new("a", []));
+    let mut document = bas::config::Settings::default();
+    document.daemon.agents = vec![spec.clone().into()];
+    document.daemon.acp.pool_size = 1;
+    document.daemon.acp.default_agent = Some("a".into());
+    std::fs::write(&settings, serde_json::to_vec(&document).expect("JSON")).expect("settings");
+    std::fs::write(&legacy, serde_json::to_vec(&vec![spec]).expect("JSON")).expect("legacy");
+    for (flag, value) in [
+        ("--agents", "a=acp:a"),
+        ("--agents-file", legacy.to_str().expect("path")),
+    ] {
+        let args = crate::clap::Args::try_parse_from([
+            "bas",
+            "--settings-file",
+            settings.to_str().expect("path"),
+            flag,
+            value,
+        ])
+        .expect("arguments");
+        let config = args.config().expect("config");
+        assert_eq!(config.acp, document.daemon.acp);
+        let mut source = config.catalog_source.expect("policy remains reloadable");
+        assert!(
+            source.settings_store().is_none(),
+            "overridden catalogs are not persisted"
+        );
+        document.daemon.acp.pool_size = 2;
+        std::fs::write(&settings, serde_json::to_vec(&document).expect("JSON")).expect("update");
+        assert_eq!(
+            source.load_configuration().expect("reload").acp.pool_size,
+            2
+        );
+    }
+}
+
+#[test]
 fn defaults_are_suitable_for_a_local_daemon() {
     let config = super::Config::default();
 

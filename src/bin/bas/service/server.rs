@@ -135,6 +135,7 @@ impl Bas for Service {
         let registry = Arc::clone(&self.registry);
         let (send, receive) = tokio::sync::mpsc::channel(32);
         let task = tokio::spawn(async move {
+            let _credentials = registry.credentials_change(spec.id.clone());
             let (controls, controls_receive) = tokio::sync::mpsc::channel(16);
             let operation = crate::agent::acp::authenticate_interactive(
                 &spec,
@@ -300,6 +301,7 @@ impl Bas for Service {
         catalog
             .validate(spec)
             .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        let _credentials = self.registry.credentials_change(spec.id.clone());
         tokio::select! {
             result = tokio::time::timeout(self.registry.startup_timeout(), crate::agent::acp::logout(spec)) => {
                 result.map_err(|_| Status::deadline_exceeded("Logout timed out; check authentication state before retrying"))?
@@ -345,6 +347,7 @@ impl Bas for Service {
                 })?,
             )
         };
+        let _credentials = self.registry.credentials_change(spec.id.clone());
         let result = tokio::select! {
             result = crate::agent::acp::authenticate_expected(spec, &request.method_id, expected_method, std::time::Duration::from_secs(300)) => result,
             () = self.registry.stopped() => return Err(Status::unavailable("Daemon is stopping")),
@@ -734,23 +737,32 @@ impl Bas for Service {
         if session.meta().archived {
             return submission_response(session.accept_prompt(submission).await);
         }
-        if let Err(error) = self.registry.ensure_restored(&session).await {
-            // Another caller may have registered this identity while restoration
-            // was pending. An accepted submission remains queryable when inactive.
-            return match session.known_submission(&submission).await {
-                Ok(Some(receipt)) => submission_response(Ok(receipt)),
-                Err(error) => submission_response(Err(error)),
-                Ok(None) if matches!(error, CreateError::Storage(_) | CreateError::Session(_)) => {
-                    Err(error.into())
-                }
-                Ok(None) => submission_response(Err(PromptRejection {
-                    kind: PromptRejectionKind::Unavailable,
-                    message: Status::from(error).message().to_owned(),
-                }
-                .into())),
-            };
+        let _backend = match self.registry.use_backend(&session).await {
+            Ok(lease) => lease,
+            Err(error) => {
+                // Another caller may have registered this identity while restoration
+                // was pending. An accepted submission remains queryable when inactive.
+                return match session.known_submission(&submission).await {
+                    Ok(Some(receipt)) => submission_response(Ok(receipt)),
+                    Err(error) => submission_response(Err(error)),
+                    Ok(None)
+                        if matches!(error, CreateError::Storage(_) | CreateError::Session(_)) =>
+                    {
+                        Err(error.into())
+                    }
+                    Ok(None) => submission_response(Err(PromptRejection {
+                        kind: PromptRejectionKind::Unavailable,
+                        message: Status::from(error).message().to_owned(),
+                    }
+                    .into())),
+                };
+            }
+        };
+        let result = session.accept_prompt(submission).await;
+        if result.is_ok() {
+            self.registry.record_agent_use(session.meta().agent);
         }
-        submission_response(session.accept_prompt(submission).await)
+        submission_response(result)
     }
 
     async fn get_prompt_acceptance(
@@ -780,7 +792,7 @@ impl Bas for Service {
         if session.meta().status == bas::model::SessionStatus::Stopped {
             return Ok(Response::new(pb::CancelResponse {}));
         }
-        self.registry.ensure_restored(&session).await?;
+        let _backend = self.registry.use_backend(&session).await?;
         session.cancel_acp(request).await?;
         self.registry.permissions().cancel(session.id());
         self.registry.elicitations().cancel(session.id());
@@ -941,7 +953,7 @@ impl Bas for Service {
     ) -> Result<Response<pb::AcpPayload>, Status> {
         let request: acp::SetSessionConfigOptionRequest = decode(request)?;
         let session = self.session(&request.session_id.to_string()).await?;
-        self.registry.ensure_restored(&session).await?;
+        let _backend = self.registry.use_backend(&session).await?;
         let response = session.set_config_option(request).await?;
         Ok(Response::new((&response).into()))
     }
@@ -977,7 +989,7 @@ impl Bas for Service {
                 directories.push(path);
             }
         }
-        self.registry.ensure_restored(&session).await?;
+        let _backend = self.registry.use_backend(&session).await?;
         let snapshot = session
             .set_directories(directories, self.registry.startup_timeout())
             .await?;
@@ -992,7 +1004,7 @@ impl Bas for Service {
     ) -> Result<Response<pb::AcpPayload>, Status> {
         let request: acp::SetSessionModeRequest = decode(request)?;
         let session = self.session(&request.session_id.to_string()).await?;
-        self.registry.ensure_restored(&session).await?;
+        let _backend = self.registry.use_backend(&session).await?;
         let response = session.set_mode(request).await?;
         Ok(Response::new((&response).into()))
     }

@@ -20,7 +20,11 @@ impl Session {
         let connection = self.connection.clone();
         let state = Arc::clone(&self.state);
         let updates = self.updates.clone();
+        let activity = self.activity.clone();
         Box::pin(async move {
+            let activity = activity
+                .outbound()
+                .ok_or_else(|| Error::backend("acp", "transport released"))?;
             if !supported || !(load || resume) {
                 return Err(Error::Unsupported {
                     agent,
@@ -56,6 +60,7 @@ impl Session {
             let sent = connection
                 .send_request(request)
                 .on_receiving_result(async move |result| {
+                    let _activity = activity;
                     let result = async {
                         let value = result?;
                         let loaded: v1::LoadSessionResponse = serde_json::from_value(value)

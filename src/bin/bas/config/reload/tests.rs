@@ -6,6 +6,48 @@ use crate::{
 use bas::config::{AgentRegistration, AgentSpec, InstallationRef, ManagedAgent};
 use bas::model::{EventKind, Owner};
 
+#[tokio::test]
+async fn policy_only_reload_and_invalid_combined_update_are_atomic() {
+    let directory = tempfile::tempdir().expect("settings directory");
+    let path = directory.path().join("settings.json");
+    let mut settings = bas::config::Settings::default();
+    settings.daemon.agents = vec![AgentSpec::acp("fixture", Command::new("unused", [])).into()];
+    std::fs::write(&path, serde_json::to_vec(&settings).expect("JSON")).expect("settings");
+    let mut source = CatalogSource::settings(Some(path.clone())).expect("source");
+    let initial = source.load_configuration().expect("initial settings");
+    let registry = Arc::new(Registry::new(
+        Arc::new(Catalog::from_registrations(initial.agents.clone()).expect("catalog")),
+        Arc::new(LocalHost::default()),
+        Limits::default(),
+    ));
+    let before = registry.catalog();
+    settings.daemon.acp.idle_timeout_secs = std::num::NonZeroU64::new(900);
+    std::fs::write(&path, serde_json::to_vec(&settings).expect("JSON")).expect("update");
+    let stopping = CancellationToken::new();
+    let watcher = watch_catalog(source, initial.agents, registry.clone(), stopping.clone());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while registry.acp_policy() != settings.daemon.acp {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("policy-only update");
+    assert!(
+        Arc::ptr_eq(&before, &registry.catalog()),
+        "unchanged catalog generation"
+    );
+    let valid_policy = registry.acp_policy();
+    settings.daemon.agents = vec![AgentSpec::embedded().into()];
+    settings.daemon.acp.pool_size = bas::config::MAX_ACP_POOL_RESERVE + 1;
+    std::fs::write(&path, serde_json::to_vec(&settings).expect("JSON")).expect("invalid update");
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(Arc::ptr_eq(&before, &registry.catalog()));
+    assert_eq!(registry.acp_policy(), valid_policy);
+    stopping.cancel();
+    watcher.await.expect("watcher stopped");
+    registry.shutdown().await;
+}
+
 fn write_settings(path: &std::path::Path, agents: Vec<AgentSpec>) {
     write_registrations(
         path,

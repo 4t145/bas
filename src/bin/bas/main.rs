@@ -66,6 +66,7 @@ async fn run(config: Config) -> Result<()> {
         config.limits,
         storage,
     );
+    registry.set_acp_policy(config.acp.clone())?;
     registry
         .recover()
         .await
@@ -74,6 +75,8 @@ async fn run(config: Config) -> Result<()> {
         registry = registry.with_completions(watcher.sender.clone());
     }
     let registry = Arc::new(registry);
+    let maintenance =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(Arc::clone(&registry).maintain()));
     let manager = Arc::new(management::Manager::new(
         config
             .catalog_source
@@ -147,6 +150,7 @@ async fn run(config: Config) -> Result<()> {
             }
         };
         let (_, _, result) = tokio::join!(manager.shutdown(), registry.shutdown(), finish_server);
+        maintenance.await.context("backend maintenance failed")?;
         if let Some(catalog_watcher) = catalog_watcher {
             catalog_watcher.await.context("catalog watcher failed")?;
         }

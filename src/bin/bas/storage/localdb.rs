@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use bas::model::{Cursor, Event, SessionId, SessionMeta, TurnId, TurnReceipt};
+use bas::model::{AgentId, Cursor, Event, SessionId, SessionMeta, TurnId, TurnReceipt};
 use toasty::{
     migration::{MigrationFile, MigrationSet},
     sql,
@@ -77,7 +77,14 @@ const MIGRATIONS: MigrationSet = MigrationSet::new(&[
         "history_turns",
         include_str!("migrations/0004_history_turns.sql"),
     ),
+    MigrationFile::new(
+        5,
+        "last_used_agent",
+        include_str!("migrations/0005_last_used_agent.sql"),
+    ),
 ]);
+
+const LAST_USED_AGENT_KEY: &str = "last_used_agent";
 
 /// Runs only on the dedicated database runtime.
 struct SqliteStore {
@@ -118,7 +125,7 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
         .next()
         .ok_or(Error::Corrupt("missing schema version"))?;
     let version: i64 = field(&mut columns(version)?)?;
-    if !(0..=4).contains(&version) {
+    if !(0..=5).contains(&version) {
         return Err(Error::InvalidCommit("unsupported SQLite schema version"));
     }
     let tables = sql::query(
@@ -214,6 +221,30 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
             if actual.get(name) != Some(&(kind.into(), 1, key)) {
                 return Err(Error::Corrupt("incompatible accepted_prompts table"));
             }
+        }
+    }
+    if version >= 5 {
+        let rows = sql::query("PRAGMA table_info(agent_selection)")
+            .exec(&mut db.clone())
+            .await?;
+        let mut actual = std::collections::HashMap::new();
+        for row in rows {
+            let fields = columns(row)?;
+            let name = String::try_from(fields[1].clone())
+                .map_err(|_| Error::Corrupt("selection column"))?;
+            let kind = String::try_from(fields[2].clone())
+                .map_err(|_| Error::Corrupt("selection type"))?;
+            let required = i64::try_from(fields[3].clone())
+                .map_err(|_| Error::Corrupt("selection nullability"))?;
+            let key =
+                i64::try_from(fields[5].clone()).map_err(|_| Error::Corrupt("selection key"))?;
+            actual.insert(name, (kind.to_ascii_uppercase(), required, key));
+        }
+        if actual.len() != 2
+            || actual.get("key") != Some(&("TEXT".into(), 1, 1))
+            || actual.get("agent") != Some(&("TEXT".into(), 1, 0))
+        {
+            return Err(Error::Corrupt("incompatible agent_selection table"));
         }
     }
     Ok(())
@@ -370,7 +401,15 @@ impl SqliteStore {
             }
             validate_acceptance(events, acceptance)?;
         }
-        validate_commit(&decode_session(previous)?.meta, &meta, events)?;
+        let previous = decode_session(previous)?;
+        validate_commit(&previous.meta, &meta, events)?;
+        if acceptance.is_some() && super::has_acp_resume(&previous) {
+            sql::statement("INSERT INTO agent_selection(key, agent) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET agent = excluded.agent")
+                .bind(LAST_USED_AGENT_KEY)
+                .bind(meta.agent.as_str())
+                .exec(&mut tx)
+                .await?;
+        }
         if let Some(acceptance) = acceptance {
             sql::statement("INSERT INTO accepted_prompts(session_id, turn_id, cursor, fingerprint) VALUES (?1, ?2, ?3, ?4)")
                 .bind(meta.id.to_string()).bind(acceptance.receipt.turn.to_string())
@@ -397,6 +436,38 @@ impl SqliteStore {
         .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    async fn record_created_session(&self, id: SessionId) -> Result<(), Error> {
+        let mut db = self.db.clone();
+        let mut tx = db.transaction().await?;
+        let row = sql::query("SELECT id, revision, metadata, resume_version, resume_payload FROM sessions WHERE id = ?1")
+            .bind(id.to_string()).exec(&mut tx).await?
+            .into_iter().next().ok_or(Error::NotFound(id))?;
+        let session = decode_session(row)?;
+        if super::has_acp_resume(&session) {
+            sql::statement("INSERT INTO agent_selection(key, agent) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET agent = excluded.agent")
+                .bind(LAST_USED_AGENT_KEY)
+                .bind(session.meta.agent.as_str())
+                .exec(&mut tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn last_used_agent(&self) -> Result<Option<AgentId>, Error> {
+        sql::query("SELECT agent FROM agent_selection WHERE key = ?1")
+            .bind(LAST_USED_AGENT_KEY)
+            .exec(&mut self.db.clone())
+            .await?
+            .into_iter()
+            .next()
+            .map(|row| {
+                let agent: String = field(&mut columns(row)?)?;
+                Ok(AgentId::new(agent))
+            })
+            .transpose()
     }
 
     async fn acceptance(

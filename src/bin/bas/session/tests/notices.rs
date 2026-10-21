@@ -63,13 +63,12 @@ async fn live_notices_leave_memory_and_durable_history_and_cursors_unchanged() {
             assert_eq!(live.cursor(), before.revision);
             assert_eq!(session.meta(), before);
         }
-        assert!(
-            session
-                .page(Some(before.revision), 10)
-                .expect("history")
-                .events
-                .is_empty()
-        );
+        session
+            .try_visit_history(Some(before.revision), 10, |_, _| {
+                panic!("notices must not enter history")
+            })
+            .await
+            .expect("history");
         if let Some(storage) = &storage {
             assert_eq!(
                 storage
@@ -93,10 +92,14 @@ async fn live_notices_leave_memory_and_durable_history_and_cursors_unchanged() {
         for title in ["first", "second"] {
             session.set_title(title).await.expect("rename");
         }
-        let history = session
-            .page(Some(before.revision), 10)
-            .expect("history")
-            .events;
+        let mut history = Vec::new();
+        session
+            .try_visit_history(Some(before.revision), 10, |event, _| {
+                history.push(event.clone());
+                true
+            })
+            .await
+            .expect("history");
         assert_eq!(history.len(), 2);
         for (index, expected) in history.iter().enumerate() {
             assert!(!expected.is_transient());

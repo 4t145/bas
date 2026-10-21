@@ -8,6 +8,218 @@ fn meta() -> SessionMeta {
     SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current())
 }
 
+async fn last_used_contract(storage: &dyn Storage) {
+    use bas::model::SessionStatus;
+
+    assert_eq!(storage.last_used_agent().await.expect("selection"), None);
+    let mut first = meta();
+    first.agent = "first".into();
+    storage.create(first.clone(), None).await.expect("create");
+    storage
+        .save_resume(first.id, Some(ResumeData::acp("first")))
+        .await
+        .expect("resume");
+    assert_eq!(storage.last_used_agent().await.expect("selection"), None);
+    first.status = SessionStatus::Idle;
+    let mut invalid = first.clone();
+    invalid.revision = invalid.revision.next();
+    assert!(storage.commit(invalid, &[], None).await.is_err());
+    assert_eq!(storage.last_used_agent().await.expect("selection"), None);
+    storage
+        .commit(first.clone(), &[], None)
+        .await
+        .expect("ready");
+    assert_eq!(
+        storage.last_used_agent().await.expect("not published"),
+        None
+    );
+    storage
+        .record_created_session(first.id)
+        .await
+        .expect("publish");
+    assert_eq!(
+        storage.last_used_agent().await.expect("selection"),
+        Some(first.agent.clone())
+    );
+
+    let mut second = meta();
+    second.agent = "second".into();
+    storage
+        .create(second.clone(), Some(ResumeData::acp("second")))
+        .await
+        .expect("create");
+    second.status = SessionStatus::Failed;
+    storage
+        .commit(second.clone(), &[], None)
+        .await
+        .expect("failed startup");
+    let batch = events(&mut second, 1);
+    storage
+        .commit(second.clone(), &batch, None)
+        .await
+        .expect("title");
+    second.status = SessionStatus::Idle;
+    storage
+        .commit(second.clone(), &[], None)
+        .await
+        .expect("recovery");
+    let (replay, _) = accepted_event(&mut second);
+    storage
+        .commit(second.clone(), &[replay], None)
+        .await
+        .expect("replay");
+    assert_eq!(
+        storage.last_used_agent().await.expect("selection"),
+        Some(first.agent.clone())
+    );
+    let (event, acceptance) = accepted_event(&mut second);
+    storage
+        .commit(second.clone(), &[event], Some(acceptance))
+        .await
+        .expect("accept");
+    assert_eq!(
+        storage.last_used_agent().await.expect("selection"),
+        Some(second.agent.clone())
+    );
+
+    let (event, first_acceptance) = accepted_event(&mut first);
+    storage
+        .commit(first.clone(), &[event], Some(first_acceptance))
+        .await
+        .expect("use first");
+    storage
+        .acceptance(second.id, acceptance.receipt.turn)
+        .await
+        .expect("duplicate read");
+    assert!(
+        storage
+            .commit(second.clone(), &[], Some(acceptance))
+            .await
+            .is_err()
+    );
+    let mut embedded = meta();
+    storage
+        .create(embedded.clone(), None)
+        .await
+        .expect("embedded");
+    embedded.status = SessionStatus::Idle;
+    storage
+        .commit(embedded.clone(), &[], None)
+        .await
+        .expect("embedded ready");
+    storage
+        .record_created_session(embedded.id)
+        .await
+        .expect("publish embedded");
+    let (event, acceptance) = accepted_event(&mut embedded);
+    storage
+        .commit(embedded, &[event], Some(acceptance))
+        .await
+        .expect("embedded turn");
+    assert_eq!(
+        storage.last_used_agent().await.expect("selection"),
+        Some(first.agent.clone())
+    );
+    storage.delete(first.id).await.expect("delete");
+    assert!(matches!(
+        storage.record_created_session(first.id).await,
+        Err(Error::NotFound(_))
+    ));
+    assert_eq!(
+        storage.last_used_agent().await.expect("selection"),
+        Some(first.agent)
+    );
+}
+
+#[tokio::test]
+async fn last_used_backends_share_contract() {
+    last_used_contract(&Memory::new(NonZeroUsize::new(2).expect("nonzero"))).await;
+    last_used_contract(&LocalDb::open(":memory:").await.expect("open")).await;
+}
+
+#[tokio::test]
+async fn last_used_survives_reopen_and_deletion() {
+    let dir = tempfile::tempdir().expect("directory");
+    let path = dir.path().join("nested/history.sqlite");
+    let mut state = meta();
+    let db = LocalDb::open(&path).await.expect("open");
+    db.create(state.clone(), Some(ResumeData::acp("session")))
+        .await
+        .expect("create");
+    state.status = bas::model::SessionStatus::Idle;
+    db.commit(state.clone(), &[], None).await.expect("ready");
+    db.record_created_session(state.id).await.expect("publish");
+    drop(db);
+    let db = LocalDb::open(&path)
+        .await
+        .expect("reopen published creation");
+    assert_eq!(
+        db.last_used_agent().await.expect("selection"),
+        Some(state.agent.clone())
+    );
+    let (event, acceptance) = accepted_event(&mut state);
+    db.commit(state.clone(), &[event], Some(acceptance))
+        .await
+        .expect("accept");
+    drop(db);
+    let db = LocalDb::open(&path).await.expect("reopen");
+    assert_eq!(
+        db.last_used_agent().await.expect("selection"),
+        Some(state.agent.clone())
+    );
+    db.delete(state.id).await.expect("delete");
+    drop(db);
+    let db = LocalDb::open(&path).await.expect("reopen deleted");
+    assert_eq!(
+        db.last_used_agent().await.expect("selection"),
+        Some(state.agent)
+    );
+}
+
+#[tokio::test]
+async fn last_used_publication_failure_preserves_previous_selection() {
+    use bas::model::SessionStatus;
+
+    let db = LocalDb::open(":memory:").await.expect("open");
+    let mut previous = meta();
+    previous.agent = "previous".into();
+    db.create(previous.clone(), Some(ResumeData::acp("previous")))
+        .await
+        .expect("create");
+    previous.status = SessionStatus::Idle;
+    db.commit(previous.clone(), &[], None).await.expect("ready");
+    db.record_created_session(previous.id)
+        .await
+        .expect("publish previous");
+    let mut next = meta();
+    next.agent = "next".into();
+    db.create(next.clone(), Some(ResumeData::acp("next")))
+        .await
+        .expect("create next");
+    let mut original = next.clone();
+    original.status = SessionStatus::Idle;
+    next.status = SessionStatus::Idle;
+    db.commit(next.clone(), &[], None)
+        .await
+        .expect("ready next");
+    db.test_sql(TestSql::RejectSelection)
+        .await
+        .expect("trigger");
+    assert!(db.record_created_session(next.id).await.is_err());
+    assert_eq!(
+        db.last_used_agent().await.expect("selection"),
+        Some(previous.agent)
+    );
+    assert_eq!(
+        db.load(original.id)
+            .await
+            .expect("load")
+            .expect("session")
+            .meta,
+        original
+    );
+}
+
 fn events(meta: &mut SessionMeta, count: usize) -> Vec<Event> {
     (0..count)
         .map(|_| {
@@ -171,7 +383,9 @@ async fn acceptance_rolls_back_with_failed_sqlite_batch() {
     let db = LocalDb::open(":memory:").await.expect("open");
     let mut state = meta();
     let original = state.clone();
-    db.create(state.clone(), None).await.expect("create");
+    db.create(state.clone(), Some(ResumeData::acp("rollback")))
+        .await
+        .expect("create");
     let (event, acceptance) = accepted_event(&mut state);
     let mut batch = vec![event];
     batch.extend(events(&mut state, 2));
@@ -179,6 +393,10 @@ async fn acceptance_rolls_back_with_failed_sqlite_batch() {
         .await
         .expect("trigger");
     assert!(db.commit(state, &batch, Some(acceptance)).await.is_err());
+    assert_eq!(
+        db.last_used_agent().await.expect("rolled back selection"),
+        None
+    );
     assert_eq!(
         db.load(original.id)
             .await

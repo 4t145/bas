@@ -39,6 +39,39 @@ struct Entry {
 }
 
 impl Catalog {
+    pub fn invalidate_pool(&self, id: &AgentId) {
+        if let Some(entry) = self.entries.get(id) {
+            entry.driver.invalidate_pool();
+        }
+    }
+
+    /// Configures process prewarming without waiting for initialization.
+    pub fn maintain_pools(
+        &self,
+        targets: &BTreeMap<AgentId, usize>,
+        startup_timeout: std::time::Duration,
+    ) {
+        for (id, entry) in &self.entries {
+            let target = if self.validate(&entry.spec).is_ok() {
+                targets.get(id).copied().unwrap_or(0)
+            } else {
+                0
+            };
+            entry
+                .driver
+                .maintain_pool(entry.spec.clone(), target, startup_timeout);
+        }
+    }
+
+    pub async fn shutdown_pools(&self) {
+        futures::future::join_all(
+            self.entries
+                .values()
+                .map(|entry| entry.driver.shutdown_pool()),
+        )
+        .await;
+    }
+
     /// Builds the catalog using the configured backend drivers.
     /// # Errors
     /// Returns an error for invalid or duplicate backend specifications.

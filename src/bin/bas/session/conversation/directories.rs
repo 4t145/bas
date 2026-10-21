@@ -10,7 +10,9 @@ impl Session {
         directories: Vec<PathBuf>,
         timeout: Duration,
     ) -> Result<SessionSnapshot, SessionError> {
+        let backend = self.use_backend();
         self.owned(move |session| async move {
+            let _backend = backend;
             let _restore = session.restore_gate.lock().await;
             let response = {
                 let _transaction = session.transaction.lock().await;

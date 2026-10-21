@@ -206,6 +206,20 @@ pub trait Agent: Send {
         })
     }
 
+    /// Atomically seals an inactive, restorable transport against callback admission.
+    /// Backends without that guarantee must remain nonreclaimable.
+    fn try_idle_reclaim(&mut self, _timeout: std::time::Duration) -> bool {
+        false
+    }
+
+    /// After sealing, waits for previously queued updates to reach the session.
+    async fn drain_updates(&mut self) {}
+
+    /// Releases transport ownership without terminally closing a durable session.
+    async fn release(&mut self) {
+        self.shutdown().await;
+    }
+
     /// Stops and joins all backend tasks. Dropping this future must also stop them.
     async fn shutdown(&mut self);
 }
@@ -222,6 +236,12 @@ pub struct LaunchRequest {
 #[async_trait]
 pub trait Driver: Send + Sync + 'static {
     fn kind(&self) -> Kind;
+
+    fn maintain_pool(&self, _spec: Arc<AgentSpec>, _target: usize, _timeout: std::time::Duration) {}
+
+    fn invalidate_pool(&self) {}
+
+    async fn shutdown_pool(&self) {}
 
     /// Starts a backend. Cancellation must release any partially started process.
     ///

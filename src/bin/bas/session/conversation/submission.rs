@@ -116,7 +116,9 @@ impl Session {
     ) -> Result<TurnReceipt, SubmissionError> {
         self.validate_target(&submission)?;
         let fingerprint = fingerprint(&submission.request);
+        let backend = self.use_backend();
         self.owned(move |session| async move {
+            let _backend = backend;
             let _gate = session.transaction.lock().await;
             if let Some(receipt) = session
                 .known_submission_locked(submission.turn, fingerprint)

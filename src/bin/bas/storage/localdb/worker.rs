@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use bas::model::{Cursor, Event, SessionId, SessionMeta, TurnId};
+use bas::model::{AgentId, Cursor, Event, SessionId, SessionMeta, TurnId};
 use futures::future::BoxFuture;
 use tokio::sync::{mpsc, oneshot};
 
@@ -17,6 +17,8 @@ use crate::storage::Window;
 type Reply<T> = oneshot::Sender<Result<T, Error>>;
 
 enum Command {
+    LastUsedAgent(Reply<Option<AgentId>>),
+    RecordCreatedSession(SessionId, Reply<()>),
     Create(SessionMeta, Option<ResumeData>, Reply<()>),
     Commit(SessionMeta, Vec<Event>, Option<PromptAcceptance>, Reply<()>),
     Acceptance(SessionId, TurnId, Reply<Option<PromptAcceptance>>),
@@ -34,6 +36,12 @@ enum Command {
 impl Command {
     async fn run(self, store: &SqliteStore) {
         match self {
+            Self::RecordCreatedSession(id, reply) => {
+                let _ = reply.send(store.record_created_session(id).await);
+            }
+            Self::LastUsedAgent(reply) => {
+                let _ = reply.send(store.last_used_agent().await);
+            }
             Self::Create(meta, resume, reply) => {
                 let _ = reply.send(store.create(meta, resume).await);
             }
@@ -140,6 +148,14 @@ impl LocalDb {
 }
 
 impl Storage for LocalDb {
+    fn record_created_session(&self, id: SessionId) -> BoxFuture<'_, Result<(), Error>> {
+        Box::pin(self.request(move |reply| Command::RecordCreatedSession(id, reply)))
+    }
+
+    fn last_used_agent(&self) -> BoxFuture<'_, Result<Option<AgentId>, Error>> {
+        Box::pin(self.request(Command::LastUsedAgent))
+    }
+
     fn create(
         &self,
         meta: SessionMeta,
@@ -216,6 +232,7 @@ impl Storage for LocalDb {
 #[cfg(test)]
 pub(in crate::storage) enum TestSql {
     RejectThirdEvent,
+    RejectSelection,
     ClearHistoryIndex,
     CorruptFirstPayload,
 }
@@ -227,6 +244,11 @@ impl TestSql {
 
         let mut db = store.db.clone();
         match self {
+            Self::RejectSelection => {
+                sql::statement("CREATE TRIGGER fail_selection BEFORE INSERT ON agent_selection BEGIN SELECT RAISE(ABORT, 'failure'); END")
+                    .exec(&mut db)
+                    .await?;
+            }
             Self::ClearHistoryIndex => {
                 for table in [
                     "history_index",

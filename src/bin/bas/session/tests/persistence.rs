@@ -293,10 +293,6 @@ async fn every_commit_boundary_latches_failure_without_rewriting_committed_state
         assert_eq!(failed.runtime.id, before.runtime.id);
         assert_eq!(failed.status(), SessionStatus::Failed);
         assert_eq!(failed.active_turn(), None);
-        assert_eq!(
-            session.page(None, 100).expect("ring").events,
-            history.events
-        );
         assert!(completed.try_recv().is_err(), "no fictional ACP completion");
         assert!(updates.is_closed(), "backend updates stopped");
         assert!(

@@ -5,7 +5,7 @@ use std::{
 };
 
 use bas::model::history::{Dependency, DependencyIndex};
-use bas::model::{Cursor, Event, SessionId, SessionMeta, TurnId};
+use bas::model::{AgentId, Cursor, Event, SessionId, SessionMeta, TurnId};
 use futures::future::BoxFuture;
 
 use super::{
@@ -36,6 +36,7 @@ struct Context {
 pub struct Memory {
     capacity: NonZeroUsize,
     sessions: Mutex<HashMap<SessionId, Entry>>,
+    last_used_agent: Mutex<Option<AgentId>>,
 }
 
 impl Memory {
@@ -44,11 +45,37 @@ impl Memory {
         Self {
             capacity,
             sessions: Mutex::new(HashMap::new()),
+            last_used_agent: Mutex::new(None),
         }
     }
 }
 
 impl Storage for Memory {
+    fn record_created_session(&self, id: SessionId) -> BoxFuture<'_, Result<(), Error>> {
+        Box::pin(async move {
+            let sessions = self.sessions.lock().expect("storage lock is not poisoned");
+            let entry = sessions.get(&id).ok_or(Error::NotFound(id))?;
+            if super::has_acp_resume(&entry.session) {
+                *self
+                    .last_used_agent
+                    .lock()
+                    .expect("storage lock is not poisoned") =
+                    Some(entry.session.meta.agent.clone());
+            }
+            Ok(())
+        })
+    }
+
+    fn last_used_agent(&self) -> BoxFuture<'_, Result<Option<AgentId>, Error>> {
+        Box::pin(async move {
+            Ok(self
+                .last_used_agent
+                .lock()
+                .expect("storage lock is not poisoned")
+                .clone())
+        })
+    }
+
     fn create(
         &self,
         meta: SessionMeta,
@@ -93,6 +120,8 @@ impl Storage for Memory {
                 validate_acceptance(events, acceptance)?;
             }
             validate_commit(&entry.session.meta, &meta, events)?;
+            let selected = (acceptance.is_some() && super::has_acp_resume(&entry.session))
+                .then(|| meta.agent.clone());
             for event in events {
                 let dependency = entry.index.observe(event);
                 if entry.events.len() == self.capacity.get() {
@@ -135,6 +164,12 @@ impl Storage for Memory {
                 entry
                     .acceptances
                     .insert(acceptance.receipt.turn, acceptance);
+            }
+            if let Some(agent) = selected {
+                *self
+                    .last_used_agent
+                    .lock()
+                    .expect("storage lock is not poisoned") = Some(agent);
             }
             Ok(())
         })

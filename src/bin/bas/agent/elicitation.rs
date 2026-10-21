@@ -136,6 +136,13 @@ impl Drop for PendingGuard {
 }
 
 impl Elicitations {
+    /// Includes answered URL requests still awaiting Agent completion.
+    pub fn has_pending(&self, session: SessionId) -> bool {
+        self.lock()
+            .get(&session)
+            .is_some_and(|entry| !entry.pending.is_empty())
+    }
+
     fn lock(&self) -> MutexGuard<'_, BTreeMap<SessionId, SessionInteractions>> {
         self.state
             .lock()
