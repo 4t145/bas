@@ -106,6 +106,23 @@ fn reading_updates_access_order_without_changing_freshness() {
 
 #[test]
 fn concurrent_handles_only_observe_complete_replacements() {
+    // Busy is an intentional best-effort result; this test waits for successful
+    // operations to verify replacement atomicity, not lock scheduling fairness.
+    fn retry_busy<T>(mut operation: impl FnMut() -> Result<T, Error>) -> T {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match operation() {
+                Ok(value) => return value,
+                Err(Error::Io(error))
+                    if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(LOCK_RETRY);
+                }
+                Err(error) => panic!("cache operation failed: {error}"),
+            }
+        }
+    }
+
     let (_root, cache) = fixture();
     cache.write("key", &entry(0)).expect("initial write");
     std::thread::scope(|scope| {
@@ -113,14 +130,28 @@ fn concurrent_handles_only_observe_complete_replacements() {
             let cache = Cache::at(cache.directory.clone());
             scope.spawn(move || {
                 for _ in 0..20 {
-                    cache.write("key", &entry(index)).expect("replace");
-                    let found = cache.read("key").expect("read").expect("entry");
+                    retry_busy(|| cache.write("key", &entry(index)));
+                    let found = retry_busy(|| cache.read("key")).expect("entry");
                     assert_eq!(found, entry(found.bytes[0]));
                 }
             });
         }
     });
     assert_eq!(fs::read_dir(&cache.directory).expect("list").count(), 2);
+}
+
+#[test]
+fn held_lock_is_optional_and_bounded() {
+    let (_root, cache) = fixture();
+    cache.write("key", &entry(1)).expect("initial write");
+    let guard = cache.lock().expect("peer lock");
+    let started = Instant::now();
+    assert!(
+        matches!(cache.read("key"), Err(Error::Io(error)) if error.kind() == io::ErrorKind::WouldBlock)
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(guard);
+    assert_eq!(cache.read("key").expect("released"), Some(entry(1)));
 }
 
 #[test]
