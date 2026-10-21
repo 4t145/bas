@@ -6,7 +6,7 @@ use anyhow::Result;
 use bas::{
     acp,
     model::*,
-    service::{Client, pb, tls::ConnectionOptions as Target},
+    service::{Client, HistoryWindow, pb, tls::ConnectionOptions as Target},
 };
 use tokio::{
     runtime::Handle,
@@ -15,6 +15,7 @@ use tokio::{
 };
 use tonic::Code;
 
+mod cache;
 mod elicitations;
 mod failure;
 mod foreground;
@@ -98,6 +99,17 @@ pub(super) enum Command {
         session: SessionId,
         epoch: u64,
     },
+    Resume {
+        session: SessionId,
+        epoch: u64,
+        cursor: u64,
+    },
+    OlderHistory {
+        session: SessionId,
+        epoch: u64,
+        before: u64,
+    },
+    ForgetHistory(SessionId),
     Detach,
     Foreground(Option<SessionId>),
 }
@@ -208,14 +220,19 @@ pub(super) enum Update {
         session: SessionId,
         result: Result<(), Failure>,
     },
-    Snapshot {
+    HistoryWindow {
+        epoch: u64,
+        window: HistoryWindow,
+        cached: bool,
+    },
+    OlderHistory {
+        epoch: u64,
+        before: u64,
+        result: Result<HistoryWindow, Failure>,
+    },
+    HistoryMeta {
         epoch: u64,
         session: SessionSnapshot,
-        events: Vec<Event>,
-    },
-    HistoryProgress {
-        epoch: u64,
-        loaded: usize,
     },
     Event {
         epoch: u64,
@@ -257,7 +274,20 @@ impl Connection {
                     return;
                 }
             };
-            run(Client::new(channel).with_payload_limit(), receiver, updates).await;
+            let cache = match cache::Cache::open(&server).await {
+                Ok(cache) => Some(cache),
+                Err(error) => {
+                    tracing::warn!(%error, "History cache unavailable");
+                    None
+                }
+            };
+            run_cached(
+                Client::new(channel).with_payload_limit(),
+                receiver,
+                updates,
+                cache,
+            )
+            .await;
         });
         (
             Self {
@@ -289,17 +319,27 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        if let Some(task) = &self.task {
-            task.abort();
-        }
+        // Closing the command sender lets the worker drain its disk writes.
+        self.task.take();
     }
 }
 
+#[cfg(test)]
 async fn run(
+    client: Client,
+    commands: mpsc::UnboundedReceiver<Command>,
+    updates: mpsc::Sender<Update>,
+) {
+    run_cached(client, commands, updates, None).await;
+}
+
+async fn run_cached(
     client: Client,
     mut commands: mpsc::UnboundedReceiver<Command>,
     updates: mpsc::Sender<Update>,
+    cache: Option<cache::Cache>,
 ) {
+    let (history, writer) = history::Store::new(cache);
     let refresh = Arc::new(Notify::new());
     let mut tasks = JoinSet::new();
     let (foreground, visibility) = tokio::sync::watch::channel(None);
@@ -319,10 +359,29 @@ async fn run(
                     Command::Foreground(session) => { foreground.send_replace(session); }
                     Command::Watch { session, epoch } => {
                         if let Some(task) = attachment.take() { task.abort(); }
-                        attachment = Some(tasks.spawn(permissions::watch_session(client.clone(), updates.clone(), session, epoch)));
+                        history.flush().await;
+                        attachment = Some(tasks.spawn(permissions::watch_cached(client.clone(), updates.clone(), session, epoch, None, history.clone())));
+                    }
+                    Command::Resume { session, epoch, cursor } => {
+                        if let Some(task) = attachment.take() { task.abort(); }
+                        history.flush().await;
+                        attachment = Some(tasks.spawn(permissions::watch_cached(client.clone(), updates.clone(), session, epoch, Some(cursor), history.clone())));
+                    }
+                    Command::OlderHistory { session, epoch, before } => {
+                        let history = history.clone();
+                        let client = client.clone();
+                        let updates = updates.clone();
+                        tasks.spawn(async move {
+                            let result = history.older(client, session, before).await;
+                            let _ = updates.send(Update::OlderHistory { epoch, before, result }).await;
+                        });
+                    }
+                    Command::ForgetHistory(session) => {
+                        history.forget(session).await;
                     }
                     Command::Detach => {
                         if let Some(task) = attachment.take() { task.abort(); }
+                        history.flush().await;
                     }
                     command => {
                         let client = client.clone();
@@ -343,6 +402,10 @@ async fn run(
             }
         }
     }
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    drop(history);
+    let _ = writer.await;
 }
 
 async fn operation(
@@ -737,19 +800,91 @@ async fn execute(mut client: Client, command: Command) -> Update {
             .await;
             Update::Cancelled { session, result }
         }
-        Command::Refresh | Command::Watch { .. } | Command::Detach | Command::Foreground(_) => {
+        Command::Refresh
+        | Command::Watch { .. }
+        | Command::Resume { .. }
+        | Command::OlderHistory { .. }
+        | Command::ForgetHistory(_)
+        | Command::Detach
+        | Command::Foreground(_) => {
             unreachable!("control commands are handled by run")
         }
     }
 }
 
-struct Snapshot {
-    session: SessionSnapshot,
-    events: Vec<Event>,
+#[cfg(test)]
+async fn watch(client: Client, updates: mpsc::Sender<Update>, session: SessionId, epoch: u64) {
+    let (store, writer) = history::Store::new(None);
+    watch_cached(client, updates, session, epoch, None, store).await;
+    let _ = writer.await;
 }
 
-async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: SessionId, epoch: u64) {
-    let mut cursor = None;
+async fn watch_cached(
+    mut client: Client,
+    updates: mpsc::Sender<Update>,
+    session: SessionId,
+    epoch: u64,
+    mut cursor: Option<u64>,
+    store: history::Store,
+) {
+    let mut resynced = false;
+    let mut knowledge = history::Knowledge::default();
+    if let Some(frontier) = cursor
+        && let Some(window) = store.latest(session).await
+        && window.cursor == frontier
+    {
+        knowledge.reset(&window);
+    }
+    if cursor.is_some() {
+        let meta = request(async {
+            let meta: SessionSnapshot = client
+                .get_session(pb::GetSessionRequest {
+                    session: session.to_string(),
+                })
+                .await?
+                .into_inner()
+                .session
+                .ok_or(Failure::Condition(Condition::MissingSessionInfo))?
+                .try_into()?;
+            if meta.meta.id != session {
+                anyhow::bail!("metadata returned another session");
+            }
+            Ok(meta)
+        })
+        .await;
+        match meta {
+            Ok(meta) => {
+                if cursor.is_some_and(|cursor| cursor > meta.meta.revision.raw()) {
+                    cursor = None;
+                }
+                let failure = meta.runtime.failure.clone().map(Failure::Runtime);
+                let _ = updates
+                    .send(Update::HistoryMeta {
+                        epoch,
+                        session: meta,
+                    })
+                    .await;
+                if let Some(failure) = failure {
+                    let _ = updates
+                        .send(Update::Stream {
+                            epoch,
+                            state: StreamState::Unavailable(failure),
+                        })
+                        .await;
+                    return;
+                }
+            }
+            Err(error) => {
+                let _ = updates
+                    .send(Update::Stream {
+                        epoch,
+                        state: StreamState::Unavailable(error),
+                    })
+                    .await;
+                return;
+            }
+        }
+    }
     loop {
         if cursor.is_none() {
             let _ = updates
@@ -758,43 +893,17 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                     state: StreamState::Loading,
                 })
                 .await;
-            match history::snapshot(&mut client, session, REQUEST_TIMEOUT, |loaded| {
-                // Progress is advisory; never block history on a busy UI queue.
-                let _ = updates.try_send(Update::HistoryProgress { epoch, loaded });
-            })
+            match load_initial(
+                &mut client,
+                &updates,
+                session,
+                epoch,
+                &store,
+                &mut knowledge,
+            )
             .await
             {
-                Ok(Snapshot {
-                    session: meta,
-                    events,
-                }) => {
-                    cursor = Some(events.last().map_or(0, |event| event.cursor.raw()));
-                    let failure = meta
-                        .runtime
-                        .failure
-                        .as_ref()
-                        .map(|failure| Failure::Runtime(failure.clone()));
-                    if updates
-                        .send(Update::Snapshot {
-                            epoch,
-                            session: meta,
-                            events,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                    if let Some(message) = failure {
-                        let _ = updates
-                            .send(Update::Stream {
-                                epoch,
-                                state: StreamState::Unavailable(message),
-                            })
-                            .await;
-                        return;
-                    }
-                }
+                Ok(frontier) => cursor = Some(frontier),
                 Err(error) => {
                     tracing::warn!(%session, epoch, %error, "Conversation history load failed");
                     let _ = updates
@@ -820,6 +929,16 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
             Ok(Ok(response)) => response.into_inner(),
             Ok(Err(error)) => {
                 if error.code() == Code::DataLoss {
+                    if resynced {
+                        let _ = updates
+                            .send(Update::Stream {
+                                epoch,
+                                state: StreamState::Unavailable(error.into()),
+                            })
+                            .await;
+                        return;
+                    }
+                    resynced = true;
                     cursor = None;
                 }
                 if terminal_watch_status(error.code()) {
@@ -877,8 +996,32 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                             return;
                         }
                     };
+                    if event.session != session
+                        || (!event.is_transient() && event.cursor.raw() <= cursor.unwrap_or(0))
+                    {
+                        let _ = updates
+                            .send(Update::Stream {
+                                epoch,
+                                state: StreamState::Unavailable(Failure::InvalidPayload(
+                                    "live event has wrong session or non-advancing cursor".into(),
+                                )),
+                            })
+                            .await;
+                        return;
+                    }
                     if !event.is_transient() {
+                        if knowledge.needs_reload(&event) {
+                            // Do not expose an update whose original message/tool is
+                            // outside the loaded range. Reload a dependency-safe window
+                            // and attach at its captured frontier instead.
+                            knowledge.require(event.cursor.raw());
+                            cursor = None;
+                            break;
+                        }
+                        knowledge.observe(&event);
                         cursor = Some(event.cursor.raw());
+                        resynced = false;
+                        store.event(&event).await;
                     }
                     if updates.send(Update::Event { epoch, event }).await.is_err() {
                         return;
@@ -904,6 +1047,16 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
                         return;
                     }
                     if error.code() == Code::DataLoss {
+                        if resynced {
+                            let _ = updates
+                                .send(Update::Stream {
+                                    epoch,
+                                    state: StreamState::Unavailable(error.into()),
+                                })
+                                .await;
+                            return;
+                        }
+                        resynced = true;
                         cursor = None;
                     }
                     if !retry(&updates, epoch, error.into()).await {
@@ -914,6 +1067,35 @@ async fn watch(mut client: Client, updates: mpsc::Sender<Update>, session: Sessi
             }
         }
     }
+}
+
+async fn load_initial(
+    client: &mut Client,
+    updates: &mpsc::Sender<Update>,
+    session: SessionId,
+    epoch: u64,
+    store: &history::Store,
+    knowledge: &mut history::Knowledge,
+) -> Result<u64, Failure> {
+    let window = client
+        .history_window(session, None, HISTORY_PAGE_SIZE, REQUEST_TIMEOUT)
+        .await?;
+    let frontier = window.cursor;
+    knowledge.validate(frontier)?;
+    let failure = window.session.runtime.failure.clone();
+    knowledge.reset(&window);
+    store.window(&window).await;
+    let _ = updates
+        .send(Update::HistoryWindow {
+            epoch,
+            window,
+            cached: false,
+        })
+        .await;
+    if let Some(failure) = failure {
+        return Err(Failure::Runtime(failure));
+    }
+    Ok(frontier)
 }
 
 fn terminal_watch_status(code: Code) -> bool {

@@ -1,7 +1,7 @@
 use super::*;
 
 #[gpui_kit::test]
-fn switching_and_detaching_preserve_background_work_but_clear_current_state(
+fn switching_preserves_cached_history_but_detach_and_switch_clear_transient_controls(
     cx: &mut TestAppContext,
 ) {
     let fixture = fixture(cx);
@@ -31,16 +31,16 @@ fn switching_and_detaching_preserve_background_work_but_clear_current_state(
             for detach in [false, true] {
                 let current = view.selected.id.expect("selected thread");
                 view.update(
-                    Update::Snapshot {
-                        epoch: view.selected.epoch,
-                        session: if current == first.id {
+                    history_window(
+                        view.selected.epoch,
+                        if current == first.id {
                             first.clone()
                         } else {
                             second.clone()
                         }
                         .into(),
-                        events: Vec::new(),
-                    },
+                        Vec::new(),
+                    ),
                     window,
                     cx,
                 );
@@ -69,7 +69,20 @@ fn switching_and_detaching_preserve_background_work_but_clear_current_state(
                     assert_eq!(view.selected.id, Some(second.id));
                 }
                 assert_eq!(view.selected.epoch, old_epoch + 1);
-                assert!(view.selected.timeline.conversation.is_none());
+                if detach {
+                    assert!(view.selected.timeline.conversation.is_none());
+                } else {
+                    assert_eq!(
+                        view.selected
+                            .timeline
+                            .conversation
+                            .as_ref()
+                            .expect("cached second thread")
+                            .session
+                            .id,
+                        second.id,
+                    );
+                }
                 assert!(view.selected.approval.panel.is_empty());
                 assert!(view.selected.approval.error.is_none());
                 assert!(view.selected.authentication.required.is_none());

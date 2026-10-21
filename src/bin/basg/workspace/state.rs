@@ -200,6 +200,7 @@ pub(super) struct SessionStore {
     pub(super) seen_replies: HashMap<SessionId, u64>,
     pub(super) pending: PendingOperations,
     pub(super) errors: HashMap<SessionId, String>,
+    pub(super) history: super::timeline::Cache,
 }
 
 impl SessionStore {
@@ -230,6 +231,7 @@ impl SessionStore {
         self.outboxes.remove(&id);
         self.unstarted.remove(&id);
         self.prompted.remove(&id);
+        self.history.remove(id);
     }
 
     pub(super) fn observe_ids(&mut self, ids: HashSet<SessionId>) -> Vec<SessionId> {
@@ -268,7 +270,6 @@ pub(super) struct SelectedThread {
     pub(super) agent: String,
     pub(super) epoch: u64,
     pub(super) stream: StreamState,
-    pub(super) history_loaded: usize,
     pub(super) creating: bool,
     pub(super) waiting_for_agent_selection: bool,
     pub(super) error: Option<String>,
@@ -285,7 +286,6 @@ impl SelectedThread {
             agent: String::new(),
             epoch: 0,
             stream: StreamState::Loading,
-            history_loaded: 0,
             creating: false,
             waiting_for_agent_selection: false,
             error: None,
@@ -314,10 +314,9 @@ impl SelectedThread {
     pub(super) fn reload(&mut self) {
         self.epoch += 1;
         self.stream = StreamState::Loading;
-        self.history_loaded = 0;
     }
 
-    pub(super) fn awaiting_snapshot(&self) -> bool {
+    pub(super) fn awaiting_history(&self) -> bool {
         self.id.is_some() && self.timeline.conversation.is_none()
     }
 
@@ -377,6 +376,10 @@ impl<T: 'static> ObservedPanel<T> {
 /// Rendered history. Replaying a snapshot clears caches, not thread-local expansion.
 pub(super) struct TimelineState {
     pub(super) conversation: Option<Conversation>,
+    pub(super) history: Option<bas::service::HistoryWindow>,
+    pub(super) loading_before: Option<u64>,
+    pub(super) older_error: Option<Failure>,
+    pub(super) restore: Option<super::timeline::Position>,
     pub(super) markdown: RefCell<HashMap<String, markdown::Document>>,
     pub(super) images: RefCell<HashMap<String, images::Entry>>,
     pub(super) expanded: HashSet<String>,
@@ -388,6 +391,10 @@ impl TimelineState {
     pub(super) fn new(list: ListState) -> Self {
         Self {
             conversation: None,
+            history: None,
+            loading_before: None,
+            older_error: None,
+            restore: None,
             markdown: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
             expanded: HashSet::new(),
@@ -404,6 +411,10 @@ impl TimelineState {
     pub(super) fn clear_thread(&mut self) {
         self.clear_caches();
         self.conversation = None;
+        self.history = None;
+        self.loading_before = None;
+        self.older_error = None;
+        self.restore = None;
         self.expanded.clear();
         self.bounds.borrow_mut().clear();
         self.list.reset(0);

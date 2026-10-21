@@ -80,6 +80,8 @@ service Bas {
   rpc SetTitle(SetTitleRequest) returns (SetTitleResponse);
   // Loads a page of history by cursor.
   rpc LoadHistory(LoadHistoryRequest) returns (LoadHistoryResponse);
+  // Dependency-aligned recent-first history. Old daemons return UNIMPLEMENTED.
+  rpc LoadHistoryWindow(LoadHistoryWindowRequest) returns (LoadHistoryWindowResponse);
 }
 
 // One configured agent backend.
@@ -538,4 +540,25 @@ message LoadHistoryResponse {
   repeated Event events = 1;
   // Cursor to pass as `after` for the next page; absent at the end of history.
   optional uint64 next = 2;
+}
+
+message LoadHistoryWindowRequest {
+  string session = 1;
+  // Absent selects newest; otherwise selects events strictly before this cursor.
+  optional uint64 before = 2;
+  // Positive target count, expanded backwards to include logical dependencies.
+  uint32 limit = 3;
+}
+
+message LoadHistoryWindowResponse {
+  // Metadata and high-water cursor are captured from the same committed snapshot.
+  Session session = 1;
+  // Original events in a chronological, contiguous, dependency-aligned range.
+  repeated Event events = 2;
+  // Earlier presentation state to replay before events, not transcript pagination.
+  repeated Event context = 3;
+  // Exclusive upper cursor for the next older window; absent when exhausted.
+  optional uint64 before = 4;
+  // Snapshot high-water cursor. Attach here after loading the newest window.
+  uint64 cursor = 5;
 }

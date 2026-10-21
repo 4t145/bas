@@ -60,11 +60,7 @@ fn visible_replies_survive_close_and_reopen_but_new_replies_stay_unread(cx: &mut
     cx.update_window(reopened.window.into(), |_, window, cx| {
         reopened.view.update(cx, |view, cx| {
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: meta.clone().into(),
-                    events,
-                },
+                history_window(view.selected.epoch, meta.clone().into(), events),
                 window,
                 cx,
             );

@@ -1048,6 +1048,32 @@ impl Bas for Service {
         result?;
         Ok(Response::new(encoder.finish()))
     }
+
+    async fn load_history_window(
+        &self,
+        request: Request<pb::LoadHistoryWindowRequest>,
+    ) -> Result<Response<pb::LoadHistoryWindowResponse>, Status> {
+        use prost::Message as _;
+
+        let request = request.into_inner();
+        let session = self.session(&request.session).await?;
+        let window = session
+            .history_window(request.before.map(Cursor::from_raw), request.limit as usize)
+            .await?;
+        let response = pb::LoadHistoryWindowResponse {
+            session: Some(pb::Session::try_from(&window.session).map_err(metadata_error)?),
+            events: window.events.iter().map(pb::Event::from).collect(),
+            context: window.context.iter().map(pb::Event::from).collect(),
+            before: window.before,
+            cursor: window.cursor,
+        };
+        if response.encoded_len() > bas::service::MAX_MESSAGE_SIZE {
+            return Err(Status::resource_exhausted(
+                "dependency-aligned history window exceeds the RPC payload limit",
+            ));
+        }
+        Ok(Response::new(response))
+    }
 }
 
 fn authentication_check(

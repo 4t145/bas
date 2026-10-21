@@ -455,6 +455,10 @@ impl Workspace {
             view.backend.connected = false;
             view.selected.stream = StreamState::Loading;
             view.backend.error = (fixture == "disconnected").then(|| "预览：服务不可用".into());
+            if fixture == "connecting" {
+                view.selected.detach();
+                view.composer.expanded = true;
+            }
             view.composer.input.update(cx, |input, cx| {
                 input.set_value("连接恢复后发送这份草稿", window, cx)
             });

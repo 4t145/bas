@@ -6,6 +6,7 @@
 mod approval;
 mod content;
 mod event;
+pub mod history;
 mod ids;
 mod message;
 pub mod presentation;

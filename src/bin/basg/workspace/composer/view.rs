@@ -39,8 +39,9 @@ impl Workspace {
 
     pub(in crate::workspace) fn composer_fills_thread(&self) -> bool {
         !self.window.compact
+            && !self.awaiting_connection()
             && self.composer.expanded
-            && !self.selected.awaiting_snapshot()
+            && !self.selected.awaiting_history()
             && !self.thread_has_user_prompt()
             && !self.working()
             && self.selected.approval.panel.is_empty()

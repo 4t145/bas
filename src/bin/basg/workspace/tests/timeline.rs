@@ -41,7 +41,7 @@ fn failed_resync_can_retry_without_discarding_visible_history(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
-fn history_progress_and_retry_stay_with_the_selected_session(cx: &mut TestAppContext) {
+fn history_window_and_retry_stay_with_the_selected_session(cx: &mut TestAppContext) {
     let mut fixture = fixture(cx);
     let meta = session();
     cx.update_window(fixture.window.into(), |_, window, cx| {
@@ -52,16 +52,12 @@ fn history_progress_and_retry_stay_with_the_selected_session(cx: &mut TestAppCon
                 .input
                 .update(cx, |input, cx| input.set_value("unsent draft", window, cx));
             let epoch = view.selected.epoch;
-            view.update(Update::HistoryProgress { epoch, loaded: 512 }, window, cx);
             view.update(
-                Update::HistoryProgress {
-                    epoch: epoch - 1,
-                    loaded: 9000,
-                },
+                history_window(epoch - 1, meta.clone().into(), Vec::new()),
                 window,
                 cx,
             );
-            assert_eq!(view.selected.history_loaded, 512);
+            assert!(view.selected.timeline.conversation.is_none());
             view.update(
                 Update::Stream {
                     epoch,
@@ -87,7 +83,6 @@ fn history_progress_and_retry_stay_with_the_selected_session(cx: &mut TestAppCon
         let view = fixture.view.read(cx);
         assert_eq!(view.selected.id, Some(meta.id));
         assert!(view.selected.epoch > old_epoch);
-        assert_eq!(view.selected.history_loaded, 0);
         assert_eq!(view.selected.stream, StreamState::Loading);
         assert_eq!(
             view.composer.input.read(cx).value().as_ref(),
@@ -96,6 +91,23 @@ fn history_progress_and_retry_stay_with_the_selected_session(cx: &mut TestAppCon
         window.render_frame(cx);
         assert!(window.find("conversation-history-loading").visible());
         assert!(window.try_find("history-load-retry").is_none());
+        fixture.view.update(cx, |view, cx| {
+            view.update(
+                history_window(old_epoch, meta.clone().into(), Vec::new()),
+                window,
+                cx,
+            );
+            assert!(view.selected.timeline.conversation.is_none());
+            view.update(
+                history_window(view.selected.epoch, meta.clone().into(), Vec::new()),
+                window,
+                cx,
+            );
+            assert!(view.selected.timeline.conversation.is_some());
+            assert_eq!(view.composer.input.read(cx).value(), "unsent draft");
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("conversation-history-loading").is_none());
     })
     .expect("retry retained history");
     let epoch = cx.update(|cx| fixture.view.read(cx).selected.epoch);
@@ -110,7 +122,7 @@ fn history_progress_and_retry_stay_with_the_selected_session(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn switching_threads_shows_loading_until_the_matching_snapshot_arrives(cx: &mut TestAppContext) {
+fn switching_threads_shows_loading_until_the_matching_window_arrives(cx: &mut TestAppContext) {
     let fixture = fixture(cx);
     let first = session();
     let second = session();
@@ -139,11 +151,7 @@ fn switching_threads_shows_loading_until_the_matching_snapshot_arrives(cx: &mut 
         }
         fixture.view.update(cx, |view, cx| {
             view.update(
-                Update::Snapshot {
-                    epoch: old_epoch,
-                    session: first.clone().into(),
-                    events: Vec::new(),
-                },
+                history_window(old_epoch, first.clone().into(), Vec::new()),
                 window,
                 cx,
             )
@@ -151,21 +159,21 @@ fn switching_threads_shows_loading_until_the_matching_snapshot_arrives(cx: &mut 
         window.render_frame(cx);
         assert!(
             window.find("conversation-history-loading").visible(),
-            "late old snapshot cannot dismiss loading"
+            "late old window cannot dismiss loading"
         );
         fixture.view.update(cx, |view, cx| {
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: second.clone().into(),
-                    events: vec![Event::new(
+                history_window(
+                    view.selected.epoch,
+                    second.clone().into(),
+                    vec![Event::new(
                         second.id,
                         Cursor::from_raw(1),
                         EventKind::Acp(bas::acp::SessionUpdate::UserMessageChunk(
                             bas::acp::ContentChunk::new("Loaded conversation".into()),
                         )),
                     )],
-                },
+                ),
                 window,
                 cx,
             )
@@ -222,11 +230,7 @@ fn unavailable_history_is_not_a_spinner_or_an_empty_conversation(cx: &mut TestAp
         assert!(window.try_find("empty-conversation-message").is_none());
         fixture.view.update(cx, |view, cx| {
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: meta.clone().into(),
-                    events: Vec::new(),
-                },
+                history_window(view.selected.epoch, meta.clone().into(), Vec::new()),
                 window,
                 cx,
             )
@@ -242,7 +246,7 @@ fn unavailable_history_is_not_a_spinner_or_an_empty_conversation(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
-fn snapshot_replay_invalidates_rendered_documents_without_erasing_composition(
+fn history_window_replay_invalidates_rendered_documents_without_erasing_composition(
     cx: &mut TestAppContext,
 ) {
     let fixture = fixture(cx);
@@ -254,17 +258,17 @@ fn snapshot_replay_invalidates_rendered_documents_without_erasing_composition(
                 input.set_value("unfinished composition", window, cx);
             });
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: meta.clone().into(),
-                    events: vec![Event::new(
+                history_window(
+                    view.selected.epoch,
+                    meta.clone().into(),
+                    vec![Event::new(
                         meta.id,
                         Cursor::from_raw(1),
                         EventKind::Acp(bas::acp::SessionUpdate::AgentMessageChunk(
                             bas::acp::ContentChunk::new("**rendered history**".into()),
                         )),
                     )],
-                },
+                ),
                 window,
                 cx,
             );
@@ -275,11 +279,7 @@ fn snapshot_replay_invalidates_rendered_documents_without_erasing_composition(
             let generation = view.composer.generation;
             let epoch = view.selected.epoch;
             view.update(
-                Update::Snapshot {
-                    epoch,
-                    session: meta.clone().into(),
-                    events: Vec::new(),
-                },
+                history_window(epoch, meta.clone().into(), Vec::new()),
                 window,
                 cx,
             );
@@ -303,5 +303,5 @@ fn snapshot_replay_invalidates_rendered_documents_without_erasing_composition(
             );
         });
     })
-    .expect("snapshot replay only replaces history and rendering state");
+    .expect("history window replay only replaces history and rendering state");
 }

@@ -17,11 +17,7 @@ fn finish_initialization(
             cx,
         );
         view.update(
-            Update::Snapshot {
-                epoch: view.selected.epoch,
-                session: session.into(),
-                events,
-            },
+            history_window(view.selected.epoch, session.into(), events),
             window,
             cx,
         );
@@ -70,11 +66,7 @@ fn first_prompt_receipt_locks_agent_and_rejection_keeps_it_selectable(cx: &mut T
             assert!(view.thread_has_user_prompt());
             assert!(!view.can_select_agent());
             view.update(
-                Update::Snapshot {
-                    epoch,
-                    session: meta.clone().into(),
-                    events: Vec::new(),
-                },
+                history_window(epoch, meta.clone().into(), Vec::new()),
                 window,
                 cx,
             );
@@ -140,17 +132,17 @@ fn initialized_agent_waits_for_complete_history_and_no_pending_drafts(cx: &mut T
             );
             assert!(view.can_select_agent());
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: meta.clone().into(),
-                    events: vec![Event::new(
+                history_window(
+                    view.selected.epoch,
+                    meta.clone().into(),
+                    vec![Event::new(
                         meta.id,
                         Cursor::from_raw(8),
                         EventKind::Acp(bas::acp::SessionUpdate::AgentMessageChunk(
                             bas::acp::ContentChunk::new(ContentBlock::from("retained tail")),
                         )),
                     )],
-                },
+                ),
                 window,
                 cx,
             );
@@ -297,11 +289,7 @@ fn stale_catalog_cannot_replace_the_agent_while_creating_or_waiting_for_login(
             );
             assert_eq!(view.composer.input.read(cx).value(), "new agent draft");
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: created.clone().into(),
-                    events: Vec::new(),
-                },
+                history_window(view.selected.epoch, created.clone().into(), Vec::new()),
                 window,
                 cx,
             );

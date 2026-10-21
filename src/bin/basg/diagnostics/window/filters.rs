@@ -1,12 +1,16 @@
 use super::*;
-use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::{
+    button::ButtonVariants,
+    menu::{DropdownMenu, PopupMenuItem},
+};
 
 impl Viewer {
     pub(super) fn level_filter(&self, cx: &mut Context<Self>) -> AnyElement {
         let selected = self.level;
         let owner = cx.entity().downgrade();
         crate::ui::action_button("logs-level")
-            .w(px(112.))
+            .ghost()
+            .w(gpui_kit::rems(7.5))
             .flex_shrink_0()
             .label(selected.map_or(crate::i18n::tr!("logs-all"), Level::as_str))
             .icon(IconName::ChevronDown)
@@ -56,7 +60,8 @@ impl Viewer {
             .clone()
             .unwrap_or_else(|| crate::i18n::tr!("logs-all-targets").into());
         crate::ui::action_button("logs-target")
-            .w(px(164.))
+            .ghost()
+            .w(gpui_kit::rems(11.))
             .flex_shrink_0()
             .tooltip(label.clone())
             .accessibility_label(crate::i18n::tr!("logs-target"))

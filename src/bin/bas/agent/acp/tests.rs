@@ -99,6 +99,15 @@ impl crate::storage::Storage for RejectPromptStore {
         self.inner.page(id, after, limit)
     }
 
+    fn window(
+        &self,
+        id: SessionId,
+        before: Option<bas::model::Cursor>,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<crate::storage::Window, crate::storage::Error>> {
+        self.inner.window(id, before, limit)
+    }
+
     fn tail(
         &self,
         id: SessionId,

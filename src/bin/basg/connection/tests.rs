@@ -14,6 +14,7 @@ mod permissions;
 mod runtime;
 mod submission;
 mod tracking;
+mod windows;
 
 #[test]
 fn native_auth_required_is_typed_but_transport_failures_stay_errors() {
@@ -52,6 +53,7 @@ struct Fixture {
     turn: TurnId,
     attachments: Arc<Mutex<Vec<Option<u64>>>>,
     history_requests: Arc<Mutex<Vec<Option<u64>>>>,
+    raw_history_requests: Arc<Mutex<Vec<Option<u64>>>>,
     prompts: Arc<Mutex<Vec<acp::PromptRequest>>>,
     submissions: Arc<Mutex<Vec<PromptSubmission>>>,
     titles: Arc<Mutex<Vec<String>>>,
@@ -70,6 +72,10 @@ enum Scenario {
     Tracking(tracking::Scenario),
     Submission(submission::Scenario),
     History(history::Scenario),
+    Window,
+    WindowUnavailable,
+    SlowPermissions,
+    LateTool,
     RuntimeFailure,
     AttachFailedPrecondition,
     StreamFailedPrecondition,
@@ -89,6 +95,7 @@ struct Service {
     history: Vec<Event>,
     attachments: Arc<Mutex<Vec<Option<u64>>>>,
     history_requests: Arc<Mutex<Vec<Option<u64>>>>,
+    raw_history_requests: Arc<Mutex<Vec<Option<u64>>>>,
     prompts: Arc<Mutex<Vec<acp::PromptRequest>>>,
     submissions: Arc<Mutex<Vec<PromptSubmission>>>,
     titles: Arc<Mutex<Vec<String>>>,
@@ -191,6 +198,9 @@ impl Bas for Service {
         &self,
         request: Request<pb::WatchPermissionsRequest>,
     ) -> Result<Response<Self::WatchPermissionsStream>, Status> {
+        if matches!(self.scenario, Scenario::SlowPermissions) {
+            return std::future::pending().await;
+        }
         if matches!(self.scenario, Scenario::LegacyApprovals) {
             return Err(Status::unimplemented("legacy daemon"));
         }
@@ -273,12 +283,6 @@ impl Bas for Service {
         &self,
         _: Request<pb::GetSessionRequest>,
     ) -> Result<Response<pb::GetSessionResponse>, Status> {
-        if matches!(
-            self.scenario,
-            Scenario::History(history::Scenario::HungMetadata)
-        ) {
-            return std::future::pending().await;
-        }
         Ok(Response::new(pb::GetSessionResponse {
             session: Some(
                 pb::Session::try_from(&SessionSnapshot {
@@ -294,30 +298,58 @@ impl Bas for Service {
         &self,
         request: Request<pb::LoadHistoryRequest>,
     ) -> Result<Response<pb::LoadHistoryResponse>, Status> {
+        let request = request.into_inner();
+        self.raw_history_requests
+            .lock()
+            .expect("raw history request log")
+            .push(request.after);
+        Err(Status::unimplemented("raw history must not be requested"))
+    }
+
+    async fn load_history_window(
+        &self,
+        request: Request<pb::LoadHistoryWindowRequest>,
+    ) -> Result<Response<pb::LoadHistoryWindowResponse>, Status> {
+        if matches!(self.scenario, Scenario::LateTool) {
+            return windows::late_window(self, request.into_inner());
+        }
+        let request = request.into_inner();
+        assert_eq!(request.session, self.session.id.to_string());
+        assert_eq!(request.limit, HISTORY_PAGE_SIZE);
+        self.history_requests
+            .lock()
+            .expect("requests")
+            .push(request.before);
         if matches!(self.scenario, Scenario::Missing) {
             return Err(Status::not_found("session removed"));
         }
-        let request = request.into_inner();
-        self.history_requests
-            .lock()
-            .expect("history request log")
-            .push(request.after);
+        if matches!(self.scenario, Scenario::WindowUnavailable) {
+            return Err(Status::unavailable("window unavailable"));
+        }
         if let Scenario::History(scenario) = self.scenario {
             return history::load(self, scenario, request).await;
         }
-        let remaining: Vec<_> = self
+        let upper = request.before.unwrap_or(301);
+        let lower = upper.saturating_sub(u64::from(request.limit)).max(1);
+        let events = self
             .history
             .iter()
-            .filter(|event| event.cursor.raw() > request.after.unwrap_or(0))
+            .filter(|event| (lower..upper).contains(&event.cursor.raw()))
+            .map(Into::into)
             .collect();
-        let events: Vec<pb::Event> = remaining
-            .iter()
-            .take(request.limit as usize)
-            .map(|event| (*event).into())
-            .collect();
-        let next =
-            (remaining.len() > events.len()).then(|| events.last().expect("nonempty page").cursor);
-        Ok(Response::new(pb::LoadHistoryResponse { events, next }))
+        Ok(Response::new(pb::LoadHistoryWindowResponse {
+            session: Some(
+                pb::Session::try_from(&SessionSnapshot {
+                    meta: self.session.clone(),
+                    runtime: self.runtime.clone(),
+                })
+                .expect("metadata"),
+            ),
+            events,
+            context: Vec::new(),
+            before: (lower > 1).then_some(lower),
+            cursor: 300,
+        }))
     }
 
     async fn attach(
@@ -329,6 +361,14 @@ impl Bas for Service {
             calls.push(request.into_inner().cursor);
             calls.len()
         };
+        if matches!(self.scenario, Scenario::LateTool) {
+            let events = if count == 1 {
+                vec![Ok((&windows::late_event(self.session.id)).into())]
+            } else {
+                Vec::new()
+            };
+            return Ok(Response::new(Box::pin(tokio_stream::iter(events))));
+        }
         if let Scenario::Tracking(scenario) = self.scenario {
             return tracking::attach(self, scenario, count);
         }
@@ -512,21 +552,27 @@ impl Bas for Service {
 
 async fn fixture(scenario: Scenario) -> Fixture {
     let mut session = SessionMeta::new(SessionId::new(), "test".into(), Owner::current());
+    session.revision = Cursor::from_raw(300);
     session.archived = matches!(scenario, Scenario::Archived);
     let id = session.id;
     let history = (1..=300)
         .map(|cursor| {
-            Event::new(
-                id,
-                Cursor::from_raw(cursor),
-                EventKind::Acp(acp::SessionUpdate::UserMessageChunk(
-                    acp::ContentChunk::new(format!("message {cursor}").into()),
-                )),
-            )
+            let chunk = acp::ContentChunk::new(format!("message {cursor}").into());
+            let update = if cursor % 2 == 0
+                && matches!(
+                    scenario,
+                    Scenario::Window | Scenario::SlowPermissions | Scenario::LateTool
+                ) {
+                acp::SessionUpdate::AgentMessageChunk(chunk)
+            } else {
+                acp::SessionUpdate::UserMessageChunk(chunk)
+            };
+            Event::new(id, Cursor::from_raw(cursor), EventKind::Acp(update))
         })
         .collect();
     let attachments = Arc::new(Mutex::new(Vec::new()));
     let history_requests = Arc::new(Mutex::new(Vec::new()));
+    let raw_history_requests = Arc::new(Mutex::new(Vec::new()));
     let prompts = Arc::new(Mutex::new(Vec::new()));
     let submissions = Arc::new(Mutex::new(Vec::new()));
     let titles = Arc::new(Mutex::new(Vec::new()));
@@ -571,6 +617,7 @@ async fn fixture(scenario: Scenario) -> Fixture {
         history,
         attachments: attachments.clone(),
         history_requests: history_requests.clone(),
+        raw_history_requests: raw_history_requests.clone(),
         prompts: prompts.clone(),
         submissions: submissions.clone(),
         titles: titles.clone(),
@@ -595,6 +642,7 @@ async fn fixture(scenario: Scenario) -> Fixture {
         turn,
         attachments,
         history_requests,
+        raw_history_requests,
         prompts,
         submissions,
         titles,
@@ -694,18 +742,21 @@ async fn collect(fixture: &Fixture) -> Vec<Update> {
 }
 
 #[tokio::test]
-async fn paginated_history_and_reconnect_resume_after_the_last_live_cursor() {
+async fn recent_history_and_reconnect_resume_after_the_last_live_cursor() {
     let fixture = fixture(Scenario::Reconnect).await;
     let updates = collect(&fixture).await;
     let snapshots: Vec<_> = updates
         .iter()
         .filter_map(|update| match update {
-            Update::Snapshot { events, .. } => Some(events),
+            Update::HistoryWindow { window, .. } => Some(window),
             _ => None,
         })
         .collect();
     assert_eq!(snapshots.len(), 1);
-    assert_eq!(snapshots[0].len(), 300);
+    assert_eq!(snapshots[0].events.len(), 256);
+    assert_eq!(snapshots[0].events.first().expect("first").cursor.raw(), 45);
+    assert_eq!(snapshots[0].events.last().expect("last").cursor.raw(), 300);
+    assert_eq!(snapshots[0].before, Some(45));
     assert_eq!(
         *fixture.attachments.lock().expect("attachment log"),
         vec![Some(300), Some(301)]
@@ -727,7 +778,7 @@ async fn expired_cursor_reloads_the_retained_window() {
     assert_eq!(
         updates
             .iter()
-            .filter(|update| matches!(update, Update::Snapshot { .. }))
+            .filter(|update| matches!(update, Update::HistoryWindow { .. }))
             .count(),
         2
     );

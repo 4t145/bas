@@ -102,11 +102,7 @@ fn runtime_failure_gates_current_and_background_without_rewriting_committed_stat
                 "neither queue nor composer sends"
             );
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: healthy.clone(),
-                    events: Vec::new(),
-                },
+                history_window(view.selected.epoch, healthy.clone(), Vec::new()),
                 window,
                 cx,
             );
@@ -123,6 +119,16 @@ fn runtime_failure_gates_current_and_background_without_rewriting_committed_stat
                     .items
                     .len(),
                 item_count
+            );
+            assert_eq!(
+                view.selected
+                    .timeline
+                    .conversation
+                    .as_ref()
+                    .expect("partial retained")
+                    .cursor,
+                2,
+                "committed history cannot rewind the partial reply cursor"
             );
             assert_eq!(view.composer.input.read(cx).value().as_ref(), "draft stays");
             view.update(
@@ -157,11 +163,7 @@ fn runtime_failure_gates_current_and_background_without_rewriting_committed_stat
             );
             assert!(view.sessions.healthy(current.id));
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: failed_current,
-                    events: Vec::new(),
-                },
+                history_window(view.selected.epoch, failed_current, Vec::new()),
                 window,
                 cx,
             );

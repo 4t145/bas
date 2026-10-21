@@ -41,6 +41,8 @@ impl Workspace {
             | Command::ResolvePrompt { session, .. }
             | Command::RespondPermission { session, .. }
             | Command::RespondElicitation { session, .. }
+            | Command::Resume { session, .. }
+            | Command::OlderHistory { session, .. }
             | Command::Watch { session, .. } => Some(*session),
             Command::SetConfig(request) => request.session_id.to_string().parse().ok(),
             _ => None,
@@ -200,11 +202,21 @@ impl Workspace {
                     self.selected.error = Some(message);
                 }
             }
-            Command::Watch { session, epoch } => {
+            Command::Watch { session, epoch } | Command::Resume { session, epoch, .. } => {
                 if self.selected.id == Some(session) && self.selected.epoch == epoch {
                     self.selected.stream = StreamState::Unavailable(message.into());
                 }
             }
+            Command::OlderHistory {
+                session,
+                epoch,
+                before,
+            } => {
+                if self.selected.id == Some(session) && self.selected.epoch == epoch {
+                    self.older_history_loaded(before, Err(message.into()), cx);
+                }
+            }
+            Command::ForgetHistory(_) => {}
             Command::Refresh | Command::Detach | Command::Foreground(_) => {}
         }
         cx.notify();

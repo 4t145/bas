@@ -1,107 +1,183 @@
 use super::*;
-use prost::Message as _;
+use std::collections::{HashMap, HashSet};
 
-const MAX_LOAD_TIME: Duration = Duration::from_secs(10 * 60);
-const MAX_HISTORY_BYTES: usize = 128 * 1024 * 1024;
+const FLUSH_INTERVAL: Duration = Duration::from_millis(200);
+const BATCH_SIZE: usize = 64;
+const WRITE_CAPACITY: usize = 256;
 
-/// Read a retained history with a deadline for each RPC, not for the entire
-/// conversation. Large histories may legitimately take many successful pages.
-///
-/// # Errors
-/// Reports stalled RPCs, invalid payloads and non-advancing pagination.
-pub(super) async fn snapshot(
-    client: &mut Client,
-    session: SessionId,
-    timeout: Duration,
-    progress: impl FnMut(usize),
-) -> Result<Snapshot, Failure> {
-    tokio::time::timeout(
-        MAX_LOAD_TIME,
-        load_pages(client, session, timeout, progress),
-    )
-    .await
-    .map_err(|_| Failure::Condition(Condition::HistoryTimeLimit))?
+pub(super) struct Knowledge {
+    index: bas::model::history::DependencyIndex,
+    partial: bool,
+    required_frontier: u64,
 }
 
-async fn load_pages(
-    client: &mut Client,
-    session: SessionId,
-    timeout: Duration,
-    mut progress: impl FnMut(usize),
-) -> Result<Snapshot, Failure> {
-    let started = std::time::Instant::now();
-    tracing::debug!(%session, "Loading conversation history");
-    let mut events = Vec::new();
-    let mut after = None;
-    let mut pages = 0usize;
-    let mut bytes = 0usize;
-    loop {
-        let page = tokio::time::timeout(
-            timeout,
-            client.load_history(pb::LoadHistoryRequest {
-                session: session.to_string(),
-                after,
-                limit: HISTORY_PAGE_SIZE,
-            }),
-        )
-        .await
-        .map_err(|_| Failure::Timeout)?
-        .map_err(Failure::from)?
-        .into_inner();
-        account_bytes(&mut bytes, page.encoded_len())?;
-        if page
-            .next
-            .is_some_and(|next| next <= after.unwrap_or(0) || page.events.is_empty())
-        {
-            return Err(Failure::Condition(Condition::RepeatedHistoryCursor));
+impl Default for Knowledge {
+    fn default() -> Self {
+        Self {
+            index: Default::default(),
+            partial: true,
+            required_frontier: 0,
         }
-        for event in page.events {
-            let event: Event = event
-                .try_into()
-                .map_err(|error: bas::service::Error| Failure::InvalidPayload(error.to_string()))?;
-            if event.session != session {
-                return Err(Failure::InvalidPayload(
-                    "history returned another session".into(),
-                ));
+    }
+}
+
+impl Knowledge {
+    pub(super) fn require(&mut self, frontier: u64) {
+        self.required_frontier = frontier;
+    }
+
+    pub(super) fn validate(&self, frontier: u64) -> Result<(), Failure> {
+        if frontier < self.required_frontier {
+            return Err(Failure::InvalidPayload(
+                "refreshed history does not include the live dependency".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn reset(&mut self, window: &HistoryWindow) {
+        self.index = Default::default();
+        self.partial = window.before.is_some();
+        for event in window.context.iter().chain(&window.events) {
+            self.index.observe(event);
+        }
+    }
+
+    pub(super) fn needs_reload(&self, event: &Event) -> bool {
+        self.partial && self.index.may_reference_unloaded(event)
+    }
+
+    pub(super) fn observe(&mut self, event: &Event) {
+        self.index.observe(event);
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct Store {
+    cache: Option<cache::Cache>,
+    writes: mpsc::Sender<Write>,
+}
+
+enum Write {
+    Window(Box<HistoryWindow>),
+    Event(Box<Event>),
+    Forget(SessionId),
+    Flush,
+}
+
+impl Store {
+    pub(super) fn new(cache: Option<cache::Cache>) -> (Self, JoinHandle<()>) {
+        let (writes, receiver) = mpsc::channel(WRITE_CAPACITY);
+        let task = tokio::spawn(write_loop(cache.clone(), receiver));
+        (Self { cache, writes }, task)
+    }
+
+    pub(super) async fn window(&self, window: &HistoryWindow) {
+        let _ = self
+            .writes
+            .send(Write::Window(Box::new(window.clone())))
+            .await;
+    }
+
+    pub(super) async fn event(&self, event: &Event) {
+        if !event.is_transient() {
+            let _ = self
+                .writes
+                .send(Write::Event(Box::new(event.clone())))
+                .await;
+        }
+    }
+
+    pub(super) async fn flush(&self) {
+        let _ = self.writes.send(Write::Flush).await;
+    }
+
+    pub(super) async fn forget(&self, session: SessionId) {
+        let _ = self.writes.send(Write::Forget(session)).await;
+    }
+
+    pub(super) async fn latest(&self, session: SessionId) -> Option<HistoryWindow> {
+        match self.cache.as_ref()?.load_latest(session).await {
+            Ok(window) => window,
+            Err(error) => {
+                tracing::warn!(%session, %error, "Cannot read cached history");
+                None
             }
-            events.push(event);
-        }
-        pages += 1;
-        progress(events.len());
-        tracing::debug!(%session, pages, loaded = events.len(), next = ?page.next, "Loaded history page");
-        after = page.next;
-        if after.is_none() {
-            break;
         }
     }
-    let meta = tokio::time::timeout(
-        timeout,
-        client.get_session(pb::GetSessionRequest {
-            session: session.to_string(),
-        }),
-    )
-    .await
-    .map_err(|_| Failure::Timeout)?
-    .map_err(Failure::from)?
-    .into_inner()
-    .session
-    .ok_or(Failure::Condition(Condition::MissingSessionInfo))?
-    .try_into()
-    .map_err(|error: bas::service::Error| Failure::InvalidPayload(error.to_string()))?;
-    tracing::info!(%session, pages, loaded = events.len(), elapsed_ms = started.elapsed().as_millis(), "Conversation history loaded");
-    Ok(Snapshot {
-        session: meta,
-        events,
-    })
-}
 
-fn account_bytes(total: &mut usize, page: usize) -> Result<(), Failure> {
-    *total = total.saturating_add(page);
-    if *total > MAX_HISTORY_BYTES {
-        return Err(Failure::Condition(Condition::HistorySizeLimit));
+    pub(super) async fn older(
+        &self,
+        mut client: Client,
+        session: SessionId,
+        before: u64,
+    ) -> Result<HistoryWindow, Failure> {
+        if let Some(cache) = &self.cache {
+            match cache.load_before(session, before).await {
+                Ok(Some(window)) => return Ok(window),
+                Ok(None) => {}
+                Err(error) => tracing::warn!(%session, %error, "Cannot read cached older history"),
+            }
+        }
+        let window = client
+            .history_window(session, Some(before), HISTORY_PAGE_SIZE, REQUEST_TIMEOUT)
+            .await
+            .map_err(Failure::from)?;
+        self.window(&window).await;
+        Ok(window)
     }
-    Ok(())
 }
 
-#[cfg(test)]
-mod tests;
+async fn flush(cache: &cache::Cache, pending: &mut HashMap<SessionId, Vec<Event>>) {
+    for (session, events) in pending.drain() {
+        if let Err(error) = cache.append(session, &events).await {
+            tracing::warn!(%session, %error, "Cannot persist live history");
+        }
+    }
+}
+
+async fn write_loop(cache: Option<cache::Cache>, mut writes: mpsc::Receiver<Write>) {
+    let mut pending = HashMap::<SessionId, Vec<Event>>::new();
+    let mut forgotten = HashSet::new();
+    let mut interval = tokio::time::interval(FLUSH_INTERVAL);
+    loop {
+        let write = tokio::select! {
+            write = writes.recv() => write,
+            _ = interval.tick() => Some(Write::Flush),
+        };
+        let Some(cache) = &cache else {
+            if write.is_none() {
+                return;
+            }
+            continue;
+        };
+        match write {
+            Some(Write::Event(event)) if !forgotten.contains(&event.session) => {
+                let batch = pending.entry(event.session).or_default();
+                batch.push(*event);
+                if batch.len() >= BATCH_SIZE {
+                    flush(cache, &mut pending).await;
+                }
+            }
+            Some(Write::Window(window)) if !forgotten.contains(&window.session.meta.id) => {
+                flush(cache, &mut pending).await;
+                if let Err(error) = cache.store_window(&window).await {
+                    tracing::warn!(%error, "Cannot persist history window");
+                }
+            }
+            Some(Write::Forget(session)) => {
+                forgotten.insert(session);
+                pending.remove(&session);
+                if let Err(error) = cache.remove(session).await {
+                    tracing::warn!(%session, %error, "Cannot remove cached history");
+                }
+            }
+            Some(Write::Flush) => flush(cache, &mut pending).await,
+            None => {
+                flush(cache, &mut pending).await;
+                return;
+            }
+            _ => {}
+        }
+    }
+}

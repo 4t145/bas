@@ -1,16 +1,18 @@
 use super::*;
 
 #[tokio::test]
-async fn failed_snapshot_delivers_history_before_unavailable_without_attaching() {
+async fn failed_runtime_delivers_recent_history_before_unavailable_without_attaching() {
     let fixture = fixture(Scenario::RuntimeFailure).await;
     let updates = collect(&fixture).await;
     assert!(matches!(&updates[..], [
         Update::Stream { state: StreamState::Loading, .. },
-        Update::HistoryProgress { loaded: 256, .. },
-        Update::HistoryProgress { loaded: 300, .. },
-        Update::Snapshot { session, events, .. },
+        Update::HistoryWindow { window, .. },
         Update::Stream { state: StreamState::Unavailable(message), .. },
-    ] if session.runtime.failure.is_some() && events.len() == 300 && message.presentation().contains("disk full")));
+    ] if window.session.runtime.failure.is_some()
+        && window.events.len() == 256
+        && window.events.first().expect("first retained event").cursor.raw() == 45
+        && window.events.last().expect("last retained event").cursor.raw() == 300
+        && message.presentation().contains("disk full")));
     assert!(fixture.attachments.lock().expect("attachments").is_empty());
 }
 

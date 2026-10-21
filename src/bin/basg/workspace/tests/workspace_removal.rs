@@ -8,7 +8,10 @@ fn archive_requests(fixture: &mut Fixture) -> HashSet<SessionId> {
                 session,
                 archived: true,
             } => Some(session),
-            Command::Foreground(_) | Command::Watch { .. } | Command::Detach => None,
+            Command::Foreground(_)
+            | Command::Watch { .. }
+            | Command::Resume { .. }
+            | Command::Detach => None,
             _ => panic!("removing a workspace must only archive and change navigation"),
         })
         .collect()

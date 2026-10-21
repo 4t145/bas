@@ -5,7 +5,8 @@ use super::*;
 impl Workspace {
     pub(super) fn update(&mut self, update: Update, window: &mut Window, cx: &mut Context<Self>) {
         let target = match &update {
-            Update::Snapshot { session, .. } => Some(session.meta.id),
+            Update::HistoryMeta { session, .. } => Some(session.meta.id),
+            Update::HistoryWindow { window, .. } => Some(window.session.meta.id),
             Update::Event { event, .. } | Update::TrackedTurn { event } => Some(event.session),
             Update::ElicitationResponded { session, .. }
             | Update::PermissionResponded { session, .. }
@@ -27,7 +28,7 @@ impl Workspace {
             | Update::DeletedAgentHistory { .. }
             | Update::Catalog(_)
             | Update::AuthenticationRequired { .. }
-            | Update::HistoryProgress { .. }
+            | Update::OlderHistory { .. }
             | Update::Stream { .. }
             | Update::Permissions { .. }
             | Update::PermissionUnavailable { .. }
@@ -36,9 +37,6 @@ impl Workspace {
         };
         if target.is_some_and(|id| self.sessions.removed.contains(&id)) {
             return;
-        }
-        if let Update::Snapshot { session, .. } = &update {
-            self.sessions.runtimes.observe(session, false);
         }
         match update {
             // History discovery and mutations belong to the independent history window.
@@ -314,80 +312,50 @@ impl Workspace {
             Update::Cancelled { session, result } => {
                 self.cancelled(session, result.map_err(|error| error.presentation()));
             }
-            Update::Snapshot {
+            Update::HistoryWindow {
                 epoch,
-                session,
-                events,
-            } if epoch == self.selected.epoch && self.selected.id == Some(session.meta.id) => {
-                let session = session.meta;
-                self.selected.timeline.clear_caches();
-                let known = self
-                    .sessions
-                    .entries
-                    .iter()
-                    .find(|meta| meta.id == session.id)
-                    .unwrap_or(&session);
-                // A failed runtime may have partial display content not represented by
-                // this history page. Keep it while replaying committed history idempotently.
-                let mut conversation = if !self.sessions.healthy(session.id)
-                    && self
-                        .selected
-                        .timeline
-                        .conversation
-                        .as_ref()
-                        .is_some_and(|old| old.session.id == session.id)
-                {
-                    self.selected
-                        .timeline
-                        .conversation
-                        .take()
-                        .expect("current conversation was checked")
-                } else {
-                    Conversation::new(known.clone())
-                };
-                conversation.merge_meta(known);
-                conversation.merge_meta(&session);
-                if let Some(old) = &self.selected.timeline.conversation
-                    && old.session.id == session.id
-                {
-                    conversation.merge_meta(&old.session);
-                }
-                let incomplete_history = events.iter().enumerate().any(|(index, event)| {
-                    event.session != session.id || event.cursor.raw() != index as u64 + 1
-                });
-                if incomplete_history {
-                    self.sessions.unstarted.remove(&session.id);
-                } else if !events.is_empty()
-                    && events
-                        .last()
-                        .is_some_and(|event| event.cursor >= conversation.session.revision)
-                    && !self.sessions.prompted.contains(&session.id)
-                {
-                    self.sessions.unstarted.insert(session.id);
-                }
-                if conversation.session.status == SessionStatus::Working
-                    || conversation.session.active_turn.is_some()
-                {
-                    self.record_user_prompt(session.id);
-                }
-                for event in events {
-                    self.observe_user_prompt(&event);
-                    if let Some(outbox) = self.sessions.outboxes.get_mut(&event.session) {
-                        outbox.observe(&event);
-                    }
-                    conversation.apply(event);
-                }
+                window: history,
+                cached,
+            } if epoch == self.selected.epoch => {
+                self.apply_history_window(history, cached, cx);
+            }
+            Update::OlderHistory {
+                epoch,
+                before,
+                result,
+            } if epoch == self.selected.epoch => {
+                self.older_history_loaded(before, result, cx);
+            }
+            Update::HistoryMeta { epoch, session }
+                if epoch == self.selected.epoch && self.selected.id == Some(session.meta.id) =>
+            {
+                self.sessions.runtimes.observe(&session, false);
                 if let Some(meta) = self
                     .sessions
                     .entries
                     .iter_mut()
-                    .find(|meta| meta.id == session.id)
+                    .find(|meta| meta.id == session.meta.id)
                 {
-                    crate::conversation::merge_meta(meta, &conversation.session);
+                    crate::conversation::merge_meta(meta, &session.meta);
                 }
-                self.selected.timeline.show(conversation);
+                if let Some(conversation) = &mut self.selected.timeline.conversation {
+                    conversation.merge_meta(&session.meta);
+                }
+                if let Some(history) = &mut self.selected.timeline.history {
+                    crate::conversation::merge_meta(&mut history.session.meta, &session.meta);
+                    history.session.runtime = session.runtime;
+                }
             }
             Update::Event { epoch, event } if epoch == self.selected.epoch => {
+                if let Some(history) = &mut self.selected.timeline.history
+                    && event.session == history.session.meta.id
+                    && !event.is_transient()
+                    && event.cursor.raw() > history.cursor
+                {
+                    history.cursor = event.cursor.raw();
+                    history.session.meta.apply_event(&event);
+                    history.events.push(event.clone());
+                }
                 self.observe_user_prompt(&event);
                 if let Some(meta) = self
                     .sessions
@@ -472,9 +440,6 @@ impl Workspace {
             Update::Stream { epoch, state } if epoch == self.selected.epoch => {
                 self.selected.stream = state
             }
-            Update::HistoryProgress { epoch, loaded } if epoch == self.selected.epoch => {
-                self.selected.history_loaded = loaded;
-            }
             Update::Permissions { epoch, pending } if epoch == self.selected.epoch => {
                 self.selected.approval.error = None;
                 self.selected.approval.panel.replace(pending);
@@ -504,9 +469,10 @@ impl Workspace {
                     outbox.pause();
                 }
             }
-            Update::Snapshot { .. }
+            Update::HistoryWindow { .. }
+            | Update::OlderHistory { .. }
+            | Update::HistoryMeta { .. }
             | Update::Event { .. }
-            | Update::HistoryProgress { .. }
             | Update::Stream { .. }
             | Update::Permissions { .. }
             | Update::PermissionUnavailable { .. } => {}

@@ -84,6 +84,7 @@ gpui_kit::assets::icon_assets!(
         Globe,
         ListTodo,
         ListClock,
+        ListX,
         Circle,
         Clock,
         Volume2,

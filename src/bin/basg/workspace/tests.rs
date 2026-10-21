@@ -7,12 +7,14 @@ use super::{navigation as workspace_navigation, *};
 mod approval;
 mod archive;
 mod composer_queue;
+mod connection_transition;
 mod connections;
 mod directories;
 mod history;
 mod interruption;
 mod navigation;
 mod operations;
+mod paged_history;
 mod picker;
 mod read_state;
 mod runtime;
@@ -98,6 +100,20 @@ fn session() -> SessionMeta {
     let mut session = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
     session.status = SessionStatus::Idle;
     session
+}
+
+fn history_window(epoch: u64, session: bas::model::SessionSnapshot, events: Vec<Event>) -> Update {
+    Update::HistoryWindow {
+        epoch,
+        window: bas::service::HistoryWindow {
+            session,
+            cursor: events.last().map_or(0, |event| event.cursor.raw()),
+            events,
+            context: Vec::new(),
+            before: None,
+        },
+        cached: false,
+    }
 }
 
 #[gpui_kit::test]
@@ -198,10 +214,10 @@ fn catalog_and_history_merge_metadata_without_skipping_content(cx: &mut TestAppC
                 },
             );
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: old.clone().into(),
-                    events: vec![
+                history_window(
+                    view.selected.epoch,
+                    old.clone().into(),
+                    vec![
                         Event::new(
                             newest.id,
                             Cursor::from_raw(4),
@@ -211,7 +227,7 @@ fn catalog_and_history_merge_metadata_without_skipping_content(cx: &mut TestAppC
                         ),
                         finish,
                     ],
-                },
+                ),
                 window,
                 cx,
             );
@@ -367,11 +383,7 @@ fn attach(fixture: &Fixture, session: SessionMeta, cx: &mut TestAppContext) {
             view.sessions.entries.push(session.clone());
             view.select(session.id, window, cx);
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: session.into(),
-                    events: Vec::new(),
-                },
+                history_window(view.selected.epoch, session.into(), Vec::new()),
                 window,
                 cx,
             );
@@ -536,11 +548,7 @@ fn selecting_an_agent_initializes_options_before_any_prompt(cx: &mut TestAppCont
             assert_eq!(view.selected.id, Some(created.id));
             assert_eq!(view.composer.input.read(cx).value(), "代码审查");
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: created.clone().into(),
-                    events: vec![],
-                },
+                history_window(view.selected.epoch, created.clone().into(), vec![]),
                 window,
                 cx,
             );
@@ -1183,11 +1191,7 @@ fn folded_reply_stays_unread_until_opened_and_survives_replay(cx: &mut TestAppCo
         fixture.view.update(cx, |view, cx| {
             view.toggle_output(window, cx);
             view.update(
-                Update::Snapshot {
-                    epoch: view.selected.epoch,
-                    session: session.clone().into(),
-                    events,
-                },
+                history_window(view.selected.epoch, session.clone().into(), events),
                 window,
                 cx,
             );

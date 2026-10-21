@@ -299,6 +299,11 @@ impl Conversation {
         }
         let index = self.items.len();
         let mut message = Message::new(role, vec![content]);
+        // Presentation IDs survive replay and prepending pages within a session.
+        message.id = uuid::Uuid::from_u128(u128::from(self.cursor))
+            .to_string()
+            .parse()
+            .expect("an event cursor produces a valid message UUID");
         message.at = at;
         self.items.push(Item::Message {
             message,

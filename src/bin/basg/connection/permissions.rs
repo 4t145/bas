@@ -1,12 +1,42 @@
 use super::*;
 
 /// Open the approval stream before loading history so a live UI owns permissions.
+#[cfg(test)]
 pub(super) async fn watch_session(
-    mut client: Client,
+    client: Client,
     updates: mpsc::Sender<Update>,
     session: SessionId,
     epoch: u64,
 ) {
+    let (store, writer) = history::Store::new(None);
+    watch_cached(client, updates, session, epoch, None, store).await;
+    let _ = writer.await;
+}
+
+pub(super) async fn watch_cached(
+    mut client: Client,
+    updates: mpsc::Sender<Update>,
+    session: SessionId,
+    epoch: u64,
+    mut cursor: Option<u64>,
+    store: history::Store,
+) {
+    if cursor.is_none()
+        && let Some(window) = store.latest(session).await
+    {
+        cursor = Some(window.cursor);
+        if updates
+            .send(Update::HistoryWindow {
+                epoch,
+                window,
+                cached: true,
+            })
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
     tracing::debug!(%session, epoch, "Opening conversation permissions");
     let stream = open(&mut client, session).await;
     if let Err(error) = &stream {
@@ -15,7 +45,7 @@ pub(super) async fn watch_session(
     let approvals = watch_permissions(client.clone(), updates.clone(), session, epoch, stream);
     let elicitations = super::elicitations::watch(client.clone(), updates.clone(), session, epoch);
     tokio::join!(
-        super::watch(client, updates, session, epoch),
+        super::watch_cached(client, updates, session, epoch, cursor, store),
         approvals,
         elicitations
     );

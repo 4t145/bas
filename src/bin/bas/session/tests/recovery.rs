@@ -101,6 +101,14 @@ impl Storage for PausedCommit {
     ) -> BoxFuture<'a, Result<storage::Page, storage::Error>> {
         self.inner.page(id, after, limit)
     }
+    fn window(
+        &self,
+        id: SessionId,
+        before: Option<Cursor>,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<storage::Window, storage::Error>> {
+        self.inner.window(id, before, limit)
+    }
     fn tail(
         &self,
         id: SessionId,

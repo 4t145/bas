@@ -5,9 +5,6 @@ pub(crate) enum Condition {
     MissingCreatedSession,
     MissingArchivedSession,
     MissingSessionInfo,
-    RepeatedHistoryCursor,
-    HistoryTimeLimit,
-    HistorySizeLimit,
     UnknownSubmission,
     ElicitationWrongSession,
     ElicitationEnded,
@@ -92,15 +89,6 @@ impl Failure {
                     crate::i18n::tr!("session-archive-empty").into()
                 }
                 Condition::MissingSessionInfo => crate::i18n::tr!("session-info-empty").into(),
-                Condition::RepeatedHistoryCursor => {
-                    crate::i18n::tr!("session-history-cursor").into()
-                }
-                Condition::HistoryTimeLimit => {
-                    crate::i18n::tr!("session-history-time-limit").into()
-                }
-                Condition::HistorySizeLimit => {
-                    crate::i18n::tr!("session-history-size-limit").into()
-                }
                 Condition::UnknownSubmission => crate::i18n::tr!("submission-unknown").into(),
                 Condition::ElicitationWrongSession => {
                     crate::i18n::tr!("interaction-wrong-session").into()

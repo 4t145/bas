@@ -163,8 +163,11 @@ impl Workspace {
     }
 
     pub(super) fn render_timeline(&self, cx: &mut Context<Self>) -> AnyElement {
-        let awaiting_snapshot =
-            self.selected.awaiting_snapshot() && self.selected.authentication.panel.is_none();
+        if self.awaiting_connection() {
+            return self.render_connection_transition(cx);
+        }
+        let awaiting_history =
+            self.selected.awaiting_history() && self.selected.authentication.panel.is_none();
         let empty = self
             .selected
             .timeline
@@ -181,8 +184,8 @@ impl Workspace {
                 min_h_0;
                 size_full;
             } [
-                ..$awaiting_snapshot.then(|| self.render_history_transition(cx)),
-                ..$((empty && !awaiting_snapshot && self.selected.authentication.panel.is_none()).then(|| self.render_empty_timeline(cx))),
+                ..$awaiting_history.then(|| self.render_history_transition(cx)),
+                ..$((empty && !awaiting_history && self.selected.authentication.panel.is_none()).then(|| self.render_empty_timeline(cx))),
                 ..$((!empty).then(|| self.render_timeline_list(cx))),
                 ..$((!self.selected.approval.panel.is_empty()).then(|| self.render_timeline_approval(cx))),
                 ..$self.render_queue_panel(cx),
@@ -233,12 +236,6 @@ impl Workspace {
             }
             _ => None,
         };
-        let progress = (loading && self.selected.history_loaded > 0).then(|| {
-            crate::i18n::tr!(
-                "session-history-progress",
-                count = self.selected.history_loaded
-            )
-        });
         let retry = !loading && self.selected.id.is_some();
         gds_uim::el! { #content_panel() {
             id: "conversation-history-transition"; test_support;
@@ -250,7 +247,6 @@ impl Workspace {
                 "conversation-history-loading", IconName::LoaderCircle, cx.theme().muted_foreground, true
             )),
             $label,
-            ..progress,
             ..$failure.map(|message| crate::ui::feedback(
                 "history-load-error", message, cx.theme().danger
             )),
@@ -322,6 +318,7 @@ impl Workspace {
                         .viewport_from_layout()
                         .mode(gpui_kit::base::ScrollbarMode::Always),
                 ],
+                ..$self.render_older_history(cx),
             ]
         }
         .into_any_element()

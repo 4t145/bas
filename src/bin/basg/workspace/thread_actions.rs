@@ -17,6 +17,7 @@ impl Workspace {
             self.sessions.pending.forget(session);
             self.sessions.seen_replies.remove(&session);
             self.renaming.forget(session);
+            self.command(Command::ForgetHistory(session), cx);
         }
         if let Some(store) = &mut self.navigation.restore.store
             && let Err(error) = store.forget_reads(removed)

@@ -5,6 +5,7 @@ mod archive;
 mod authentication;
 #[cfg(unix)]
 mod directories;
+mod history;
 #[cfg(unix)]
 mod logout;
 mod management;

@@ -17,6 +17,12 @@ use futures::future::BoxFuture;
 #[cfg(test)]
 #[path = "storage/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "storage/window_bench.rs"]
+mod window_bench;
+#[cfg(test)]
+#[path = "storage/window_tests.rs"]
+mod window_tests;
 
 /// Private backend state. Version and bytes are deliberately opaque to storage and clients.
 /// In version 1, ACP session ids can be stored as their UTF-8 bytes.
@@ -56,6 +62,15 @@ pub struct Page {
     pub events: Vec<Event>,
     /// Cursor to pass as `after` for the next page; `None` means exhausted.
     pub next: Option<Cursor>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Window {
+    pub meta: SessionMeta,
+    pub events: Vec<Event>,
+    pub context: Vec<Event>,
+    pub before: Option<Cursor>,
+    pub cursor: Cursor,
 }
 
 /// Small acceptance ledger entry retained until its session is deleted,
@@ -165,6 +180,18 @@ pub trait Storage: Send + Sync {
         after: Option<Cursor>,
         limit: usize,
     ) -> BoxFuture<'_, Result<Page, Error>>;
+    /// Reads a dependency-complete chronological suffix strictly before `before`.
+    /// Metadata and cursor describe one atomic snapshot, not the historical boundary.
+    ///
+    /// # Errors
+    /// Fails for zero limit, missing session, future cursor, evicted dependencies,
+    /// corrupt persisted data, or backend I/O errors.
+    fn window(
+        &self,
+        id: SessionId,
+        before: Option<Cursor>,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<Window, Error>>;
     /// Returns the most recent `count` events in ascending cursor order.
     ///
     /// # Errors
@@ -221,6 +248,18 @@ fn check_page(after: Option<Cursor>, limit: usize, latest: Cursor) -> Result<(),
     }
     if let Some(requested) = after
         && requested > latest
+    {
+        return Err(Error::Future { requested, latest });
+    }
+    Ok(())
+}
+
+fn check_window(before: Option<Cursor>, limit: usize, latest: Cursor) -> Result<(), Error> {
+    if limit == 0 {
+        return Err(Error::EmptyPage);
+    }
+    if let Some(requested) = before
+        && requested.raw() > latest.raw().saturating_add(1)
     {
         return Err(Error::Future { requested, latest });
     }

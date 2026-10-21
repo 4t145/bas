@@ -122,6 +122,14 @@ impl Storage for ControlledStore {
             self.inner.page(id, after, limit).await
         })
     }
+    fn window(
+        &self,
+        id: SessionId,
+        before: Option<Cursor>,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<storage::Window, storage::Error>> {
+        self.inner.window(id, before, limit)
+    }
     fn tail(
         &self,
         id: SessionId,

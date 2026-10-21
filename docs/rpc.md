@@ -269,6 +269,55 @@ GUI 在归档时保留草稿和未发队列并暂停派发，恢复本身不自�
 归档功能需更新 daemon、CLI 与 GUI；旧 daemon 返回 `UNIMPLEMENTED` 时应提示升级，
 不能把新增字段的默认 `false` 当作旧服务支持归档的证据。
 
+### 最近优先的历史窗口
+
+`LoadHistoryWindow { session, before?, limit }` 与原有 `LoadHistory` 分开。
+`before` 缺省读取最新内容；指定时只读取严格小于该游标的事件。`limit` 必须为正，
+是目标数量而非硬截断：服务端沿消息、工具、压缩及终端依赖向前扩展，返回连续事件区间。
+ACP message ID 按角色和会话匹配，可以跨回合；没有 ID 的内容按 reducer 的相邻流式消息规则匹配。
+导入历史可以没有回合标记，不能把回合或固定事件条数当成安全切点。
+
+响应包含：
+
+- `session`：同一已提交快照的完整会话元数据和当前运行健康状态；
+- `events`：时间顺序排列、游标连续的原始事件，payload 和 cursor 不重写；
+- `context`：窗口之前仍需回放的全局展示状态（计划、用量等），以及窗口起点仍活动的原始
+  `TurnStarted`；不是另一份聊天记录；
+- `before`：下一次向前读取使用的排他上界，缺省表示历史已耗尽；
+- `cursor`：本次快照高水位。首次读取最新窗口后从这里 `Attach`，不会遗漏加载期间的新事件。
+
+客户端保留原始窗口事件。向前加载后以较旧窗口的 `context` 和拼接后的事件重建 reducer，
+不要把较新 context 插到较旧正文之前。向前加载响应的 `cursor` 是该次请求观察到的高水位，
+不能替代已打开最新窗口的实时续传游标；新事件仍由 Attach 接收。
+
+窗口和上下文一起超过 32 MiB gRPC 上限时返回 `RESOURCE_EXHAUSTED`，
+不会缩短为半条消息或静默跳过依赖。前端与后端必须一起升级，
+客户端不提供旧 daemon 的完整历史兼容路径。
+Memory 不能恢复已淘汰的依赖，遇到缺失内容返回 `DATA_LOSS`。
+LocalDb 保存可重建的依赖索引，旧记录首次使用时可能需要构建索引；后续页面复用索引，
+不为每次分页重新读取完整历史，也不在 daemon 中缓存大量完整会话。
+真实依赖可能跨越整个会话，因此不能保证每个最新窗口都是小页面或具有固定加载延迟。
+
+共享 Rust API 为 `impl Client` 成员，返回 `tonic::Status`：
+
+```rust,ignore
+let recent = client.history_window(session, None, 256, timeout).await?;
+let older = client.history_window(session, recent.before, 256, timeout).await?;
+```
+
+`HistoryWindow` 从 `bas::service` 导出，支持 Clone 和 Serde。
+共享加载器校验会话身份、游标顺序、连续性和分页进展。
+每次 `history_window` RPC 独立超时；原始 `LoadHistory` API、daemon 与 CLI 用法不变。
+
+实时追加使用 `bas::model::history::DependencyIndex`：按顺序 `observe(&event)`
+已有 context 和窗口事件，收到新事件后先检查 `may_reference_unloaded(&event)`。
+若历史尚未全部加载且该方法返回 true，应重新读取最新的依赖对齐窗口，而不是先创建孤立消息或工具；
+否则再 `observe` 并应用事件。未知显式 ID 可能表示新项目，也可能引用未加载历史，
+所以该检查有意保守。全局 running/idle 展示可从会话快照初始化；
+context 不添加历史回合完成或错误通知，以免产生窗口外的虚构聊天条目。
+`TurnStarted` 只作为不产生可见条目的状态种子，不因 `TurnFinished` 将整个长回合拉入窗口。
+计划 context 保留当前插入代的首次事件及最后快照，维持 reducer 的计划顺序。
+
 ### 回放与输入边界
 
 可回放的 ACP 更新进入历史，包括流式内容块、计划、用量与压缩。

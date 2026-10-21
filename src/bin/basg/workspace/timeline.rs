@@ -1,0 +1,412 @@
+//! Paged timeline presentation and a small hot set; durable history lives on disk.
+
+use std::collections::VecDeque;
+
+use bas::service::HistoryWindow;
+use gpui_kit::ListOffset;
+
+use super::*;
+
+const HOT_SESSIONS: usize = 4;
+const HOT_BYTES: usize = 32 * 1024 * 1024;
+const PREFETCH_ROWS: usize = 3;
+
+#[derive(Clone)]
+pub(super) struct Position {
+    item: Option<String>,
+    offset: Pixels,
+    following: bool,
+    first: u64,
+    expanded: HashSet<String>,
+}
+
+#[derive(Default)]
+pub(super) struct Cache {
+    entries: VecDeque<(SessionId, state::TimelineState, usize)>,
+    positions: HashMap<SessionId, Position>,
+    bytes: usize,
+}
+
+impl Cache {
+    #[cfg(all(test, feature = "gui-tests"))]
+    pub(super) fn hot_len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(super) fn remove(&mut self, id: SessionId) {
+        self.take(id);
+        self.positions.remove(&id);
+    }
+
+    fn take(&mut self, id: SessionId) -> Option<state::TimelineState> {
+        let index = self
+            .entries
+            .iter()
+            .position(|(session, _, _)| *session == id)?;
+        let (_, timeline, bytes) = self.entries.remove(index)?;
+        self.bytes -= bytes;
+        Some(timeline)
+    }
+
+    fn insert(&mut self, id: SessionId, mut timeline: state::TimelineState) {
+        self.take(id);
+        if let Some(position) = timeline.position() {
+            self.positions.insert(id, position);
+        }
+        // Parsed documents and decoded images are regenerated only when visible.
+        timeline.clear_caches();
+        timeline.bounds.borrow_mut().clear();
+        if let Some(conversation) = &mut timeline.conversation {
+            conversation.notices.clear();
+        }
+        timeline.loading_before = None;
+        timeline.older_error = None;
+        let Some(history) = &timeline.history else {
+            return;
+        };
+        // Account for the retained events and their reconstructed presentation.
+        let bytes = serde_json::to_vec(history)
+            .map(|bytes| bytes.len().saturating_mul(3))
+            .unwrap_or(usize::MAX);
+        if bytes > HOT_BYTES {
+            return;
+        }
+        while self.entries.len() >= HOT_SESSIONS || self.bytes + bytes > HOT_BYTES {
+            let Some((_, _, evicted)) = self.entries.pop_front() else {
+                break;
+            };
+            self.bytes -= evicted;
+        }
+        self.bytes += bytes;
+        self.entries.push_back((id, timeline, bytes));
+    }
+}
+
+impl state::TimelineState {
+    fn position(&self) -> Option<Position> {
+        let conversation = self.conversation.as_ref()?;
+        let top = self.list.logical_scroll_top();
+        Some(Position {
+            item: conversation
+                .rows
+                .get(top.item_ix)
+                .and_then(|row| conversation.items.get(row.items.start))
+                .map(Item::id),
+            offset: top.offset_in_item,
+            following: self.list.is_following_tail(),
+            first: self
+                .history
+                .as_ref()
+                .and_then(|history| history.events.first())
+                .map_or(0, |event| event.cursor.raw()),
+            expanded: self.expanded.clone(),
+        })
+    }
+
+    fn restore_position(&mut self, position: Position) -> bool {
+        self.expanded = position.expanded.clone();
+        if position.following {
+            self.list.set_follow_mode(FollowMode::Tail);
+            return true;
+        }
+        let row = self.conversation.as_ref().and_then(|conversation| {
+            let item = conversation
+                .items
+                .iter()
+                .position(|item| Some(item.id()).as_ref() == position.item.as_ref())?;
+            conversation.row_for_item(item)
+        });
+        if let Some(item_ix) = row {
+            self.list.scroll_to(ListOffset {
+                item_ix,
+                offset_in_item: position.offset,
+            });
+            true
+        } else {
+            let can_restore = self.history.as_ref().is_some_and(|history| {
+                history.before.is_some_and(|before| before > position.first)
+            });
+            if can_restore {
+                self.restore = Some(position);
+            }
+            !can_restore
+        }
+    }
+}
+
+impl Workspace {
+    pub(super) fn timeline_list(cx: &mut Context<Self>) -> ListState {
+        let list = ListState::new(0, ListAlignment::Top, px(LIST_OVERDRAW));
+        let view = cx.entity().downgrade();
+        list.set_scroll_handler(move |_, _, cx| {
+            // The list is borrowed while delivering its scroll callback.
+            let view = view.clone();
+            cx.defer(move |cx| {
+                let _ = view.update(cx, |this, cx| {
+                    let list = &this.selected.timeline.list;
+                    if !list.is_following_tail()
+                        && list.logical_scroll_top().item_ix < PREFETCH_ROWS
+                        && this.selected.timeline.older_error.is_none()
+                    {
+                        this.load_older_history(cx);
+                    }
+                    cx.notify();
+                });
+            });
+        });
+        list.set_follow_mode(FollowMode::Tail);
+        list
+    }
+
+    pub(super) fn retain_timeline(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected.id else {
+            return;
+        };
+        let replacement = state::TimelineState::new(Self::timeline_list(cx));
+        let timeline = std::mem::replace(&mut self.selected.timeline, replacement);
+        if !self.sessions.removed.contains(&id) {
+            self.sessions.history.insert(id, timeline);
+        }
+    }
+
+    pub(super) fn restore_timeline(&mut self, id: SessionId) -> Option<u64> {
+        if let Some(timeline) = self.sessions.history.take(id) {
+            let cursor = timeline.conversation.as_ref().map(|state| state.cursor);
+            self.selected.timeline = timeline;
+            return cursor;
+        }
+        self.selected.timeline.restore = self.sessions.history.positions.get(&id).cloned();
+        None
+    }
+
+    pub(super) fn apply_history_window(
+        &mut self,
+        mut history: HistoryWindow,
+        cached: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let session = history.session.meta.id;
+        if self.selected.id != Some(session) {
+            return;
+        }
+        if let Some(old) = &self.selected.timeline.history
+            && old.session.meta.id == session
+            && let (Some(first), Some(previous)) = (history.events.first(), old.events.first())
+            && first.cursor > previous.cursor
+            && first.cursor.raw() <= old.cursor.saturating_add(1)
+            && history.cursor >= old.cursor
+        {
+            let prefix = old
+                .events
+                .partition_point(|event| event.cursor < first.cursor);
+            history
+                .events
+                .splice(0..0, old.events[..prefix].iter().cloned());
+            history.context = old.context.clone();
+            history.before = old.before;
+        }
+        if self.selected.timeline.loading_before.is_some()
+            && self.selected.timeline.loading_before != history.before
+        {
+            self.selected.timeline.loading_before = None;
+            self.selected.timeline.older_error = None;
+        }
+        let position = self
+            .selected
+            .timeline
+            .restore
+            .take()
+            .or_else(|| self.selected.timeline.position());
+        if !cached {
+            self.sessions.runtimes.observe(&history.session, false);
+        }
+        let mut meta = history.session.meta.clone();
+        if let Some(known) = self.sessions.entries.iter().find(|meta| meta.id == session) {
+            crate::conversation::merge_meta(&mut meta, known);
+        }
+        if let Some(old) = &self.selected.timeline.conversation
+            && old.session.id == session
+        {
+            crate::conversation::merge_meta(&mut meta, &old.session);
+        }
+        // Failed runtimes can have partial display content outside committed history.
+        let mut conversation = if !self.sessions.healthy(session)
+            && self
+                .selected
+                .timeline
+                .conversation
+                .as_ref()
+                .is_some_and(|old| old.session.id == session)
+        {
+            self.selected
+                .timeline
+                .conversation
+                .take()
+                .expect("current conversation was checked")
+        } else {
+            Conversation::new(meta.clone())
+        };
+        conversation.merge_meta(&meta);
+        let mut events: Vec<_> = history
+            .context
+            .iter()
+            .chain(&history.events)
+            .cloned()
+            .collect();
+        events.sort_by_key(|event| event.cursor);
+        events.dedup_by_key(|event| event.cursor);
+        let complete = history.before.is_none()
+            && history.events.iter().enumerate().all(|(index, event)| {
+                event.session == session && event.cursor.raw() == index as u64 + 1
+            });
+        if !complete {
+            self.sessions.unstarted.remove(&session);
+        } else if !history.events.is_empty()
+            && history
+                .events
+                .last()
+                .is_some_and(|event| event.cursor >= conversation.session.revision)
+            && !self.sessions.prompted.contains(&session)
+        {
+            self.sessions.unstarted.insert(session);
+        }
+        if conversation.session.status == SessionStatus::Working
+            || conversation.session.active_turn.is_some()
+        {
+            self.record_user_prompt(session);
+        }
+        for event in events {
+            self.observe_user_prompt(&event);
+            if let Some(outbox) = self.sessions.outboxes.get_mut(&session) {
+                outbox.observe(&event);
+            }
+            conversation.apply(event);
+        }
+        if conversation.foreground_state.is_none() {
+            conversation.foreground_state =
+                Some(if conversation.session.status == SessionStatus::Working {
+                    bas::acp_v2::StateUpdate::Running(bas::acp_v2::RunningStateUpdate::new())
+                } else {
+                    bas::acp_v2::StateUpdate::Idle(bas::acp_v2::IdleStateUpdate::new())
+                });
+        }
+        conversation.cursor = conversation.cursor.max(history.cursor);
+        if let Some(known) = self
+            .sessions
+            .entries
+            .iter_mut()
+            .find(|meta| meta.id == session)
+        {
+            crate::conversation::merge_meta(known, &conversation.session);
+        }
+        self.selected.timeline.clear_caches();
+        self.selected.timeline.history = Some(history);
+        self.selected.timeline.show(conversation);
+        if let Some(position) = position
+            && !self.selected.timeline.restore_position(position)
+        {
+            self.load_older_history(cx);
+        }
+    }
+
+    pub(super) fn load_older_history(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.selected.id else {
+            return;
+        };
+        let timeline = &mut self.selected.timeline;
+        let Some(before) = timeline.history.as_ref().and_then(|history| history.before) else {
+            return;
+        };
+        if timeline.loading_before.is_some() {
+            return;
+        }
+        timeline.loading_before = Some(before);
+        timeline.older_error = None;
+        self.command(
+            Command::OlderHistory {
+                session,
+                epoch: self.selected.epoch,
+                before,
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
+    pub(super) fn older_history_loaded(
+        &mut self,
+        before: u64,
+        result: Result<HistoryWindow, Failure>,
+        cx: &mut Context<Self>,
+    ) {
+        let timeline = &mut self.selected.timeline;
+        if timeline.loading_before != Some(before)
+            || timeline.history.as_ref().and_then(|history| history.before) != Some(before)
+        {
+            return;
+        }
+        timeline.loading_before = None;
+        let page = match result {
+            Ok(page) => page,
+            Err(error) => {
+                timeline.older_error = Some(error);
+                return;
+            }
+        };
+        let Some(history) = timeline.history.as_mut() else {
+            return;
+        };
+        if page.session.meta.id != history.session.meta.id
+            || page.events.last().map(|event| event.cursor.raw()) != before.checked_sub(1)
+            || page.before.is_some_and(|next| next >= before)
+        {
+            timeline.older_error = Some(Failure::InvalidPayload(
+                "history page does not join the displayed timeline".into(),
+            ));
+            return;
+        }
+        history.before = page.before;
+        history.context = page.context;
+        history.events.splice(0..0, page.events);
+        let history = history.clone();
+        // An older response may carry newer metadata, but cannot advance the live
+        // cursor or replace events received while that request was in flight.
+        self.apply_history_window(history, true, cx);
+    }
+
+    pub(super) fn render_older_history(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let timeline = &self.selected.timeline;
+        let loading = timeline.loading_before.is_some();
+        let error = timeline.older_error.as_ref();
+        if !loading && error.is_none() {
+            return None;
+        }
+        Some(gds_uim::el! {
+            #div {
+                id: "older-history-status"; test_support;
+                absolute; top_0; left_0; right_0; flex; justify_center; px_3;
+            } [
+                #div {
+                    flex; items_center; gap_2; px_3; py_1; max_w_full;
+                    rounded_md; bg: $cx.theme().background;
+                    text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                } [
+                    ..$loading.then(|| status::activity_icon(
+                        "older-history-loading", IconName::LoaderCircle,
+                        cx.theme().muted_foreground, true,
+                    )),
+                    ..$loading.then(|| crate::i18n::tr!("session-history-loading-older")),
+                    ..$error.map(|error| crate::ui::feedback(
+                        "older-history-error", error.presentation(), cx.theme().danger
+                    ).compact()),
+                    ..$error.map(|_| gds_uim::el! {
+                        #crate::ui::action_button("older-history-retry") {
+                            label: $crate::i18n::tr!("session-history-retry");
+                            on_click: $cx.listener(|this, _, _, cx| this.load_older_history(cx));
+                        }
+                    }),
+                ],
+            ]
+        }.into_any_element())
+    }
+}

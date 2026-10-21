@@ -247,6 +247,7 @@ fixture_service! {
     respond_permission(pb::RespondPermissionRequest) -> pb::RespondPermissionResponse;
     set_title(pb::SetTitleRequest) -> pb::SetTitleResponse;
     load_history(pb::LoadHistoryRequest) -> pb::LoadHistoryResponse;
+    load_history_window(pb::LoadHistoryWindowRequest) -> pb::LoadHistoryWindowResponse;
 }
 
 struct Fixture {

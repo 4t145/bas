@@ -12,6 +12,8 @@ use super::{
     validate_commit, validate_create,
 };
 
+#[path = "localdb/history.rs"]
+mod history;
 #[path = "localdb/worker.rs"]
 mod worker;
 pub use worker::LocalDb;
@@ -62,6 +64,11 @@ const MIGRATIONS: MigrationSet = MigrationSet::new(&[
         "accepted_prompts",
         include_str!("migrations/0002_accepted_prompts.sql"),
     ),
+    MigrationFile::new(
+        3,
+        "history_dependencies",
+        include_str!("migrations/0003_history_dependencies.sql"),
+    ),
 ]);
 
 /// Runs only on the dedicated database runtime.
@@ -103,7 +110,7 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
         .next()
         .ok_or(Error::Corrupt("missing schema version"))?;
     let version: i64 = field(&mut columns(version)?)?;
-    if !(0..=2).contains(&version) {
+    if !(0..=3).contains(&version) {
         return Err(Error::InvalidCommit("unsupported SQLite schema version"));
     }
     let tables = sql::query(
@@ -113,7 +120,7 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
     .await?;
     if (version == 0 && !tables.is_empty())
         || (version == 1 && tables.len() != 3)
-        || (version == 2 && tables.len() != 4)
+        || (version >= 2 && tables.len() != 4)
     {
         return Err(Error::Corrupt(
             "existing session schema is incomplete or unversioned",
@@ -170,7 +177,7 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
             ));
         }
     }
-    if version == 2 {
+    if version >= 2 {
         let rows = sql::query("PRAGMA table_info(accepted_prompts)")
             .exec(&mut db.clone())
             .await?;
@@ -370,6 +377,7 @@ impl SqliteStore {
                 .exec(&mut tx)
                 .await?;
         }
+        history::index(&mut tx, meta.id, meta.revision).await?;
         sql::statement(
             "UPDATE sessions SET metadata = ?1, updated_at = ?2, revision = ?3 WHERE id = ?4",
         )
@@ -520,6 +528,16 @@ impl SqliteStore {
             .bind(id.to_string())
             .exec(&mut tx)
             .await?;
+        for table in [
+            "history_index",
+            "history_dependencies",
+            "history_context_keys",
+        ] {
+            sql::statement(format!("DELETE FROM {table} WHERE session_id = ?1"))
+                .bind(id.to_string())
+                .exec(&mut tx)
+                .await?;
+        }
         tx.commit().await?;
         Ok(deleted)
     }

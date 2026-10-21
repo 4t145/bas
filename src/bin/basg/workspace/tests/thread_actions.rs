@@ -33,6 +33,7 @@ fn creation_receipt_after_catalog_removal_settles_without_reactivating(cx: &mut 
             assert!(view.selected.error.is_some());
             assert!(view.sessions.entries.is_empty());
             assert!(!view.sessions.drafts.contains_key(&removed.id));
+            assert!(matches!(fixture.commands.try_recv(), Ok(Command::ForgetHistory(id)) if id == removed.id));
             assert!(fixture.commands.try_recv().is_err());
         });
     })
@@ -113,15 +114,15 @@ fn catalog_removal_invalidates_selection_and_late_watch_updates(cx: &mut TestApp
                 let turn = bas::model::TurnId::new();
                 for incoming_epoch in [old_epoch, epoch] {
                     view.update(
-                        Update::Snapshot {
-                            epoch: incoming_epoch,
-                            session: removed.clone().into(),
-                            events: vec![Event::new(
+                        history_window(
+                            incoming_epoch,
+                            removed.clone().into(),
+                            vec![Event::new(
                                 removed.id,
                                 Cursor::from_raw(1),
                                 EventKind::TurnStarted { turn },
                             )],
-                        },
+                        ),
                         window,
                         cx,
                     );

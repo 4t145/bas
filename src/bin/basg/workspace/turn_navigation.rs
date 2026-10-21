@@ -65,6 +65,7 @@ impl Workspace {
 
     pub(super) fn scroll_conversation_to_top(&mut self, cx: &mut Context<Self>) {
         self.selected.timeline.list.scroll_to(ListOffset::default());
+        self.load_older_history(cx);
         cx.notify();
     }
 

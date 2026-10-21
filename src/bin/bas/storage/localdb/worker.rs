@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::{Error, Page, PromptAcceptance, ResumeData, SqliteStore, StoredSession};
 use crate::storage::Storage;
+use crate::storage::Window;
 
 type Reply<T> = oneshot::Sender<Result<T, Error>>;
 
@@ -23,6 +24,7 @@ enum Command {
     Load(SessionId, Reply<Option<StoredSession>>),
     List(Reply<Vec<SessionMeta>>),
     Page(SessionId, Option<Cursor>, usize, Reply<Page>),
+    Window(SessionId, Option<Cursor>, usize, Reply<Window>),
     Tail(SessionId, usize, Reply<Vec<Event>>),
     Delete(SessionId, Reply<bool>),
     #[cfg(test)]
@@ -52,6 +54,9 @@ impl Command {
             }
             Self::Page(id, after, limit, reply) => {
                 let _ = reply.send(store.page(id, after, limit).await);
+            }
+            Self::Window(id, before, limit, reply) => {
+                let _ = reply.send(store.window(id, before, limit).await);
             }
             Self::Tail(id, count, reply) => {
                 let _ = reply.send(store.tail(id, count).await);
@@ -186,6 +191,15 @@ impl Storage for LocalDb {
         Box::pin(self.request(move |reply| Command::Page(id, after, limit, reply)))
     }
 
+    fn window(
+        &self,
+        id: SessionId,
+        before: Option<Cursor>,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<Window, Error>> {
+        Box::pin(self.request(move |reply| Command::Window(id, before, limit, reply)))
+    }
+
     fn tail(&self, id: SessionId, count: usize) -> BoxFuture<'_, Result<Vec<Event>, Error>> {
         Box::pin(self.request(move |reply| Command::Tail(id, count, reply)))
     }
@@ -202,6 +216,8 @@ impl Storage for LocalDb {
 #[cfg(test)]
 pub(in crate::storage) enum TestSql {
     RejectThirdEvent,
+    ClearHistoryIndex,
+    CorruptFirstPayload,
 }
 
 #[cfg(test)]
@@ -211,6 +227,22 @@ impl TestSql {
 
         let mut db = store.db.clone();
         match self {
+            Self::ClearHistoryIndex => {
+                for table in [
+                    "history_index",
+                    "history_dependencies",
+                    "history_context_keys",
+                ] {
+                    sql::statement(format!("DELETE FROM {table}"))
+                        .exec(&mut db)
+                        .await?;
+                }
+            }
+            Self::CorruptFirstPayload => {
+                sql::statement("UPDATE events SET payload = X'00' WHERE cursor = 1")
+                    .exec(&mut db)
+                    .await?;
+            }
             Self::RejectThirdEvent => {
                 sql::statement("CREATE TRIGGER fail_third BEFORE INSERT ON events WHEN NEW.cursor = 3 BEGIN SELECT RAISE(ABORT, 'failure'); END")
                     .exec(&mut db)

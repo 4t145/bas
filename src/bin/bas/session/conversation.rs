@@ -634,6 +634,37 @@ impl Session {
         Ok(())
     }
 
+    /// Reads committed metadata and a dependency-aligned event range together.
+    ///
+    /// # Errors
+    /// Returns storage validation/retention errors without substituting a
+    /// truncated raw page. Does not restore or start an agent.
+    pub async fn history_window(
+        &self,
+        before: Option<Cursor>,
+        limit: usize,
+    ) -> Result<bas::service::HistoryWindow, SessionError> {
+        let _transaction = self.transaction.lock().await;
+        let (storage, id) = {
+            let state = self.lock();
+            let storage = state.storage.clone().ok_or(storage::Error::InvalidCommit(
+                "dependency-aligned history requires a storage backend",
+            ))?;
+            (storage, state.meta.id)
+        };
+        let window = storage.window(id, before, limit).await?;
+        Ok(bas::service::HistoryWindow {
+            session: SessionSnapshot {
+                meta: window.meta,
+                runtime: self.lock().runtime.clone(),
+            },
+            events: window.events,
+            context: window.context,
+            before: window.before.map(Cursor::raw),
+            cursor: window.cursor.raw(),
+        })
+    }
+
     /// Accepts exactly one turn and commits the user message before its updates.
     ///
     /// # Errors

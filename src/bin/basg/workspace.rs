@@ -34,6 +34,7 @@ mod status;
 mod submission;
 mod thought;
 mod thread_actions;
+mod timeline;
 mod tool_content;
 mod turn_navigation;
 mod updates;
@@ -344,12 +345,7 @@ impl Workspace {
                 }
             }
         });
-        let list = ListState::new(0, ListAlignment::Top, px(LIST_OVERDRAW));
-        let view = cx.entity().downgrade();
-        list.set_scroll_handler(move |_, _, cx| {
-            let _ = view.update(cx, |_, cx| cx.notify());
-        });
-        list.set_follow_mode(FollowMode::Tail);
+        let list = Self::timeline_list(cx);
         Self {
             window: state::WindowState::new(window.window_handle(), compact),
             backend: state::BackendState::new(connection, server, agent_metadata, event_task),
@@ -486,7 +482,9 @@ impl Workspace {
         self.save_draft(cx);
         self.close_reply_preview(window, cx);
         self.window.usage_details = None;
+        self.retain_timeline(cx);
         self.selected.select(id);
+        let resume = self.restore_timeline(id);
         self.navigation.restore.on_connect = false;
         self.remember_thread();
         self.composer.commands.dismissed = false;
@@ -510,13 +508,18 @@ impl Workspace {
             self.composer.switch_target(draft, window, cx);
             self.focus_input(window, cx);
         }
-        self.command(
-            Command::Watch {
+        let command = match resume {
+            Some(cursor) => Command::Resume {
+                session: id,
+                epoch: self.selected.epoch,
+                cursor,
+            },
+            None => Command::Watch {
                 session: id,
                 epoch: self.selected.epoch,
             },
-            cx,
-        );
+        };
+        self.command(command, cx);
         cx.notify();
     }
 
@@ -583,6 +586,7 @@ impl Workspace {
         self.navigation.view = navigation::View::Workspaces;
         self.save_draft(cx);
         self.close_reply_preview(window, cx);
+        self.retain_timeline(cx);
         self.selected.detach();
         self.composer.invalidate_target();
         self.navigation.restore.on_connect = false;

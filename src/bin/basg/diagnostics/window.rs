@@ -149,7 +149,6 @@ struct Viewer {
     level: Option<Level>,
     target: Option<String>,
     query: String,
-    paused: bool,
     scroll: UniformListScrollHandle,
     search: Entity<InputState>,
     _search: Subscription,
@@ -175,10 +174,8 @@ impl Viewer {
                 changes.borrow_and_update();
                 if view
                     .update(cx, |this, cx| {
-                        if !this.paused {
-                            this.refresh();
-                            cx.notify();
-                        }
+                        this.refresh();
+                        cx.notify();
                     })
                     .is_err()
                 {
@@ -194,7 +191,6 @@ impl Viewer {
             level: None,
             target: None,
             query: String::new(),
-            paused: false,
             scroll: UniformListScrollHandle::new(),
             search,
             _search: subscription,
@@ -241,14 +237,6 @@ impl Viewer {
             if follow {
                 self.scroll.scroll_to_bottom();
             }
-        }
-    }
-
-    fn toggle_pause(&mut self) {
-        self.paused = !self.paused;
-        if !self.paused {
-            self.refresh();
-            self.scroll.scroll_to_bottom();
         }
     }
 
@@ -379,12 +367,7 @@ impl Render for Viewer {
                         #div { flex_1; min_w_0; } [
                             $crate::ui::input::placeholder(&self.search, Input::new(&self.search).cleanable(true)),
                         ],
-                        #crate::ui::icon_action("logs-pause", $(if self.paused { IconName::Play } else { IconName::Pause }), $(if self.paused { crate::i18n::tr!("logs-resume") } else { crate::i18n::tr!("logs-pause") })) {
-                            on_click: $cx.listener(|this, _, _, cx| { this.toggle_pause(); cx.notify(); });
-                        },
-                        #crate::ui::action_button("logs-clear") {
-                            label: $crate::i18n::tr!("logs-clear");
-                            flex_shrink_0;
+                        #crate::ui::icon_action("logs-clear", IconName::ListX, $crate::i18n::tr!("logs-clear")) {
                             on_click: $cx.listener(|this, _, _, cx| { this.clear(); cx.notify(); });
                         },
                         #crate::ui::icon_action("logs-copy-visible", IconName::Copy, $crate::i18n::tr!("logs-copy-visible")) {

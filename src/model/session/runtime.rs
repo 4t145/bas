@@ -1,17 +1,18 @@
 use super::{SessionMeta, SessionStatus, TurnId};
+use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 mod tests;
 
 /// A terminal failure of one runtime instance, not a persisted event or ACP result.
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, thiserror::Error)]
 pub enum RuntimeFailure {
     #[error("session persistence failed: {message}")]
     Persistence { message: String },
 }
 
 /// Volatile state owned by one loaded session instance.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SessionRuntime {
     /// Stable across snapshots; changes when the daemon loads a new instance.
     pub id: uuid::Uuid,
@@ -29,7 +30,7 @@ impl Default for SessionRuntime {
 
 /// Committed metadata and runtime health have independent lifetimes.
 /// Only `meta` belongs in the session store.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     pub meta: SessionMeta,
     pub runtime: SessionRuntime,

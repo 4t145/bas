@@ -4,6 +4,9 @@ use tonic::transport::{Channel, Endpoint};
 
 use super::pb;
 
+mod history;
+pub use history::*;
+
 /// How long a client waits for the daemon to accept a connection.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 

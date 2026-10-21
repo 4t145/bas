@@ -4,12 +4,13 @@ use std::{
     sync::Mutex,
 };
 
+use bas::model::history::{Dependency, DependencyIndex};
 use bas::model::{Cursor, Event, SessionId, SessionMeta, TurnId};
 use futures::future::BoxFuture;
 
 use super::{
-    Error, Page, PromptAcceptance, ResumeData, Storage, StoredSession, check_page,
-    validate_acceptance, validate_commit, validate_create,
+    Error, Page, PromptAcceptance, ResumeData, Storage, StoredSession, Window, check_page,
+    check_window, validate_acceptance, validate_commit, validate_create,
 };
 
 struct Entry {
@@ -17,6 +18,16 @@ struct Entry {
     events: VecDeque<Event>,
     evicted_through: Cursor,
     acceptances: HashMap<TurnId, PromptAcceptance>,
+    index: DependencyIndex,
+    dependencies: VecDeque<Dependency>,
+    context: HashMap<String, Context>,
+    context_overflow: bool,
+}
+
+#[derive(Clone)]
+struct Context {
+    first: Cursor,
+    last: Cursor,
 }
 
 /// In-process storage retaining at most `capacity` events per session.
@@ -56,6 +67,10 @@ impl Storage for Memory {
                     events: VecDeque::new(),
                     evicted_through: Cursor::START,
                     acceptances: HashMap::new(),
+                    index: DependencyIndex::default(),
+                    dependencies: VecDeque::new(),
+                    context: HashMap::new(),
+                    context_overflow: false,
                 },
             );
             Ok(())
@@ -79,14 +94,41 @@ impl Storage for Memory {
             }
             validate_commit(&entry.session.meta, &meta, events)?;
             for event in events {
+                let dependency = entry.index.observe(event);
                 if entry.events.len() == self.capacity.get() {
+                    let dependency = entry
+                        .dependencies
+                        .pop_front()
+                        .expect("parallel dependency queue");
+                    if let Some(key) = dependency.context_key {
+                        match dependency.context_start {
+                            Some(first)
+                                if entry.context.len() < self.capacity.get()
+                                    || entry.context.contains_key(&key) =>
+                            {
+                                entry.context.insert(
+                                    key,
+                                    Context {
+                                        first,
+                                        last: entry.events.front().expect("full queue").cursor,
+                                    },
+                                );
+                            }
+                            Some(_) => entry.context_overflow = true,
+                            None => {
+                                entry.context.remove(&key);
+                            }
+                        }
+                    }
                     entry.evicted_through = entry
                         .events
                         .pop_front()
                         .expect("a full event window is nonempty")
                         .cursor;
+                    entry.index.evict_through(entry.evicted_through);
                 }
                 entry.events.push_back(event.clone());
+                entry.dependencies.push_back(dependency);
             }
             entry.session.meta = meta;
             if let Some(acceptance) = acceptance {
@@ -183,6 +225,113 @@ impl Storage for Memory {
                 .next()
                 .and_then(|_| events.last().map(|event| event.cursor));
             Ok(Page { events, next })
+        })
+    }
+
+    fn window(
+        &self,
+        id: SessionId,
+        before: Option<Cursor>,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<Window, Error>> {
+        Box::pin(async move {
+            let sessions = self.sessions.lock().expect("storage lock is not poisoned");
+            let entry = sessions.get(&id).ok_or(Error::NotFound(id))?;
+            let meta = entry.session.meta.clone();
+            check_window(before, limit, meta.revision)?;
+            if before.is_some_and(|cursor| cursor.raw() <= 1) {
+                return Ok(Window {
+                    cursor: meta.revision,
+                    meta,
+                    events: vec![],
+                    context: vec![],
+                    before: None,
+                });
+            }
+            if entry.context_overflow {
+                return Err(Error::Expired {
+                    requested: Cursor::START,
+                    evicted_through: entry.evicted_through,
+                });
+            }
+            let end = entry
+                .events
+                .partition_point(|event| before.is_none_or(|b| event.cursor < b));
+            if end == 0 && entry.evicted_through != Cursor::START {
+                return Err(Error::Expired {
+                    requested: before.unwrap_or(Cursor::START),
+                    evicted_through: entry.evicted_through,
+                });
+            }
+            let mut start = end.saturating_sub(limit);
+            loop {
+                let floor = entry.dependencies.range(start..end).map(|d| d.floor).min();
+                let Some(floor) = floor else { break };
+                if floor <= entry.evicted_through {
+                    return Err(Error::Expired {
+                        requested: floor,
+                        evicted_through: entry.evicted_through,
+                    });
+                }
+                let expanded = entry.events.partition_point(|event| event.cursor < floor);
+                if expanded >= start {
+                    break;
+                }
+                start = expanded;
+            }
+            let mut context = entry.context.clone();
+            for (event, dependency) in entry.events.iter().zip(&entry.dependencies).take(start) {
+                if let Some(key) = &dependency.context_key {
+                    if let Some(first) = dependency.context_start {
+                        context.insert(
+                            key.clone(),
+                            Context {
+                                first,
+                                last: event.cursor,
+                            },
+                        );
+                    } else {
+                        context.remove(key);
+                    }
+                }
+            }
+            if entry
+                .dependencies
+                .range(start..end)
+                .any(|dependency| dependency.context_key.as_deref() == Some("usage"))
+            {
+                context.remove("usage");
+            }
+            let mut context_cursors: Vec<_> = context
+                .into_values()
+                .flat_map(|context| [context.first, context.last])
+                .collect();
+            context_cursors.sort_unstable();
+            context_cursors.dedup();
+            let mut context = Vec::new();
+            for cursor in context_cursors {
+                let event = entry
+                    .events
+                    .iter()
+                    .find(|event| event.cursor == cursor)
+                    .ok_or(Error::Expired {
+                        requested: cursor,
+                        evicted_through: entry.evicted_through,
+                    })?;
+                context.push(event.clone());
+            }
+            let events: Vec<_> = entry.events.range(start..end).cloned().collect();
+            let before = events
+                .first()
+                .filter(|event| event.cursor.raw() > 1)
+                .map(|event| event.cursor);
+            Ok(Window {
+                cursor: meta.revision,
+                meta,
+                events,
+                context,
+                before,
+            })
         })
     }
 

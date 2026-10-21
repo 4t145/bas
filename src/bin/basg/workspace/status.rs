@@ -48,6 +48,54 @@ pub(super) enum ConnectionStatus {
 }
 
 impl Workspace {
+    pub(super) fn awaiting_connection(&self) -> bool {
+        !self.backend.connected && self.selected.id.is_none()
+    }
+
+    fn server_status_label(&self) -> &'static str {
+        if self.backend.error.is_some() {
+            crate::i18n::tr!("status-reconnecting")
+        } else if self.backend.connected {
+            crate::i18n::tr!("status-connected")
+        } else {
+            crate::i18n::tr!("status-connecting")
+        }
+    }
+
+    pub(super) fn render_connection_transition(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::connections::{self, presentation};
+
+        let profiles = connections::shared(cx);
+        let target = &self.backend.server.target;
+        let endpoint = presentation::endpoint(target);
+        let name = profiles
+            .read(cx)
+            .matching(&self.backend.server)
+            .map(|profile| profile.name.clone())
+            .unwrap_or_else(|| endpoint.clone());
+        let label = self.server_status_label();
+        el! { #chat::content_panel() {
+            id: "server-connection-transition"; test_support;
+            role: gpui_kit::Role::Status; aria_label: label;
+            flex_1; min_h_0; flex; flex_col; items_center; justify_center; gap_3; p_5;
+            text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+        } [
+            #div { flex; items_center; gap_2; } [
+                $activity_icon("server-connection-loading", IconName::LoaderCircle, cx.theme().warning, true),
+                $label,
+            ],
+            #div {
+                id: "server-connection-target"; test_support;
+                role: gpui_kit::Role::Label; aria_label: $name.clone();
+                max_w_full; truncate;
+            } [$name.clone()],
+            ..$((name != endpoint).then(|| el! { #div { max_w_full; truncate; } [$endpoint] })),
+            ..$self.backend.error.as_ref().map(|error| crate::ui::feedback(
+                "server-connection-error", error.presentation(), cx.theme().danger
+            ).compact()),
+        ] }.into_any_element()
+    }
+
     pub(super) fn connection_status(&self) -> ConnectionStatus {
         if self.backend.error.is_some() {
             return ConnectionStatus::Disconnected;
@@ -105,12 +153,14 @@ impl Workspace {
         use crate::connections::{self, presentation};
         use gpui_kit::component::menu::PopupMenuItem;
 
-        let (label, color) = if self.backend.error.is_some() {
-            (crate::i18n::tr!("status-disconnected"), cx.theme().danger)
+        let label = self.server_status_label();
+        let pending = !self.backend.connected || self.backend.error.is_some();
+        let color = if self.backend.error.is_some() {
+            cx.theme().danger
         } else if self.backend.connected {
-            (crate::i18n::tr!("status-connected"), cx.theme().success)
+            cx.theme().success
         } else {
-            (crate::i18n::tr!("status-connecting"), cx.theme().warning)
+            cx.theme().warning
         };
         let profiles = connections::shared(cx);
         let saved = profiles.read(cx).matching(&self.backend.server);
@@ -131,7 +181,12 @@ impl Workspace {
             #div {
                 id: "server-status-indicator"; test_support; role: gpui_kit::Role::Status;
                 aria_label: label; size: 6.0.px; rounded_full; flex_shrink_0; bg: color;
-            },
+                @pending => { size: ACTIVITY_ICON_SIZE.px; bg: $gpui_kit::transparent_black(); };
+            } [
+                ..$pending.then(|| activity_icon(
+                    "server-status-loading", IconName::LoaderCircle, color, true
+                )),
+            ],
             $presentation::icon(target) { size: crate::ui::ICON.px; flex_shrink_0; },
             #div {
                 id: "server-status-name"; test_support; role: gpui_kit::Role::Label;
