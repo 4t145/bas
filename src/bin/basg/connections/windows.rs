@@ -67,13 +67,6 @@ pub(crate) fn window_options(compact: bool, cx: &App) -> WindowOptions {
 /// Opens or activates this backend's window without repurposing another backend's drafts.
 ///
 /// # Errors
-/// Returns a missing-runtime or platform window error.
-pub(crate) fn open_current(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
-    let target = super::current(cx).ok_or_else(|| anyhow::anyhow!("No backend selected"))?;
-    open_for(target, cx)
-}
-
-/// # Errors
 /// Returns a missing-runtime or platform window error without changing management context.
 pub(crate) fn open_for(target: Target, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     let launch = cx

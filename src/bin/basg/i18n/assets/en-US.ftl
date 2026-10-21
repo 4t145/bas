@@ -282,7 +282,6 @@ connections-missing = This connection no longer exists. Reload and try again.
 connections-keep-one = Keep at least one connection.
 connections-choose = Select backend
 connections-manage = Manage connections…
-connections-open-workspace = Open chat window
 settings-backend-disconnected = Not connected
 settings-backend-file-unavailable = Remote files cannot be opened locally. Edit agents on the Agents page.
 settings-edit-file = Edit configuration file

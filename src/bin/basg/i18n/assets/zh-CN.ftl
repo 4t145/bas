@@ -270,7 +270,6 @@ connections-missing = 此连接已不存在，请重新加载后重试。
 connections-keep-one = 请至少保留一个连接。
 connections-choose = 选择后端
 connections-manage = 管理连接…
-connections-open-workspace = 打开会话窗口
 settings-backend-disconnected = 未连接
 settings-backend-file-unavailable = 无法在本机打开远程文件。请在智能体页面编辑配置。
 settings-edit-file = 编辑配置文件

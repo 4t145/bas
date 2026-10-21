@@ -100,7 +100,8 @@ fn frontend_connections_and_backend_switching_are_distinct_settings_scopes(
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("settings-backend-selector").visible());
-        assert!(window.find("settings-open-backend").visible());
+        assert!(window.try_find("settings-open-backend").is_none());
+        assert!(window.find("settings-edit-file").visible());
         assert!(window.find("settings-backend-context").visible());
         assert_eq!(
             crate::connections::current(cx),

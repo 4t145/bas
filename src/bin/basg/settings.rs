@@ -360,15 +360,6 @@ impl Settings {
                         flex_1; min_w_0; truncate;
                     } [$context],
                     ..$bool::then(self.category == Category::Agents, || self.backend_selector(cx)),
-                    ..$bool::then(self.category == Category::Agents, || el! {
-                        #crate::ui::icon_action("settings-open-backend", gpui_kit::assets::IconName::MessageCircle, $crate::i18n::tr!("connections-open-workspace")) {
-                            on_click: $cx.listener(|this, _, _, cx| {
-                                this.connection_message = crate::connections::open_current(cx)
-                                    .err().map(|error| error.to_string()).unwrap_or_default();
-                                cx.notify();
-                            });
-                        }
-                    }),
                     #div {
                         id: "settings-actions"; test_support;
                         flex; items_center; gap_2; flex_shrink_0;

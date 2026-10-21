@@ -10,9 +10,7 @@ pub(crate) mod presentation;
 mod windows;
 #[cfg(all(test, feature = "gui-tests"))]
 pub(crate) use windows::WorkspaceHost;
-pub(crate) use windows::{
-    init_windows, open_current, open_for, register, window_options, workspace_view,
-};
+pub(crate) use windows::{init_windows, open_for, register, window_options, workspace_view};
 
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;

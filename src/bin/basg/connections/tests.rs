@@ -212,7 +212,7 @@ fn opening_a_registered_backend_window_does_not_retarget_management_or_replay_se
         );
         assert!(cx.global::<crate::agents::Changes>().select.is_none());
         assert_eq!(
-            open_current(cx).expect("reuse B").window_id(),
+            open_for(b, cx).expect("reuse B").window_id(),
             second.window_id()
         );
         assert_eq!(
