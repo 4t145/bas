@@ -1,25 +1,33 @@
 //! Real agent artwork shared by the registry and conversation rows.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use anyhow::{Context as _, Result, bail};
-use futures::{AsyncReadExt as _, FutureExt as _, future::Either};
+use futures::{FutureExt as _, future::Either};
 use gds_uim::el;
 use gpui_kit::{
-    App, AssetSource, Global, Hsla, Image, ImageFormat, IntoElement, ParentElement, Pixels,
-    RenderImage, RenderOnce, SharedString, Styled, SvgRenderer, Task, TestSupportExt, Window,
+    App, Global, Hsla, IntoElement, ParentElement, Pixels, RenderImage, RenderOnce, SharedString,
+    Styled, Task, TestSupportExt, Window,
     assets::IconName,
     component::{ActiveTheme as _, Icon},
-    div,
-    http_client::{AsyncBody, HttpClient, RedirectPolicy, Request, RequestTimeout},
-    img,
+    div, img,
     prelude::*,
     px, svg,
 };
 
+mod disk;
+mod loading;
+#[cfg(all(test, feature = "gui-tests"))]
+mod tests;
+
 const DEFAULT_SIZE: f32 = 24.;
 const ICON_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_ICON_BYTES: u64 = 2 * 1024 * 1024;
+const FRESH_FOR: Duration = Duration::from_secs(24 * 60 * 60);
+const RETRY_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 enum Artwork {
@@ -27,14 +35,32 @@ enum Artwork {
     Bitmap(Arc<RenderImage>),
 }
 
-enum Load {
-    Loading { _task: Task<()> },
-    Ready(Artwork),
-    Failed,
+#[derive(Default)]
+struct Load {
+    artwork: Option<Artwork>,
+    task: Option<Task<()>>,
+    refresh_at: Option<Instant>,
 }
 
-#[derive(Default)]
-struct Cache(HashMap<SharedString, Load>);
+struct Cache {
+    entries: HashMap<SharedString, Load>,
+    disk: Option<disk::Cache>,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            // Tests explicitly supply temporary caches, never the user's cache.
+            disk: if cfg!(test) {
+                None
+            } else {
+                disk::Cache::discover()
+            },
+        }
+    }
+}
+
 impl Global for Cache {}
 
 #[cfg(all(test, feature = "gui-tests"))]
@@ -137,107 +163,100 @@ fn cached(uri: &SharedString, cx: &mut App) -> Option<Artwork> {
     if cx.try_global::<Cache>().is_none() {
         cx.set_global(Cache::default());
     }
-    if let Some(load) = cx.global::<Cache>().0.get(uri) {
-        return match load {
-            Load::Ready(artwork) => Some(artwork.clone()),
-            _ => None,
-        };
+    let key: SharedString = loading::key(uri).into();
+    let now = cx.background_executor().now();
+    let existing = cx.global::<Cache>().entries.get(&key);
+    let artwork = existing.and_then(|load| load.artwork.clone());
+    if existing.is_some_and(|load| {
+        load.task.is_some() || load.refresh_at.is_none_or(|deadline| now < deadline)
+    }) {
+        return artwork;
     }
-    let client = cx.http_client();
-    let renderer = cx.svg_renderer();
-    let assets = cx.asset_source().clone();
+    let loader = loading::Loader {
+        uri: key.to_string(),
+        client: cx.http_client(),
+        renderer: cx.svg_renderer(),
+        assets: cx.asset_source().clone(),
+        disk: cx.global::<Cache>().disk.clone(),
+    };
     let executor = cx.background_executor().clone();
-    let timeout = executor.timer(ICON_TIMEOUT);
-    let key = uri.clone();
-    let address = uri.clone();
-    let loading = executor.spawn(async move {
-        match futures::future::select(
-            load(address.as_ref(), client, renderer, assets).boxed(),
-            timeout.boxed(),
-        )
-        .await
-        {
-            Either::Left((result, _)) => result,
-            Either::Right(_) => Err(anyhow::anyhow!("agent icon request timed out")),
-        }
+    let initial = executor.spawn(async move {
+        let result = loader.cached();
+        (loader, result)
     });
+    let task_key = key.clone();
     let task = cx.spawn(async move |cx| {
-        let result = loading.await;
-        cx.update(|cx| {
-            let state = match result {
-                Ok(artwork) => Load::Ready(artwork),
-                Err(error) => {
-                    tracing::debug!(uri = %key, %error, "agent icon unavailable");
-                    Load::Failed
-                }
-            };
-            cx.global_mut::<Cache>().0.insert(key, state);
-            cx.refresh_windows();
+        let (loader, initial) = initial.await;
+        let initial = match initial {
+            Ok(initial) => initial,
+            Err(_) => {
+                cx.update(|cx| finish(&task_key, None, Some(RETRY_AFTER), cx));
+                return;
+            }
+        };
+        if let Some(ready) = &initial {
+            if ready.refresh_after != Some(Duration::ZERO) {
+                cx.update(|cx| {
+                    finish(
+                        &task_key,
+                        Some(ready.artwork.clone()),
+                        ready.refresh_after,
+                        cx,
+                    )
+                });
+                return;
+            }
+            // Publish stale artwork without dropping the in-flight refresh task.
+            cx.update(|cx| {
+                cx.global_mut::<Cache>()
+                    .entries
+                    .get_mut(&task_key)
+                    .expect("pending icon")
+                    .artwork = Some(ready.artwork.clone());
+                cx.refresh_windows();
+            });
+        }
+        let timeout = executor.timer(ICON_TIMEOUT);
+        let refresh = executor.spawn(async move {
+            match futures::future::select(loader.fetch(initial).boxed(), timeout.boxed()).await {
+                Either::Left((result, _)) => result,
+                Either::Right(_) => Err(anyhow::anyhow!("agent icon request timed out")),
+            }
+        });
+        let result = refresh.await;
+        cx.update(|cx| match result {
+            Ok(ready) => finish(&task_key, Some(ready.artwork), ready.refresh_after, cx),
+            Err(_) => {
+                // Transport errors can contain signed URLs; do not log them.
+                tracing::debug!("Agent icon refresh unavailable; retaining cached artwork");
+                finish(&task_key, None, Some(RETRY_AFTER), cx);
+            }
         });
     });
     cx.global_mut::<Cache>()
-        .0
-        .insert(uri.clone(), Load::Loading { _task: task });
-    None
+        .entries
+        .entry(key)
+        .or_default()
+        .task = Some(task);
+    artwork
 }
 
-/// # Errors
-/// Reports unavailable, oversized or malformed icon artwork.
-async fn load(
-    uri: &str,
-    client: Arc<dyn HttpClient>,
-    renderer: SvgRenderer,
-    assets: Arc<dyn AssetSource>,
-) -> Result<Artwork> {
-    if !uri.starts_with("https://") && !uri.starts_with("http://") {
-        let bytes = assets.load(uri)?.context("embedded agent icon not found")?;
-        renderer.parse_svg(&bytes)?;
-        return Ok(Artwork::Svg {
-            bytes: Arc::from(bytes.as_ref()),
-            embedded: true,
-        });
+fn finish(
+    key: &SharedString,
+    artwork: Option<Artwork>,
+    refresh_after: Option<Duration>,
+    cx: &mut App,
+) {
+    let deadline = refresh_after.map(|delay| cx.background_executor().now() + delay);
+    let load = cx
+        .global_mut::<Cache>()
+        .entries
+        .get_mut(key)
+        .expect("pending icon");
+    if artwork.is_some() {
+        load.artwork = artwork;
     }
-    let mut url = url::Url::parse(uri)?;
-    url.set_fragment(None);
-    let mut request = Request::get(url.as_str()).body(AsyncBody::default())?;
-    request
-        .extensions_mut()
-        .insert(RequestTimeout(ICON_TIMEOUT));
-    request.extensions_mut().insert(RedirectPolicy::FollowAll);
-    let mut response = client.send(request).await?;
-    if !response.status().is_success() {
-        bail!("agent icon HTTP status {}", response.status());
-    }
-    let mime = response
-        .headers()
-        .get("content-type")
-        .and_then(|header| header.to_str().ok())
-        .and_then(|header| header.split(';').next())
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    let mut bytes = Vec::new();
-    response
-        .body_mut()
-        .take(MAX_ICON_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .await?;
-    if bytes.len() as u64 > MAX_ICON_BYTES {
-        bail!("agent icon exceeds {MAX_ICON_BYTES} bytes");
-    }
-    let path_mime = mime_guess::from_path(url.path()).first_or_octet_stream();
-    let format = ImageFormat::from_mime_type(&mime)
-        .or_else(|| ImageFormat::from_mime_type(path_mime.essence_str()));
-    if matches!(format, Some(ImageFormat::Svg)) || format.is_none() {
-        renderer.parse_svg(&bytes)?;
-        Ok(Artwork::Svg {
-            bytes: Arc::from(bytes),
-            embedded: false,
-        })
-    } else {
-        let format = format.context("agent icon image format unavailable")?;
-        Ok(Artwork::Bitmap(
-            Image::from_bytes(format, bytes).to_image_data(renderer)?,
-        ))
-    }
+    load.refresh_at = deadline;
+    load.task = None;
+    cx.refresh_windows();
 }
