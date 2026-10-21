@@ -53,6 +53,54 @@ fn assert_list_only(window: &mut Window, cx: &mut App) {
 }
 
 #[gpui_kit::test]
+fn connection_description_is_plain_text_without_a_copy_action(cx: &mut TestAppContext) {
+    let (_directory, window, page) = setup(cx);
+    let note = format!("Remote description {}\nsecond line", "界".repeat(80));
+    cx.update_window(window.into(), |_, window, cx| {
+        page.read(cx).profiles.clone().update(cx, |profiles, cx| {
+            profiles
+                .put(
+                    ConnectionProfile {
+                        id: "remote".into(),
+                        name: "Remote".into(),
+                        note: Some(note.clone()),
+                        target: "tcp://192.0.2.1".parse().expect("remote target"),
+                        tls: None,
+                    },
+                    cx,
+                )
+                .expect("save profile");
+        });
+        window.render_frame(cx);
+        let description = window.find("connection-note-remote");
+        assert_eq!(description.label(), Some(note.as_str()));
+        assert!(description.visible());
+        assert!(window.try_find("connection-note-remote-copy").is_none());
+        let card = window.find("connection-card-remote").bounds();
+        let bounds = description.bounds();
+        assert!(bounds.left() >= card.left() && bounds.right() <= card.right());
+        assert!(window.find("connection-edit-remote").visible());
+        window.click("connection-edit-remote", cx);
+        assert!(
+            matches!(&page.read(cx).editor, Some(Editor::Edit(profile)) if profile.id == "remote")
+        );
+        assert_eq!(
+            page.read(cx)
+                .profiles
+                .read(cx)
+                .entries()
+                .iter()
+                .find(|profile| profile.id == "remote")
+                .expect("profile")
+                .note
+                .as_deref(),
+            Some(note.as_str()),
+        );
+    })
+    .expect("plain description does not change the saved profile");
+}
+
+#[gpui_kit::test]
 fn add_menu_keeps_manual_add_explicit(cx: &mut TestAppContext) {
     let (_directory, window, page) = setup(cx);
     cx.update_window(window.into(), |_, window, cx| {

@@ -10,6 +10,7 @@ use gpui_kit::{
         button::*,
         input::Input,
         menu::{DropdownMenu, PopupMenuItem},
+        spinner::Spinner,
     },
     div,
     prelude::*,
@@ -20,6 +21,21 @@ use std::cmp::Reverse;
 const AGENT_WIDTH: f32 = 184.;
 
 impl Browser {
+    fn progress(&self, id: &'static str, message: &str, cx: &App) -> AnyElement {
+        gds_uim::el! { #div {
+            id: id; test_support; flex; items_center; gap_2; py_3;
+            role: gpui_kit::Role::Status; aria_label: $message.to_owned();
+            text_color: $cx.theme().muted_foreground;
+        } [
+            #div {
+                id: $format!("{id}-spinner"); test_support; flex; flex_shrink_0; size: crate::ui::ICON.px;
+            } [
+                Spinner { icon: IconName::LoaderCircle; with_size: crate::ui::ICON.px; color: $cx.theme().primary; },
+            ],
+            $message.to_owned(),
+        ] }.into_any_element()
+    }
+
     fn agent_icon(&self, id: &str, cx: &App) -> AnyElement {
         let artwork = crate::agents::metadata::entity(cx)
             .and_then(|metadata| metadata.read(cx).icon(&self.server, id))
@@ -342,13 +358,14 @@ impl Browser {
 impl Render for Browser {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let groups = self.groups(cx);
-        let empty = (groups.is_empty() && !self.loading()).then(|| {
-            if self.agents.is_empty() {
-                crate::i18n::tr!("agent-history-no-agents")
-            } else {
-                crate::i18n::tr!("agent-history-empty")
-            }
-        });
+        let empty =
+            (groups.is_empty() && !self.loading() && self.connection_error.is_none()).then(|| {
+                if self.agents.is_empty() {
+                    crate::i18n::tr!("agent-history-no-agents")
+                } else {
+                    crate::i18n::tr!("agent-history-empty")
+                }
+            });
         let pending = self
             .operation
             .as_ref()
@@ -368,8 +385,8 @@ impl Render for Browser {
                 ],
                 $crate::ui::input::placeholder(&self.search, Input::new(&self.search).small().cleanable(true)),
                 #div { text_color: $cx.theme().muted_foreground; } [$crate::i18n::tr!("agent-history-help")],
-                ..$pending.map(|message| crate::ui::feedback(
-                    "agent-history-pending", message, cx.theme().foreground,
+                ..$pending.map(|message| self.progress(
+                    "agent-history-pending", message, cx,
                 )),
                 ..$self.connection_error.as_ref().map(|error| crate::ui::feedback(
                     "agent-history-connection-error", error.clone(), cx.theme().danger,
@@ -378,6 +395,9 @@ impl Render for Browser {
                     "agent-history-notice", message, cx.theme().foreground,
                 )),
                 #div { id: "agent-history-rows"; flex_1; min_h_0; overflow_y_scroll; } [
+                    ..$self.loading().then(|| self.progress(
+                        "agent-history-loading", crate::i18n::tr!("agent-history-loading"), cx,
+                    )),
                     ..$empty.map(|message| crate::ui::feedback("agent-history-empty", message, cx.theme().foreground)),
                     ..groups,
                 ],

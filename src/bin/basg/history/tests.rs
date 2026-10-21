@@ -4,7 +4,10 @@ use gpui_kit::{TestAppContext, WeakEntity};
 use std::cell::RefCell;
 use tokio::sync::mpsc;
 
+mod loading;
+
 struct Fixture {
+    window: gpui_kit::WindowHandle<gpui_kit::component::Root>,
     browser: WeakEntity<Browser>,
     commands: mpsc::UnboundedReceiver<Command>,
     opened: Rc<RefCell<Vec<SessionId>>>,
@@ -24,6 +27,10 @@ fn agents() -> Vec<AgentSummary> {
 }
 
 fn fixture(cx: &mut TestAppContext) -> Fixture {
+    fixture_with_agents(agents(), cx)
+}
+
+fn fixture_with_agents(agents: Vec<AgentSummary>, cx: &mut TestAppContext) -> Fixture {
     let settings = tempfile::tempdir().expect("settings");
     let path = settings.path().join("settings.json");
     std::fs::write(
@@ -36,16 +43,16 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
     let opened = Rc::new(RefCell::new(Vec::new()));
     let recorded = opened.clone();
     let server: bas::service::tls::ConnectionOptions = "127.0.0.1".parse().expect("server");
-    let (_window, browser) = cx.update(|cx| {
+    let (window, browser) = cx.update(|cx| {
         gpui_kit::init(cx);
         crate::configuration::init(Some(path), cx);
         crate::theme::init(None, cx);
         crate::application::init(cx);
         window::bind_keys(cx);
-        let _handle = window::open_connected(
+        let handle = window::open_connected(
             OpenRequest {
                 server: server.clone(),
-                agents: agents(),
+                agents,
                 agent: Some("codex-acp".into()),
                 cwd: Some("/repo".into()),
                 workspaces: vec!["/repo".into(), "/other".into()],
@@ -59,9 +66,10 @@ fn fixture(cx: &mut TestAppContext) -> Fixture {
             cx,
         )
         .expect("history window");
-        ((), window::browser(server, cx))
+        (handle, window::browser(server, cx))
     });
     Fixture {
+        window,
         browser,
         commands: receiver,
         opened,

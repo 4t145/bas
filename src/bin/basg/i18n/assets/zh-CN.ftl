@@ -77,6 +77,7 @@ agent-history-all-workspaces = 全部工作区
 agent-history-no-agents = 没有已配置的 ACP Agent。
 agent-history-imported = 会话已导入。可以在 Bas 主窗口查看。
 agent-history-operating = 正在处理会话操作…
+agent-history-loading = 正在加载 Agent 会话…
 agent-history-unavailable = 会话历史网络服务尚未就绪，请重新打开窗口。
 agent-history-back = 返回对话
 agent-history-refresh = 刷新

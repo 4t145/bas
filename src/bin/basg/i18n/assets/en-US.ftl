@@ -89,6 +89,7 @@ agent-history-all-workspaces = All workspaces
 agent-history-no-agents = No ACP Agents are configured.
 agent-history-imported = Session imported. You can view it in the main Bas window.
 agent-history-operating = Session operation in progress…
+agent-history-loading = Loading Agent sessions…
 agent-history-unavailable = The history network service is not ready. Reopen this window.
 agent-history-back = Back to conversation
 agent-history-refresh = Refresh

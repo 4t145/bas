@@ -313,9 +313,16 @@ impl Page {
                     },
                 ],
             ],
-            ..$profile.note.map(|note| ui::feedback(
-                format!("connection-note-{}", profile.id), note, cx.theme().muted_foreground,
-            ).compact()),
+            ..$profile.note.map(|note| {
+                let hint = note.clone();
+                el! { #div {
+                    id: $format!("connection-note-{}", profile.id); test_support;
+                    role: gpui_kit::Role::Label; aria_label: $note.clone();
+                    w_full; min_w_0; truncate;
+                    text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                    hoverable_tooltip: $move |window, cx| ui::tooltip::view(hint.clone(), window, cx);
+                } [$note.replace('\n', " ")] }
+            }),
             ..$check_result.map(|(message, color)| ui::feedback(
                 format!("connection-check-result-{}", profile.id), message, color,
             )),

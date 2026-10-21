@@ -68,6 +68,7 @@ pub(crate) struct Browser {
     server: bas::service::tls::ConnectionOptions,
     connection: Connection,
     agents: Vec<AgentSummary>,
+    awaiting_catalog: bool,
     agent: Option<String>,
     cwd: Option<PathBuf>,
     workspaces: BTreeSet<PathBuf>,
@@ -122,6 +123,7 @@ impl Browser {
             server: request.server,
             connection,
             agents: Vec::new(),
+            awaiting_catalog: request.agents.is_empty(),
             agent: request.agent,
             cwd: request.cwd,
             workspaces: request.workspaces.into_iter().collect(),
@@ -252,7 +254,8 @@ impl Browser {
     }
 
     fn loading(&self) -> bool {
-        !self.waiting.is_empty()
+        self.awaiting_catalog
+            || !self.waiting.is_empty()
             || self
                 .queries
                 .values()
@@ -262,6 +265,7 @@ impl Browser {
     fn update(&mut self, update: Update, cx: &mut Context<Self>) {
         match update {
             Update::Catalog(Ok(catalog)) => {
+                self.awaiting_catalog = false;
                 self.connection_error = None;
                 let previous = self.agents.clone();
                 self.set_agents(catalog.agents);
@@ -286,7 +290,10 @@ impl Browser {
                     self.reload(cx);
                 }
             }
-            Update::Catalog(Err(error)) => self.connection_error = Some(error.presentation()),
+            Update::Catalog(Err(error)) => {
+                self.awaiting_catalog = false;
+                self.connection_error = Some(error.presentation());
+            }
             Update::AgentHistory { epoch, result } => {
                 if let Some(query) = self.queries.remove(&epoch)
                     && query.generation == self.generation
