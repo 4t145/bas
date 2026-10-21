@@ -82,8 +82,21 @@ impl Workspace {
         let title = if editing {
             self.render_title_editor(cx)
         } else {
+            let directory = directory.clone();
+            let generation = self.composer.generation;
             gds_uim::el! {
-                #div { min_w_0; truncate; text_size: $crate::ui::SMALL; } [$self.draft_title()]
+                #div {
+                    id: $format!("draft-thread-title-text-{index}"); test_support;
+                    min_w_0; truncate; text_size: $crate::ui::SMALL;
+                    on_click: $cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                        if event.click_count() == 2 {
+                            cx.stop_propagation();
+                            if !this.selected.creating && !this.composer.paste_pending {
+                                this.on_draft_row_rename(&directory, generation, window, cx);
+                            }
+                        }
+                    });
+                } [$self.draft_title()]
             }
             .into_any_element()
         };
@@ -104,12 +117,6 @@ impl Workspace {
                 test_support; absolute; top_0; right_0; flex; invisible;
                 @$!editing => { group_hover: $group.clone(), $gds_uim::m! { visible; }; };
             } [
-                #layout::icon_button($SharedString::from(format!("rename-draft-{index}")), IconName::Pencil) {
-                    accessibility_label: $crate::i18n::tr!("session-rename");
-                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("session-rename"), shortcuts::RenameThread);
-                    disabled: disabled;
-                    on_click: $cx.listener(Self::on_draft_row_rename);
-                },
                 #layout::icon_button($SharedString::from(format!("discard-draft-{index}")), IconName::Trash) {
                     accessibility_label: $crate::i18n::tr!("draft-discard");
                     tooltip: $crate::i18n::tr!("draft-discard"); disabled: disabled;
@@ -142,16 +149,6 @@ impl Workspace {
                 ],
             ]
         }.into_any_element()
-    }
-
-    fn on_draft_row_rename(
-        &mut self,
-        _: &gpui_kit::ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.stop_propagation();
-        self.begin_draft_rename(window, cx);
     }
 
     fn on_draft_row_discard(
@@ -207,12 +204,7 @@ impl Workspace {
                 .on_click(move |_, window, cx| {
                     menus::in_parent(parent, window, cx, |window, cx| {
                         let _ = rename_owner.update(cx, |this, cx| {
-                            this.on_draft_row_menu_rename(
-                                &rename_directory,
-                                generation,
-                                window,
-                                cx,
-                            );
+                            this.on_draft_row_rename(&rename_directory, generation, window, cx);
                         });
                     });
                 }),
@@ -237,7 +229,7 @@ impl Workspace {
         })
     }
 
-    fn on_draft_row_menu_rename(
+    fn on_draft_row_rename(
         &mut self,
         directory: &Option<PathBuf>,
         generation: u64,

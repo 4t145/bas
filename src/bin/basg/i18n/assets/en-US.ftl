@@ -13,7 +13,6 @@ logs-target = Filter by tracing target
 logs-all-targets = All targets
 logs-close-detail = Close entry details
 logs-clear = Clear logs
-logs-copy-visible = Copy visible
 logs-copy-selected = Copy selected
 logs-count = { $visible } visible · { $retained } retained · { $evicted } evicted
 

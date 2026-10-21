@@ -3,9 +3,9 @@
 use super::log::{Entry, Level, Snapshot, Store};
 use crate::{theme, ui::window_controls::TitleBar};
 use gpui_kit::{
-    AnyElement, App, AppContext, Bounds, ClipboardItem, Context, Entity, Global, KeyBinding,
-    Render, Subscription, Task, TestSupportExt, UniformListScrollHandle, WeakEntity, Window,
-    WindowBounds, WindowDecorations, WindowHandle, WindowKind, WindowOptions, actions,
+    AnyElement, App, AppContext, Bounds, ClipboardItem, Context, Entity, FocusHandle, Global,
+    KeyBinding, Render, Subscription, Task, TestSupportExt, UniformListScrollHandle, WeakEntity,
+    Window, WindowBounds, WindowDecorations, WindowHandle, WindowKind, WindowOptions, actions,
     assets::IconName,
     component::{
         ActiveTheme, Root,
@@ -18,6 +18,7 @@ use gpui_kit::{
 use std::time::Duration;
 
 mod filters;
+mod navigation;
 
 #[cfg(feature = "gui-tests")]
 pub(crate) mod fixture;
@@ -34,7 +35,17 @@ const ROW_HEIGHT: f32 = 22.;
 const DETAIL_HEIGHT: f32 = 180.;
 const UPDATE_INTERVAL: Duration = Duration::from_millis(50);
 
-actions!(diagnostics, [OpenLogs, CloseLogs]);
+actions!(
+    diagnostics,
+    [
+        OpenLogs,
+        CloseLogs,
+        PreviousLog,
+        NextLog,
+        PreviousLogPage,
+        NextLogPage
+    ]
+);
 
 struct Registered;
 impl Global for Registered {}
@@ -70,6 +81,14 @@ pub(crate) fn init(cx: &mut App) {
             Some("BasLogs"),
         ),
     ]);
+    for context in ["BasLogsList", "BasLogs > Input"] {
+        cx.bind_keys([
+            KeyBinding::new("up", PreviousLog, Some(context)),
+            KeyBinding::new("down", NextLog, Some(context)),
+            KeyBinding::new("pageup", PreviousLogPage, Some(context)),
+            KeyBinding::new("pagedown", NextLogPage, Some(context)),
+        ]);
+    }
     cx.on_action(|_: &OpenLogs, cx| {
         // Action dispatch may still hold the viewer (or a popup) borrowed.
         cx.defer(|cx| {
@@ -150,6 +169,7 @@ struct Viewer {
     target: Option<String>,
     query: String,
     scroll: UniformListScrollHandle,
+    list_focus: FocusHandle,
     search: Entity<InputState>,
     _search: Subscription,
     _updates: Task<()>,
@@ -192,6 +212,7 @@ impl Viewer {
             target: None,
             query: String::new(),
             scroll: UniformListScrollHandle::new(),
+            list_focus: cx.focus_handle(),
             search,
             _search: subscription,
             _updates: updates,
@@ -252,22 +273,10 @@ impl Viewer {
             .find(|entry| Some(entry.id) == self.selected)
     }
 
-    fn visible_text(&self) -> String {
-        self.visible
-            .iter()
-            .map(|&index| self.snapshot.entries[index].text())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     fn copy_selected(&self, cx: &mut App) {
         if let Some(entry) = self.selected_entry() {
             cx.write_to_clipboard(ClipboardItem::new_string(entry.text()));
         }
-    }
-
-    fn copy_visible(&self, cx: &mut App) {
-        cx.write_to_clipboard(ClipboardItem::new_string(self.visible_text()));
     }
 
     fn row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -329,7 +338,8 @@ impl Viewer {
                     .truncate()
                     .child(preview(&entry.message)),
             )
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.list_focus.focus(window, cx);
                 this.selected = (this.selected != Some(id)).then_some(id);
                 cx.notify();
             }))
@@ -358,6 +368,10 @@ impl Render for Viewer {
                 id: "logs-window"; test_support; key_context: "BasLogs";
                 size_full; flex; flex_col; bg: $cx.theme().background; text_color: $cx.theme().foreground;
                 on_action: $cx.listener(|_, _: &CloseLogs, window, _| window.remove_window());
+                on_action: $cx.listener(|this, _: &PreviousLog, _, cx| this.move_selection(false, false, cx));
+                on_action: $cx.listener(|this, _: &NextLog, _, cx| this.move_selection(true, false, cx));
+                on_action: $cx.listener(|this, _: &PreviousLogPage, _, cx| this.move_selection(false, true, cx));
+                on_action: $cx.listener(|this, _: &NextLogPage, _, cx| this.move_selection(true, true, cx));
             } [
                 TitleBar { on_close_window: $|_, window, _| window.remove_window(); } [$crate::i18n::tr!("logs-title")],
                 #div { flex; flex_col; flex_1; min_h_0; min_w_0; } [
@@ -370,13 +384,18 @@ impl Render for Viewer {
                         #crate::ui::icon_action("logs-clear", IconName::ListX, $crate::i18n::tr!("logs-clear")) {
                             on_click: $cx.listener(|this, _, _, cx| { this.clear(); cx.notify(); });
                         },
-                        #crate::ui::icon_action("logs-copy-visible", IconName::Copy, $crate::i18n::tr!("logs-copy-visible")) {
-                            on_click: $cx.listener(|this, _, _, cx| this.copy_visible(cx));
-                        },
                     ],
-                    $uniform_list("logs-list", self.visible.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                        range.map(|index| this.row(index, cx)).collect()
-                    })).track_scroll(&self.scroll).flex_1().min_h_0(),
+                    #div {
+                        id: "logs-list-viewport"; test_support;
+                        key_context: "BasLogsList"; track_focus: $&self.list_focus;
+                        flex_1; min_h_0;
+                        on_mouse_down: gpui_kit::MouseButton::Left,
+                            $cx.listener(|this, _, window, cx| this.list_focus.focus(window, cx));
+                    } [
+                        $uniform_list("logs-list", self.visible.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                            range.map(|index| this.row(index, cx)).collect()
+                        })).track_scroll(&self.scroll).size_full(),
+                    ],
                     ..$detail.map(|text| div().id("logs-detail").test_support().w_full().min_w_0().max_h(px(DETAIL_HEIGHT)).flex_shrink_0().flex().gap_2().p_2()
                         .border_t_1().border_color(cx.theme().border)
                         .child(div().id("logs-detail-text").flex_1().min_w_0().max_h(px(DETAIL_HEIGHT - 16.)).overflow_y_scroll()

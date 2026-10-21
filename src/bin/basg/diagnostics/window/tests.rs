@@ -1,6 +1,8 @@
 use super::*;
 use gpui_kit::{TestAppContext, test::TestWindowExt};
 
+mod navigation;
+
 fn fixture(cx: &mut TestAppContext) -> (WindowHandle<Root>, WeakEntity<Viewer>, Store) {
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -71,8 +73,10 @@ fn clear_list_icon_is_bundled() {
 }
 
 #[gpui_kit::test]
-fn toolbar_actions_keep_the_same_geometry_with_large_ui_text(cx: &mut TestAppContext) {
-    let (handle, _, _) = fixture(cx);
+fn toolbar_and_detail_actions_keep_geometry_with_large_ui_text(cx: &mut TestAppContext) {
+    let (handle, _, store) = fixture(cx);
+    let id = store.record(Level::Info, "frontend", "selected record");
+    deliver(cx);
     for font_size in [15., 24.] {
         cx.update(|cx| gpui_kit::component::Theme::global_mut(cx).font_size = px(font_size));
         cx.update_window(handle.into(), |_, window, cx| {
@@ -80,10 +84,14 @@ fn toolbar_actions_keep_the_same_geometry_with_large_ui_text(cx: &mut TestAppCon
             window.bounds_changed(cx);
             window.render_frame(cx);
             assert!(window.try_find("logs-pause").is_none());
+            assert!(window.try_find("logs-copy-visible").is_none());
+            if window.try_find("logs-detail").is_none() {
+                window.click(("log-entry", id), cx);
+                window.render_frame(cx);
+            }
             let clear = window.find("logs-clear").bounds();
-            let copy = window.find("logs-copy-visible").bounds();
+            let copy = window.find("logs-copy-selected").bounds();
             assert_eq!(clear.size, copy.size);
-            assert_eq!(clear.top(), copy.top());
             assert_eq!(
                 clear.size,
                 size(
@@ -92,12 +100,7 @@ fn toolbar_actions_keep_the_same_geometry_with_large_ui_text(cx: &mut TestAppCon
                 )
             );
             let toolbar = window.find("logs-toolbar").bounds();
-            for id in [
-                "logs-level",
-                "logs-target",
-                "logs-clear",
-                "logs-copy-visible",
-            ] {
+            for id in ["logs-level", "logs-target", "logs-clear"] {
                 let bounds = window.find(id).bounds();
                 assert!(bounds.left() >= toolbar.left() && bounds.right() <= toolbar.right());
             }
@@ -187,16 +190,11 @@ fn search_level_and_clipboard_preserve_retained_multiline_text(cx: &mut TestAppC
         viewer
             .update(cx, |view, cx| {
                 assert_eq!(view.visible.len(), 1);
-                assert_eq!(view.visible_text(), expected);
                 view.selected = Some(selected);
+                assert_eq!(view.selected_entry().expect("selected").text(), expected);
                 cx.notify();
                 assert!(preview(&message).len() < message.len());
                 view.copy_selected(cx);
-                assert_eq!(
-                    cx.read_from_clipboard().and_then(|item| item.text()),
-                    Some(expected.clone())
-                );
-                view.copy_visible(cx);
                 assert_eq!(
                     cx.read_from_clipboard().and_then(|item| item.text()),
                     Some(expected.clone())
@@ -214,19 +212,21 @@ fn search_level_and_clipboard_preserve_retained_multiline_text(cx: &mut TestAppC
         );
     })
     .expect("copy button");
-    store.record(Level::Warn, "Frontend.Network", "next\nentry");
+    let next = store.record(Level::Warn, "Frontend.Network", "next\nentry");
     deliver(cx);
     let entries = store.snapshot().entries;
-    let visible = format!("{}\n{}", entries[0].text(), entries[3].text());
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
-        window.click("logs-copy-visible", cx);
+        assert!(window.try_find("logs-copy-visible").is_none());
+        window.click(("log-entry", next), cx);
+        window.render_frame(cx);
+        window.click("logs-copy-selected", cx);
         assert_eq!(
             cx.read_from_clipboard().and_then(|item| item.text()),
-            Some(visible)
+            Some(entries[3].text())
         );
     })
-    .expect("copy multiple filtered entries");
+    .expect("copy the newly selected filtered entry");
 }
 
 #[gpui_kit::test]
@@ -258,12 +258,7 @@ fn target_dropdown_and_details_fit_minimum_width(cx: &mut TestAppContext) {
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         let toolbar = window.find("logs-toolbar").bounds();
-        for control in [
-            "logs-level",
-            "logs-target",
-            "logs-clear",
-            "logs-copy-visible",
-        ] {
+        for control in ["logs-level", "logs-target", "logs-clear"] {
             let bounds = window.find(control).bounds();
             assert!(bounds.left() >= toolbar.left());
             assert!(bounds.right() <= toolbar.right());

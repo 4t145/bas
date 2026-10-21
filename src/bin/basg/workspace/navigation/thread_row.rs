@@ -5,7 +5,7 @@ use gpui_kit::component::menu::PopupMenuItem;
 use crate::ui::time::recent_time;
 use crate::workspace::*;
 
-pub(super) const ACTIONS_WIDTH: f32 = layout::ICON_BUTTON_SIZE * 2.;
+pub(super) const ACTIONS_WIDTH: f32 = layout::ICON_BUTTON_SIZE;
 pub(super) const ACTIONS_GAP: f32 = 4.;
 
 impl Workspace {
@@ -14,9 +14,6 @@ impl Workspace {
         let editing = self.renaming_thread(id);
         let pinned = self.navigation.pinned.contains(&id);
         let bookmarked = self.navigation.bookmarks.contains(&id);
-        let disabled = !self.backend.connected
-            || self.sessions.pending.archiving.contains(&id)
-            || self.sessions.pending.deleting.contains(&id);
         let state = if !self.sessions.healthy(id) {
             RowStatus::Failed
         } else {
@@ -31,7 +28,15 @@ impl Workspace {
         let title_content = if editing {
             self.render_title_editor(cx)
         } else {
-            gds_uim::el! { #div { min_w_0; truncate; text_size: $crate::ui::SMALL; } [
+            gds_uim::el! { #div {
+                id: $format!("thread-title-text-{id}"); test_support;
+                min_w_0; truncate; text_size: $crate::ui::SMALL;
+                on_click: $cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                    if event.click_count() == 2 {
+                        this.on_thread_row_rename(id, window, cx);
+                    }
+                });
+            } [
                 $title(session)
             ] }
             .into_any_element()
@@ -62,14 +67,6 @@ impl Workspace {
                 w: ACTIONS_WIDTH.px; h: layout::ICON_BUTTON_SIZE.px; invisible;
                 @$!editing => { group_hover: $group.clone(), $gds_uim::m! { visible; }; };
             } [
-                #layout::icon_button($SharedString::from(format!("rename-{id}")), IconName::Pencil) {
-                    accessibility_label: $crate::i18n::tr!("session-rename");
-                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("session-rename"), shortcuts::RenameThread);
-                    disabled: disabled;
-                    on_click: $cx.listener(move |this, _, window, cx| {
-                        this.on_thread_row_rename(id, window, cx);
-                    });
-                },
                 $self.thread_visibility_button(session, cx),
             ]
         };
@@ -113,6 +110,12 @@ impl Workspace {
 
     fn on_thread_row_rename(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        if !self.backend.connected
+            || self.sessions.pending.archiving.contains(&id)
+            || self.sessions.pending.deleting.contains(&id)
+        {
+            return;
+        }
         self.begin_sidebar_rename(id, window, cx);
     }
 
