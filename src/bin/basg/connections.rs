@@ -1,7 +1,7 @@
 //! Frontend-owned service profiles; existing workspaces retain their own target.
 
 use bas::{
-    config::{ConnectionProfile, Document, Frontend, Store},
+    config::{ConnectionProfile, Frontend, FrontendDocument as Document, FrontendStore as Store},
     service::tls::ConnectionOptions as Target,
 };
 use gpui_kit::{App, AppContext, BorrowAppContext, Context, Entity, Global};

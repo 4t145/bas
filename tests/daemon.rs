@@ -38,12 +38,15 @@ mod storage;
 mod acp_lifecycle;
 
 fn command() -> Command {
+    static CONFIG: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let config = CONFIG.get_or_init(|| tempfile::tempdir().expect("isolated daemon config"));
     let mut command = Command::new(env!("CARGO_BIN_EXE_bas"));
     for key in [
         "BAS_LISTEN",
         "BAS_AGENTS",
         "BAS_AGENTS_FILE",
         "BAS_SETTINGS_FILE",
+        "BAS_DAEMON_SETTINGS_FILE",
         "BAS_NOTIFY",
         "BAS_HISTORY",
         "BAS_STORAGE",
@@ -60,6 +63,7 @@ fn command() -> Command {
         command.env_remove(key);
     }
     command
+        .env("XDG_CONFIG_HOME", config.path())
         .env("BAS_AGENTS", "embedded")
         .env("BAS_STORAGE", "memory")
         .kill_on_drop(true)

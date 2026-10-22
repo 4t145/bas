@@ -18,6 +18,8 @@ use tokio_util::task::AbortOnDropHandle;
 
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(45);
 
+mod policy;
+
 #[derive(Clone)]
 pub(crate) struct Service {
     server: Target,

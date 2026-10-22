@@ -111,7 +111,8 @@ fn history_window(epoch: u64, session: bas::model::SessionSnapshot, events: Vec<
             events,
             context: Vec::new(),
             before: None,
-        },
+        }
+        .into(),
         cached: false,
     }
 }
@@ -150,7 +151,8 @@ fn title_and_background_catalog_wait_for_receipt_correlated_tracking(cx: &mut Te
                             EventKind::TitleChanged {
                                 title: "renamed".into(),
                             },
-                        ),
+                        )
+                        .into(),
                     },
                     window,
                     cx,
@@ -262,7 +264,8 @@ fn catalog_and_history_merge_metadata_without_skipping_content(cx: &mut TestAppC
                                 bas::acp::StopReason::EndTurn,
                             )),
                         },
-                    ),
+                    )
+                    .into(),
                 },
                 window,
                 cx,
@@ -316,7 +319,8 @@ fn editing_queue_head_keeps_order_and_escape_restores_composition(cx: &mut TestA
                                 bas::acp::StopReason::EndTurn,
                             )),
                         },
-                    ),
+                    )
+                    .into(),
                 },
                 window,
                 cx,
@@ -748,7 +752,8 @@ fn late_events_and_send_receipts_cannot_modify_another_session(cx: &mut TestAppC
                         EventKind::Acp(bas::acp::SessionUpdate::AgentMessageChunk(
                             bas::acp::ContentChunk::new(ContentBlock::from("迟到的回复")),
                         )),
-                    ),
+                    )
+                    .into(),
                 },
                 window,
                 cx,
@@ -882,7 +887,8 @@ fn terminal_reference_does_not_hide_raw_tool_result(cx: &mut TestAppContext) {
                         session.id,
                         Cursor::from_raw(1),
                         EventKind::Acp(bas::acp::SessionUpdate::ToolCall(tool)),
-                    ),
+                    )
+                    .into(),
                 },
                 window,
                 cx,
@@ -1152,7 +1158,7 @@ fn folded_reply_stays_unread_until_opened_and_survives_replay(cx: &mut TestAppCo
                 view.update(
                     Update::Event {
                         epoch: view.selected.epoch,
-                        event: event.clone(),
+                        event: event.clone().into(),
                     },
                     window,
                     cx,
@@ -1243,7 +1249,7 @@ fn unread_reply_is_scoped_to_its_session_and_requires_a_visible_foreground_answe
                 view.update(
                     Update::Event {
                         epoch: view.selected.epoch,
-                        event,
+                        event: event.into(),
                     },
                     window,
                     cx,
@@ -1304,7 +1310,7 @@ fn unread_reply_is_scoped_to_its_session_and_requires_a_visible_foreground_answe
                 view.update(
                     Update::Event {
                         epoch: view.selected.epoch,
-                        event,
+                        event: event.into(),
                     },
                     window,
                     cx,
@@ -1383,7 +1389,8 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
                                 bas::acp::StopReason::EndTurn,
                             )),
                         },
-                    ),
+                    )
+                    .into(),
                 },
                 window,
                 cx,
@@ -1417,7 +1424,8 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
                         EventKind::TurnStarted {
                             turn: accepted.turn,
                         },
-                    ),
+                    )
+                    .into(),
                 },
                 window,
                 cx,
@@ -1434,7 +1442,8 @@ fn running_turn_queues_messages_in_order_and_keeps_failed_messages(cx: &mut Test
                                 bas::acp::StopReason::EndTurn,
                             )),
                         },
-                    ),
+                    )
+                    .into(),
                 },
                 window,
                 cx,
@@ -1581,6 +1590,7 @@ fn reopening_restores_the_selected_thread_and_deleted_threads_fall_back(cx: &mut
             .update(cx, |view, cx| view.select(recent.id, window, cx));
     })
     .expect("save changed selection");
+    cx.run_until_parked();
     assert_eq!(
         workspace_navigation::restore::Store::open(state_path.clone()).thread(),
         Some(recent.id)
@@ -1606,6 +1616,7 @@ fn reopening_restores_the_selected_thread_and_deleted_threads_fall_back(cx: &mut
         });
     })
     .expect("deleted selection fallback");
+    cx.run_until_parked();
     assert_eq!(
         workspace_navigation::restore::Store::open(state_path).thread(),
         Some(previous.id)

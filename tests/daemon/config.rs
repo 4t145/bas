@@ -39,14 +39,17 @@ async fn wait_id(daemon: &mut Daemon, expected: &str) {
 }
 
 #[tokio::test]
-async fn settings_file_environment_reloads_catalog_and_preserves_sessions() {
+async fn daemon_settings_file_environment_reloads_catalog_and_preserves_sessions() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");
     write_settings(&path, "before");
+    let frontend = directory.path().join("frontend.json");
+    std::fs::write(&frontend, "invalid frontend JSON").unwrap();
     let mut command = command();
     command
         .env_remove("BAS_AGENTS")
-        .env("BAS_SETTINGS_FILE", &path)
+        .env("BAS_SETTINGS_FILE", frontend)
+        .env("BAS_DAEMON_SETTINGS_FILE", &path)
         .args([
             "--listen",
             "127.0.0.1:0",
@@ -138,7 +141,7 @@ async fn explicit_legacy_file_precedes_settings_and_reloads() {
     let mut command = command();
     command
         .env_remove("BAS_AGENTS")
-        .env("BAS_SETTINGS_FILE", &settings)
+        .env("BAS_DAEMON_SETTINGS_FILE", &settings)
         .arg("--agents-file")
         .arg(&legacy)
         .args([
@@ -235,6 +238,26 @@ async fn default_catalog_migrates_once_without_falling_back_on_deletion() {
     std::fs::remove_file(&settings).unwrap();
     tokio::time::sleep(Duration::from_millis(1200)).await;
     assert_eq!(ids(&mut daemon).await, ["unified"]);
+    let canonical = config.join("daemon.json");
+    std::fs::write(
+        &canonical,
+        r#"{"agents":[{"id":"canonical","kind":"embedded"}]}"#,
+    )
+    .unwrap();
+    wait_id(&mut daemon, "canonical").await;
+    write_settings(&settings, "frontend-edit");
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(ids(&mut daemon).await, ["canonical"]);
+    std::fs::write(&canonical, "invalid canonical").unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(ids(&mut daemon).await, ["canonical"]);
+    std::fs::remove_file(&canonical).unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(
+        ids(&mut daemon).await,
+        ["canonical"],
+        "no downgrade to legacy"
+    );
     daemon.stop().await;
 }
 

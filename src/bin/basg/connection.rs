@@ -20,6 +20,8 @@ mod elicitations;
 mod failure;
 mod foreground;
 mod history;
+mod prepared;
+pub(crate) use prepared::{HistoryWeight, Prepared, PreparedHistory};
 mod model;
 mod permissions;
 mod tracking;
@@ -222,21 +224,21 @@ pub(super) enum Update {
     },
     HistoryWindow {
         epoch: u64,
-        window: HistoryWindow,
+        window: PreparedHistory,
         cached: bool,
     },
     OlderHistory {
         epoch: u64,
         before: u64,
-        result: Result<HistoryWindow, Failure>,
+        result: Result<PreparedHistory, Failure>,
     },
     HistoryMeta {
         epoch: u64,
-        session: SessionSnapshot,
+        session: Prepared<SessionSnapshot>,
     },
     Event {
         epoch: u64,
-        event: Event,
+        event: Prepared<Event>,
     },
     Stream {
         epoch: u64,
@@ -372,7 +374,7 @@ async fn run_cached(
                         let client = client.clone();
                         let updates = updates.clone();
                         tasks.spawn(async move {
-                            let result = history.older(client, session, before).await;
+                            let result = history.older(client, session, before).await.map(Into::into);
                             let _ = updates.send(Update::OlderHistory { epoch, before, result }).await;
                         });
                     }
@@ -861,7 +863,7 @@ async fn watch_cached(
                 let _ = updates
                     .send(Update::HistoryMeta {
                         epoch,
-                        session: meta,
+                        session: meta.into(),
                     })
                     .await;
                 if let Some(failure) = failure {
@@ -1023,7 +1025,14 @@ async fn watch_cached(
                         resynced = false;
                         store.event(&event).await;
                     }
-                    if updates.send(Update::Event { epoch, event }).await.is_err() {
+                    if updates
+                        .send(Update::Event {
+                            epoch,
+                            event: event.into(),
+                        })
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -1088,7 +1097,7 @@ async fn load_initial(
     let _ = updates
         .send(Update::HistoryWindow {
             epoch,
-            window,
+            window: window.into(),
             cached: false,
         })
         .await;

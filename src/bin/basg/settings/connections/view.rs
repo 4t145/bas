@@ -58,7 +58,7 @@ impl Page {
                             flex_1; min_w_0; truncate;
                         } [$name],
                     ],
-                    $ui::feedback("connection-discovered-endpoint", address, cx.theme().muted_foreground).compact(),
+                    $crate::settings::feedback("connection-discovered-endpoint", address, cx.theme().muted_foreground).compact(),
                 ],
                 #super::super::action_button("connection-discovered-add") {
                     label: $(if added { crate::i18n::tr!("connections-already-added") } else { crate::i18n::tr!("connections-create") });
@@ -86,10 +86,10 @@ impl Page {
                 flex; items_center; gap_2;
             } [
                 Spinner { with_size: $px(ui::ICON); color: $cx.theme().muted_foreground; },
-                $ui::feedback("connection-discovery-loading", crate::i18n::tr!("connections-discovery-loading"), cx.theme().foreground),
+                $crate::settings::feedback("connection-discovery-loading", crate::i18n::tr!("connections-discovery-loading"), cx.theme().foreground),
             ] }),
             ..$matches!(state, State::Failed).then(|| el! { #div { flex; flex_col; gap_2; } [
-                $ui::feedback("connection-discovery-failed", crate::i18n::tr!("connections-discovery-failed"), cx.theme().foreground),
+                $crate::settings::feedback("connection-discovery-failed", crate::i18n::tr!("connections-discovery-failed"), cx.theme().foreground),
                 #super::super::action_button("connection-discovery-retry") {
                     label: $crate::i18n::tr!("connections-discovery-retry");
                     on_click: $cx.listener(|this, _, window, cx| this.discover(window, cx));
@@ -137,7 +137,8 @@ impl Page {
 
     fn error_view(&self, cx: &App) -> Option<AnyElement> {
         self.error(cx).map(|message| {
-            ui::feedback("connections-message", message, cx.theme().danger).into_any_element()
+            crate::settings::feedback("connections-message", message, cx.theme().danger)
+                .into_any_element()
         })
     }
 
@@ -323,7 +324,7 @@ impl Page {
                     hoverable_tooltip: $move |window, cx| ui::tooltip::view(hint.clone(), window, cx);
                 } [$note.replace('\n', " ")] }
             }),
-            ..$check_result.map(|(message, color)| ui::feedback(
+            ..$check_result.map(|(message, color)| crate::settings::feedback(
                 format!("connection-check-result-{}", profile.id), message, color,
             )),
             ..$editing.then(|| el! { #div {

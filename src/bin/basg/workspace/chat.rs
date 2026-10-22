@@ -252,7 +252,8 @@ impl Workspace {
             )),
             ..$retry.then(|| gds_uim::el! {
                 #crate::ui::action_button("history-load-retry") {
-                    label: $crate::i18n::tr!("session-history-retry");
+                    label: $self.history_retry_label();
+                    disabled: $self.history_retry_disabled();
                     on_click: $cx.listener(|this, _, _, cx| this.retry_history(cx));
                 }
             }),

@@ -3,27 +3,33 @@ use bas::model::SessionSnapshot;
 use gpui_kit::component::menu::PopupMenuItem;
 
 impl Workspace {
+    pub(in crate::workspace) fn supports_directories(&self) -> bool {
+        self.current()
+            .and_then(|meta| meta.initialization.as_ref())
+            .is_some_and(|init| {
+                let caps = &init.agent_capabilities;
+                caps.session_capabilities.additional_directories.is_some()
+                    && (caps.load_session || caps.session_capabilities.resume.is_some())
+            })
+    }
+
     pub(in crate::workspace) fn can_set_directories(&self) -> bool {
-        self.current().is_some_and(|meta| {
-            self.backend.connected
-                && self.sessions.healthy(meta.id)
-                && !meta.archived
-                && meta.status == SessionStatus::Idle
-                && meta.active_turn.is_none()
-                && !self.sending(meta.id)
-                && !self.navigation.picker.pending
-                && !self.sessions.pending.configuring.contains(&meta.id)
-                && !self.sessions.pending.archiving.contains(&meta.id)
-                && !self.sessions.pending.closing.contains(&meta.id)
-                && !self.sessions.pending.restarting.contains(&meta.id)
-                && self.selected.approval.panel.is_empty()
-                && self.selected.elicitations.is_empty()
-                && meta.initialization.as_ref().is_some_and(|init| {
-                    let caps = &init.agent_capabilities;
-                    caps.session_capabilities.additional_directories.is_some()
-                        && (caps.load_session || caps.session_capabilities.resume.is_some())
-                })
-        })
+        self.supports_directories()
+            && self.current().is_some_and(|meta| {
+                self.backend.connected
+                    && self.sessions.healthy(meta.id)
+                    && !meta.archived
+                    && meta.status == SessionStatus::Idle
+                    && meta.active_turn.is_none()
+                    && !self.sending(meta.id)
+                    && !self.navigation.picker.pending
+                    && !self.sessions.pending.configuring.contains(&meta.id)
+                    && !self.sessions.pending.archiving.contains(&meta.id)
+                    && !self.sessions.pending.closing.contains(&meta.id)
+                    && !self.sessions.pending.restarting.contains(&meta.id)
+                    && self.selected.approval.panel.is_empty()
+                    && self.selected.elicitations.is_empty()
+            })
     }
 
     pub(in crate::workspace) fn directories_button(
@@ -183,15 +189,7 @@ impl Workspace {
                 {
                     crate::conversation::merge_meta(meta, &snapshot.meta);
                 }
-                if let Some(conversation) = self
-                    .selected
-                    .timeline
-                    .conversation
-                    .as_mut()
-                    .filter(|state| state.session.id == session)
-                {
-                    conversation.merge_meta(&snapshot.meta);
-                }
+                self.selected.timeline.merge_meta(&snapshot.meta);
             }
             Err(error) => self.session_operation_error(
                 session,

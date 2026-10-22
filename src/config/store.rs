@@ -10,6 +10,10 @@ use std::{
 };
 use tempfile::NamedTempFile;
 
+mod owned;
+mod scoped;
+pub use owned::{DaemonDocument, DaemonStore, FrontendDocument, FrontendStore};
+
 #[cfg(test)]
 mod tests;
 
@@ -64,6 +68,14 @@ impl Document {
 pub struct Store {
     path: PathBuf,
     import_legacy: bool,
+    scope: Scope,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scope {
+    Unified,
+    Frontend,
+    Daemon,
 }
 #[derive(PartialEq)]
 struct Snapshot {
@@ -72,10 +84,12 @@ struct Snapshot {
 struct Loaded {
     document: Document,
     snapshot: Snapshot,
+    raw: serde_json::Value,
 }
 enum Section {
     Appearance(Appearance),
     Agents(Vec<AgentRegistration>),
+    Acp(super::AcpLifecycle),
     Frontend(Frontend),
 }
 impl Store {
@@ -87,6 +101,7 @@ impl Store {
                     .unwrap_or_else(|| PathBuf::from(".config"))
                     .join("bas/settings.json"),
                 import_legacy: true,
+                scope: Scope::Unified,
             },
         }
     }
@@ -95,6 +110,7 @@ impl Store {
         Self {
             path,
             import_legacy: false,
+            scope: Scope::Unified,
         }
     }
     pub fn path(&self) -> &Path {
@@ -130,6 +146,9 @@ impl Store {
         self.save(document, Section::Frontend(frontend))
     }
     fn read(&self) -> Result<Loaded, Error> {
+        if self.scope != Scope::Unified {
+            return self.read_scoped();
+        }
         let mut snapshot = Snapshot { files: Vec::new() };
         let current = read_optional(&self.path)?;
         snapshot.files.push((self.path.clone(), current.clone()));
@@ -171,6 +190,7 @@ impl Store {
                 sources,
             },
             snapshot,
+            raw: serde_json::Value::Null,
         })
     }
     fn parent(&self) -> &Path {
@@ -185,6 +205,16 @@ impl Store {
         name.into()
     }
     fn save(&self, document: &mut Document, section: Section) -> Result<(), Error> {
+        if matches!(
+            (&section, self.scope),
+            (Section::Agents(_) | Section::Acp(_), Scope::Frontend)
+                | (Section::Appearance(_) | Section::Frontend(_), Scope::Daemon)
+        ) {
+            return Err(invalid(
+                &self.path,
+                "configuration section belongs to the other application",
+            ));
+        }
         reject_links(&self.path)?;
         fs::create_dir_all(self.parent()).map_err(|e| io_error(self.parent(), e))?;
         let lock_path = self.lock_path();
@@ -220,6 +250,13 @@ impl Store {
                 settings.daemon.agents = agents;
                 "daemon.agents"
             }
+            Section::Acp(policy) => {
+                if settings.daemon != document.baseline.daemon {
+                    return Err(self.conflict("daemon"));
+                }
+                settings.daemon.acp = policy;
+                "daemon.acp"
+            }
             Section::Frontend(frontend) => {
                 if settings.frontend != document.baseline.frontend {
                     return Err(self.conflict("frontend"));
@@ -228,8 +265,9 @@ impl Store {
                 "frontend"
             }
         };
-        validate(&self.path, &settings)?;
-        let bytes = serde_json::to_vec_pretty(&settings).map_err(|source| Error::Json {
+        self.validate_scoped(&settings)?;
+        let value = self.encode_scoped(&settings, loaded.raw)?;
+        let bytes = serde_json::to_vec_pretty(&value).map_err(|source| Error::Json {
             path: self.path.clone(),
             source,
         })?;

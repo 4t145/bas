@@ -174,6 +174,12 @@ pub enum Session {
         session: String,
     },
 
+    /// Retry a persistence-blocked session, or start a stopped session, without resending a prompt.
+    Recover {
+        /// Session id.
+        session: String,
+    },
+
     /// Reversibly archive a session without stopping its backend.
     Archive {
         /// Session id.

@@ -216,12 +216,7 @@ fn invalid_and_conflicting_edits_never_overwrite_disk(cx: &mut TestAppContext) {
     })
     .expect("reject invalid draft then edit existing agent through UI");
     assert_eq!(
-        store
-            .load()
-            .expect("load edited agent")
-            .settings
-            .daemon
-            .agents[1]
+        store.load().expect("load edited agent").settings.agents[1]
             .as_custom()
             .expect("custom registration")
             .env["KEEP"],
@@ -298,7 +293,7 @@ fn stale_custom_save_cannot_replace_a_new_managed_registration(cx: &mut TestAppC
         click(window, "agents-save", cx);
         assert!(view.read(cx).dirty(cx));
         assert_eq!(
-            store.load().expect("still managed").settings.daemon.agents,
+            store.load().expect("still managed").settings.agents,
             vec![managed.clone()]
         );
         click(window, "agents-cancel", cx);
@@ -316,7 +311,6 @@ fn stale_custom_save_cannot_replace_a_new_managed_registration(cx: &mut TestAppC
                 .load()
                 .expect("retained unresolved reference")
                 .settings
-                .daemon
                 .agents,
             vec![managed.clone()]
         );

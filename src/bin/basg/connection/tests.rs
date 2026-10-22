@@ -106,6 +106,20 @@ struct Service {
 
 #[tonic::async_trait]
 impl Bas for Service {
+    async fn get_acp_configuration(
+        &self,
+        _: Request<pb::GetAcpConfigurationRequest>,
+    ) -> Result<Response<pb::AcpConfiguration>, Status> {
+        Err(Status::unimplemented("unrelated ACP configuration"))
+    }
+
+    async fn save_acp_configuration(
+        &self,
+        _: Request<pb::SaveAcpConfigurationRequest>,
+    ) -> Result<Response<pb::AcpConfiguration>, Status> {
+        Err(Status::unimplemented("unrelated ACP configuration"))
+    }
+
     async fn get_agent_configuration(
         &self,
         _: Request<pb::GetAgentConfigurationRequest>,

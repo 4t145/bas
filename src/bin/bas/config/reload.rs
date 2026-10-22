@@ -28,19 +28,19 @@ enum AgentsOverride {
 
 impl CatalogSource {
     /// Settings-backed catalogs can persist managed installations.
-    pub fn settings_store(&self) -> Option<bas::config::Store> {
+    pub fn settings_store(&self) -> Option<bas::config::DaemonStore> {
         self.agents_override.is_none().then(|| {
             if self.explicit {
-                bas::config::Store::at(self.path.clone())
+                bas::config::DaemonStore::at(self.path.clone())
             } else {
-                bas::config::Store::new(None)
+                bas::config::DaemonStore::new(None)
             }
         })
     }
 
     pub fn settings(path: Option<PathBuf>) -> Result<Self> {
         let explicit = path.is_some();
-        let store = bas::config::Store::new(path);
+        let store = bas::config::DaemonStore::new(path);
         Ok(Self {
             path: store.path().to_owned(),
             explicit,
@@ -84,29 +84,33 @@ impl CatalogSource {
     }
 
     fn load_settings(&mut self) -> Result<bas::config::Daemon> {
-        // Latch the highest-priority file even when it is temporarily invalid.
-        // A removed settings file must not silently resurrect the legacy catalog.
-        match std::fs::metadata(&self.path) {
-            Ok(metadata) => {
-                anyhow::ensure!(
-                    metadata.is_file(),
-                    "settings path is not a regular file: {}",
-                    self.path.display()
-                );
-                self.required = Some(self.path.clone());
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !self.explicit => {}
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("cannot read settings {}", self.path.display()));
-            }
+        let mut candidates = vec![self.path.clone()];
+        if !self.explicit {
+            candidates.push(self.path.with_file_name("settings.json"));
+            candidates.push(self.path.with_file_name("agents.json"));
         }
-        if self.required.is_none() && !self.explicit {
-            let legacy = self.path.with_file_name("agents.json");
-            match std::fs::metadata(&legacy) {
-                Ok(_) => self.required = Some(legacy),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error).context("cannot inspect legacy agent catalog"),
+        let last = self
+            .required
+            .as_ref()
+            .and_then(|required| candidates.iter().position(|path| path == required))
+            .unwrap_or(candidates.len() - 1);
+        // Promote to a new format, but never fall back after a source disappears.
+        for candidate in candidates.iter().take(last + 1) {
+            match std::fs::metadata(candidate) {
+                Ok(metadata) => {
+                    anyhow::ensure!(
+                        metadata.is_file(),
+                        "configuration is not a regular file: {}",
+                        candidate.display()
+                    );
+                    self.required = Some(candidate.clone());
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound && !self.explicit => {}
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("cannot read settings {}", candidate.display()));
+                }
             }
         }
         if let Some(required) = &self.required {
@@ -118,22 +122,23 @@ impl CatalogSource {
                 required.display()
             );
         }
-        // Explicit settings are isolated: missing files are errors, not import/defaults.
-        let store = if self.explicit || self.required.as_ref() == Some(&self.path) {
-            bas::config::Store::at(self.path.clone())
+        let store = if self.explicit {
+            bas::config::DaemonStore::at(self.path.clone())
         } else {
-            bas::config::Store::new(None)
+            bas::config::DaemonStore::new(None)
         };
         let document = store.load()?;
-        // A file may have appeared between inspection and load. Latch the
-        // actual successful source as well, not only the metadata observation.
-        if document.source_paths().contains(&self.path) {
-            self.required = Some(self.path.clone());
-        } else if self.required.is_none() {
-            let legacy = self.path.with_file_name("agents.json");
-            if document.source_paths().contains(&legacy) {
-                self.required = Some(legacy);
-            }
+        let last = self
+            .required
+            .as_ref()
+            .and_then(|required| candidates.iter().position(|path| path == required))
+            .unwrap_or(candidates.len() - 1);
+        if let Some(source) = candidates
+            .iter()
+            .take(last + 1)
+            .find(|path| document.source_paths().contains(path))
+        {
+            self.required = Some(source.clone());
         }
         if let Some(required) = &self.required {
             anyhow::ensure!(
@@ -142,7 +147,7 @@ impl CatalogSource {
                 required.display()
             );
         }
-        Ok(document.settings.daemon)
+        Ok(document.settings)
     }
 }
 

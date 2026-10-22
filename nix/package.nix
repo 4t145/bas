@@ -95,7 +95,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
         install -Dm644 ${../contrib/bas-user.service} "$out/share/systemd/user/bas.service"
         substituteInPlace "$out/share/systemd/user/bas.service" \
           --replace-fail '@bas@' "$out/bin/bas"
-        install -Dm644 ${../contrib/settings.json} "$out/share/bas/settings.example.json"
+        install -Dm644 ${../contrib/daemon.json} "$out/share/bas/daemon.example.json"
       '';
 
   meta = {

@@ -94,7 +94,7 @@ gpui_kit::assets::icon_assets!(
     ]
 );
 
-gpui_kit::assets::icon_assets!(RegistryIcons, [Download, Scale, Bot]);
+gpui_kit::assets::icon_assets!(RegistryIcons, [Download, CircleArrowUp, Scale, Bot]);
 
 pub(super) struct Assets;
 

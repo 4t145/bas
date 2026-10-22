@@ -14,7 +14,7 @@ async fn fixture() {
         return;
     };
     let root = PathBuf::from(std::env::var_os("BAS_ACP_DATA_DIR").expect("isolated data root"));
-    let store = bas::config::Store::at(root.join("settings.json"));
+    let store = bas::config::DaemonStore::at(root.join("daemon.json"));
     let manager = Arc::new(Manager::new(Some(store.clone())).expect("manager"));
     let root_listener = TcpListener::bind("127.0.0.1:0")
         .await

@@ -7,7 +7,8 @@ impl Workspace {
         let target = match &update {
             Update::HistoryMeta { session, .. } => Some(session.meta.id),
             Update::HistoryWindow { window, .. } => Some(window.session.meta.id),
-            Update::Event { event, .. } | Update::TrackedTurn { event } => Some(event.session),
+            Update::Event { event, .. } => Some(event.session),
+            Update::TrackedTurn { event } => Some(event.session),
             Update::ElicitationResponded { session, .. }
             | Update::PermissionResponded { session, .. }
             | Update::Configured { session, .. }
@@ -84,6 +85,10 @@ impl Workspace {
             }
             Update::Catalog(result) => match result {
                 Ok(mut catalog) => {
+                    let failed_selection = self
+                        .selected
+                        .id
+                        .filter(|id| self.sessions.runtimes.failure(*id).is_some());
                     if !self.backend.connected {
                         crate::agents::metadata::ensure(self.backend.server.clone(), cx);
                     }
@@ -138,17 +143,36 @@ impl Workspace {
                         self.selected.waiting_for_agent_selection = self.selected.agent.is_empty();
                         self.selected.authentication.required = None;
                     }
-                    if let Some(conversation) = &mut self.selected.timeline.conversation
+                    if let Some(id) = self
+                        .selected
+                        .timeline
+                        .conversation
+                        .as_ref()
+                        .map(|conversation| conversation.session.id)
                         && let Some(meta) = self
                             .sessions
                             .entries
                             .iter()
-                            .find(|session| session.id == conversation.session.id)
+                            .find(|session| session.id == id)
                     {
-                        conversation.merge_meta(meta);
+                        self.selected.timeline.merge_meta(meta);
                     }
                     self.sessions_removed(&removed, window, cx);
                     self.restore_thread(window, cx);
+                    if let Some(id) = failed_selection
+                        && self.selected.id == Some(id)
+                        && self.sessions.healthy(id)
+                    {
+                        self.selected.error = None;
+                        self.selected.reload();
+                        self.command(
+                            Command::Watch {
+                                session: id,
+                                epoch: self.selected.epoch,
+                            },
+                            cx,
+                        );
+                    }
                     if self.selected.error.is_none() {
                         self.prepare_session(cx);
                     }
@@ -252,11 +276,7 @@ impl Workspace {
                                 && !incoming.archived
                                 && incoming.revision >= meta.revision;
                             crate::conversation::merge_meta(meta, &incoming);
-                            if let Some(conversation) = &mut self.selected.timeline.conversation
-                                && conversation.session.id == session
-                            {
-                                conversation.merge_meta(meta);
-                            }
+                            self.selected.timeline.merge_meta(meta);
                         }
                         if reattach {
                             self.selected.reload();
@@ -338,15 +358,21 @@ impl Workspace {
                 {
                     crate::conversation::merge_meta(meta, &session.meta);
                 }
-                if let Some(conversation) = &mut self.selected.timeline.conversation {
-                    conversation.merge_meta(&session.meta);
-                }
+                self.selected.timeline.merge_meta(&session.meta);
                 if let Some(history) = &mut self.selected.timeline.history {
                     crate::conversation::merge_meta(&mut history.session.meta, &session.meta);
-                    history.session.runtime = session.runtime;
+                    history.session.runtime = session.value.runtime;
+                    self.selected
+                        .timeline
+                        .history_weight
+                        .merge_meta(session.bytes);
                 }
             }
             Update::Event { epoch, event } if epoch == self.selected.epoch => {
+                let crate::connection::Prepared {
+                    value: event,
+                    bytes,
+                } = event;
                 if let Some(history) = &mut self.selected.timeline.history
                     && event.session == history.session.meta.id
                     && !event.is_transient()
@@ -355,6 +381,24 @@ impl Workspace {
                     history.cursor = event.cursor.raw();
                     history.session.meta.apply_event(&event);
                     history.events.push(event.clone());
+                    self.selected.timeline.history_weight.append(bytes);
+                }
+                if self
+                    .selected
+                    .timeline
+                    .conversation
+                    .as_ref()
+                    .is_some_and(|conversation| {
+                        conversation.session.id == event.session
+                            && !event.is_transient()
+                            && event.cursor.raw() > conversation.cursor
+                    })
+                {
+                    self.selected.timeline.presentation_bytes = self
+                        .selected
+                        .timeline
+                        .presentation_bytes
+                        .saturating_add(bytes.saturating_mul(2));
                 }
                 self.observe_user_prompt(&event);
                 if let Some(meta) = self

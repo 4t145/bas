@@ -34,6 +34,7 @@ impl From<SessionError> for Status {
         match &error {
             SessionError::Runtime(_) => Status::failed_precondition(error.to_string()),
             SessionError::Inactive(_) => Status::failed_precondition(error.to_string()),
+            SessionError::RecoveryBusy => Status::failed_precondition(error.to_string()),
             SessionError::History(error) => (*error).into(),
             SessionError::Storage(crate::storage::Error::Expired { .. }) => {
                 Status::data_loss(error.to_string())

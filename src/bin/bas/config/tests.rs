@@ -20,7 +20,7 @@ fn agent_overrides_still_load_and_watch_server_policy() {
     ] {
         let args = crate::clap::Args::try_parse_from([
             "bas",
-            "--settings-file",
+            "--daemon-settings-file",
             settings.to_str().expect("path"),
             flag,
             value,

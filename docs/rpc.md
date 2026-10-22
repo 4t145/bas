@@ -23,7 +23,9 @@ TCP、mTLS 和本地 IPC 不改变这两条路径的含义。
 | ListAgentSessions | 在单条 ACP 连接上调用 `session/list` 并读完分页；返回原生 `ListSessionsResponse`、初始化能力和已导入 ID 映射，不创建会话 |
 | ImportAgentSession | 接收 Agent 原生 `SessionInfo`，加载／恢复指定会话，保存 Bas UUID 与 Agent ID 映射；不调用 `session/new` |
 | CloseSession | 停止运行实例；支持时先调用 `session/close`，否则释放本地实例，保留 Bas 历史 |
-| RestartSession | 显式重新启动已停止且未归档的会话，保留本地 ID 和历史，不发送 prompt |
+| RestartSession | 显式启动已停止的会话，或重试持久化失败的会话；保留本地 ID 和已提交历史，不发送 prompt |
+| GetAcpConfiguration | 返回本服务的 ACP 策略、Agent 注册和不透明 profile／revision |
+| SaveAcpConfiguration | 校验 profile、策略与目录版本；只保存 ACP 策略并立即应用，不修改前端偏好或 Agent 注册 |
 | SetSessionDirectories | 替换已有空闲会话的完整副目录列表；原 ID、原 cwd 加载／恢复，不创建替代会话 |
 | Session.additional_directories、WorkspaceChanged | 持久化的副目录与重新加载后配置；按事件游标传播，不改变主目录分组 |
 | DeleteAgentSession | 能力协商后调用 `session/delete`，只删除 Agent 历史；已导入活跃会话须先关闭 |
@@ -117,9 +119,15 @@ let options = client.set_config_option_acp(
 当前拒绝包含额外工作根的 `SessionInfo`，以免无声改变执行上下文。
 
 `CloseSession` 保留本地记录并将运行实例置为 Stopped。
-`RestartSession` 仅接受健康、已停止且未归档的记录；ACP 使用原后端 ID，且必须支持 load/resume。
+健康记录的 `RestartSession` 仅接受已停止且未归档的会话；ACP 使用原后端 ID，且必须支持 load/resume。
 已归档记录须通过 `SetArchived(false)` 恢复。启动与回放在提交新运行实例前隔离，
 回放不会再次追加到本地历史。加载被拒绝、能力不支持或提交前取消时仍保留停止记录。
+持久化失败的运行实例也可调用 `RestartSession`：先释放磁盘空间或排除存储错误，
+然后从最后一次成功提交的快照恢复；若仍有进行中回合，记录为中断。
+只有新事务成功提交后才清除失败标记并更换运行实例 ID，写入仍失败则保持原故障。
+该路径不启动 Agent、不重发 prompt、不补造未落盘的输出；下次需要后端时才按原 ACP ID
+加载／恢复。旧订阅仍结束于失败，新实例须重新订阅；归档状态保持不变。
+CLI 可使用 `bast session recover <id>`。底层 Agent 自己损坏的日志不属于此接口的修复范围。
 关闭、删除、启动及 daemon 退出通过同一会话恢复锁互斥；持久化提交一旦开始，
 与其他会话操作一样独立于 RPC 调用者完成，因此超时后应查询实际状态，不自动重试。
 Agent 拒绝关闭时保留原实例，传输超时则释放不确定的本地实例并返回失败。

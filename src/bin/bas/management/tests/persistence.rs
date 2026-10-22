@@ -144,7 +144,6 @@ async fn profiles_share_artifacts_but_not_activation_upgrade_or_removal() {
             .load()
             .expect("settings")
             .settings
-            .daemon
             .agents;
         assert_eq!(agents, vec![AgentSpec::embedded().into()]);
     }
@@ -170,7 +169,7 @@ fn preparation_and_failed_activation_retain_complete_versions_and_previous_refer
         "interruption before activation leaves the old reference"
     );
     let mut external = store.load().expect("external snapshot");
-    let mut registrations = external.settings.daemon.agents.clone();
+    let mut registrations = external.settings.agents.clone();
     registrations.push(AgentSpec::acp("external", Command::new("external", [])).into());
     store
         .save_agents(&mut external, registrations)

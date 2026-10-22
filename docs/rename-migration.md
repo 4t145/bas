@@ -47,7 +47,8 @@ GUI 状态从 `~/.local/state/basrw/` 移至 `~/.local/state/basg/`。
 
 - 设置根目录由 [共享目录规则](../src/config/paths.rs) 选择：绝对
   `XDG_CONFIG_HOME` 优先，否则使用系统用户配置目录。`--settings-file` /
-  `BAS_SETTINGS_FILE` 可覆盖完整设置文件位置。
+  `BAS_SETTINGS_FILE` 覆盖前端偏好；后端使用 `--daemon-settings-file` /
+  `BAS_DAEMON_SETTINGS_FILE`。旧统一文件兼容规则见 [安装说明](install.md#配置-acp-后端)。
 - 数据库使用同一模块的状态根目录：绝对 `XDG_STATE_HOME` 优先，否则使用系统状态目录，
   不可用时回退至本地数据目录。默认文件为 `bas/sessions.sqlite3`；
   `--localdb-path` / `BAS_LOCALDB_PATH` 可覆盖它，`memory` 模式不持久化。

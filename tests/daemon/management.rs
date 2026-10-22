@@ -97,6 +97,47 @@ pub(super) async fn edit_configuration(client: &mut Client, path: &std::path::Pa
         .expect("saved catalog published")
         .into_inner();
     assert_eq!(check.status(), pb::AgentCheckStatus::Connected);
+    let policy_before = client
+        .get_acp_configuration(pb::GetAcpConfigurationRequest {})
+        .await
+        .expect("fetch server policy")
+        .into_inner();
+    let policy = bas::config::AcpLifecycle {
+        idle_timeout_secs: None,
+        pool_size: 0,
+        ..Default::default()
+    };
+    let save = pb::SaveAcpConfigurationRequest {
+        profile: policy_before.profile,
+        revision: policy_before.revision,
+        policy_json: serde_json::to_vec(&policy).expect("policy JSON"),
+    };
+    let applied = client
+        .save_acp_configuration(save.clone())
+        .await
+        .expect("save policy")
+        .into_inner();
+    assert_eq!(
+        client
+            .get_acp_configuration(pb::GetAcpConfigurationRequest {})
+            .await
+            .expect("read policy")
+            .into_inner(),
+        applied
+    );
+    let disk = bas::config::DaemonStore::at(path.to_owned())
+        .load()
+        .expect("disk");
+    assert_eq!(disk.settings.acp, policy);
+    assert_eq!(disk.settings.agents, agents, "policy edit preserves agents");
+    assert_eq!(
+        client
+            .save_acp_configuration(save)
+            .await
+            .expect_err("stale policy")
+            .code(),
+        tonic::Code::Aborted
+    );
 }
 
 #[tokio::test]
@@ -224,7 +265,7 @@ async fn start(directory: &std::path::Path, fixture: &Fixture) -> Daemon {
     let mut command = command();
     command
         .env_remove("BAS_AGENTS")
-        .env("BAS_SETTINGS_FILE", path)
+        .env("BAS_DAEMON_SETTINGS_FILE", path)
         .env("BAS_ACP_DATA_DIR", directory.join("acp"))
         .env(
             "BAS_ACP_REGISTRY_URL",

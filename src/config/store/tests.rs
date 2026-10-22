@@ -26,6 +26,7 @@ fn fixture() -> (tempfile::TempDir, Store) {
     let store = Store {
         path: dir.path().join("settings.json"),
         import_legacy: true,
+        scope: Scope::Unified,
     };
     (dir, store)
 }

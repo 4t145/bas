@@ -1,4 +1,4 @@
-//! Strict shared settings and conflict-aware, section-scoped persistence.
+//! Separately owned frontend and daemon settings with conflict-aware persistence.
 mod acp;
 pub mod agent;
 pub mod appearance;
@@ -12,8 +12,18 @@ pub use appearance::Appearance;
 pub use connections::{ConnectionProfile, Frontend};
 pub use registration::*;
 use serde::{Deserialize, Serialize};
-pub use store::{Document, Error, Store};
+pub use store::{
+    DaemonDocument, DaemonStore, Document, Error, FrontendDocument, FrontendStore, Store,
+};
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FrontendSettings {
+    pub appearance: Appearance,
+    pub frontend: Frontend,
+}
+
+/// Legacy unified representation for imports and compatibility tools.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {

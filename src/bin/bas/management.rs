@@ -3,6 +3,7 @@
 mod artifact;
 mod authentication;
 pub(crate) mod installation;
+mod policy;
 mod registry;
 mod runtime;
 pub use authentication::invocation as authentication_invocation;
@@ -10,7 +11,7 @@ pub use authentication::invocation as authentication_invocation;
 use anyhow::{Context, Result};
 use bas::{
     config::{
-        AgentRegistration, AgentSpec, Store,
+        AgentRegistration, AgentSpec, DaemonStore as Store,
         agent::{Command, Kind},
     },
     management::{Catalog, Entry, Source, Status},
@@ -202,7 +203,7 @@ impl Manager {
             tonic::Status::failed_precondition("This daemon uses a fixed agent catalog")
         })?;
         let document = store.load().map_err(configuration_error)?;
-        self.configuration_snapshot(&document.settings.daemon.agents)
+        self.configuration_snapshot(&document.settings.agents)
     }
 
     fn configuration_snapshot(
@@ -236,7 +237,7 @@ impl Manager {
         }
         let mut document = store.load().map_err(configuration_error)?;
         if self
-            .configuration_snapshot(&document.settings.daemon.agents)?
+            .configuration_snapshot(&document.settings.agents)?
             .revision
             != request.revision
         {
@@ -258,14 +259,14 @@ impl Manager {
                     save_error = Some(error);
                     anyhow::bail!("Agent configuration save failed");
                 }
-                Ok(document.settings.daemon.agents.clone())
+                Ok(document.settings.agents.clone())
             })
             .map_err(|error| {
                 save_error
                     .map(configuration_error)
                     .unwrap_or_else(|| tonic::Status::internal(error.to_string()))
             })?;
-        self.configuration_snapshot(&document.settings.daemon.agents)
+        self.configuration_snapshot(&document.settings.agents)
     }
 
     /// # Errors
@@ -489,7 +490,7 @@ impl Manager {
         let store = self.store.as_ref().ok_or(Error::NoStore)?;
         // Preserve this snapshot throughout downloads so external edits are never overwritten.
         let mut document = store.load()?;
-        let old_agents = document.settings.daemon.agents.clone();
+        let old_agents = document.settings.agents.clone();
         installation::check_identity(id, &old_agents)?;
         progress
             .send("resolving", "正在读取 ACP 后端安装信息")
@@ -593,7 +594,7 @@ impl Manager {
         let _disk_lock = self.mutation_lock()?;
         let store = self.store.as_ref().ok_or(Error::NoStore)?;
         let mut document = store.load()?;
-        let old_agents = document.settings.daemon.agents.clone();
+        let old_agents = document.settings.agents.clone();
         if !old_agents
             .iter()
             .any(|agent| agent.id().as_str() == id && agent.managed().is_some())

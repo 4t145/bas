@@ -25,7 +25,8 @@ fn tool_name_and_real_before_after_diff_are_visible(cx: &mut TestAppContext) {
                         session.id,
                         Cursor::from_raw(1),
                         EventKind::Acp(bas::acp::SessionUpdate::ToolCall(tool)),
-                    ),
+                    )
+                    .into(),
                 },
                 window,
                 cx,
@@ -91,7 +92,8 @@ fn empty_terminal_exit_keeps_raw_result_and_displays_command_and_directory(
                             session.id,
                             Cursor::from_raw(1),
                             EventKind::Acp(bas::acp::SessionUpdate::ToolCall(tool)),
-                        ),
+                        )
+                        .into(),
                     },
                     window,
                     cx,

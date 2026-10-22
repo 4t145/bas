@@ -211,9 +211,14 @@ impl Workspace {
         let mut subscriptions = vec![
             cx.observe(&profiles, |_, _, cx| cx.notify()),
             cx.observe(&audio, |_, _, cx| cx.notify()),
-            cx.on_app_quit(|this, _| {
-                this.persist_read_state();
-                std::future::ready(())
+            cx.on_app_quit(|this, cx| {
+                this.persist_read_state(cx);
+                let pending = this.navigation.restore.pending_save.clone();
+                async move {
+                    if let Some(pending) = pending {
+                        pending.await;
+                    }
+                }
             }),
             cx.observe_global_in::<crate::agents::Changes>(window, |this, window, cx| {
                 let changes = cx.global::<crate::agents::Changes>().clone();
@@ -486,7 +491,7 @@ impl Workspace {
         self.selected.select(id);
         let resume = self.restore_timeline(id);
         self.navigation.restore.on_connect = false;
-        self.remember_thread();
+        self.remember_thread(cx);
         self.composer.commands.dismissed = false;
         if let Some(session) = self
             .sessions
@@ -590,7 +595,7 @@ impl Workspace {
         self.selected.detach();
         self.composer.invalidate_target();
         self.navigation.restore.on_connect = false;
-        self.remember_thread();
+        self.remember_thread(cx);
         self.composer.commands.dismissed = false;
         self.navigation.selected_directory = directory;
         if let Some(directory) = &self.navigation.selected_directory

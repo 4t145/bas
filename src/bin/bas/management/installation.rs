@@ -3,7 +3,8 @@
 use super::{Error, Record, artifact, authentication, registry};
 use anyhow::{Context, Result};
 use bas::config::{
-    AgentRegistration, AgentSpec, Document, INSTALLATION_FILE, InstallationRef, ManagedAgent, Store,
+    AgentRegistration, AgentSpec, DaemonDocument as Document, DaemonStore as Store,
+    INSTALLATION_FILE, InstallationRef, ManagedAgent,
 };
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Component};
@@ -118,7 +119,7 @@ pub(super) fn activate(
     managed: ManagedAgent,
 ) -> Result<()> {
     load_record(&managed)?;
-    let mut agents = document.settings.daemon.agents.clone();
+    let mut agents = document.settings.agents.clone();
     check_identity(managed.id.as_str(), &agents)?;
     if let Some(existing) = agents.iter_mut().find(|agent| agent.id() == &managed.id) {
         *existing = AgentRegistration::Managed(managed);

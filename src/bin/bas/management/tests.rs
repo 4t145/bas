@@ -2,6 +2,7 @@ use super::*;
 mod fixture;
 mod lifecycle;
 mod persistence;
+mod policy;
 
 #[tokio::test]
 async fn catalog_resolves_configuration_paths_in_the_daemon() {
@@ -54,7 +55,6 @@ async fn installation_registers_exact_boundaries_and_removal_keeps_credentials_a
     assert!(
         settings
             .settings
-            .daemon
             .agents
             .contains(&AgentRegistration::Managed(managed.clone()))
     );
@@ -102,12 +102,7 @@ async fn bad_checksum_and_manual_identity_leave_settings_and_records_untouched()
             .contains("configured manually")
     );
     assert_eq!(
-        store
-            .load()
-            .expect("preserved settings")
-            .settings
-            .daemon
-            .agents,
+        store.load().expect("preserved settings").settings.agents,
         vec![AgentRegistration::Custom(custom)]
     );
 }
@@ -143,7 +138,6 @@ async fn settings_edits_during_download_are_preserved_without_registration() {
             .load()
             .expect("preserved settings")
             .settings
-            .daemon
             .agents
             .contains(&AgentRegistration::Custom(custom))
     );

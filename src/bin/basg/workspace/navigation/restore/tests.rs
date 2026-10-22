@@ -1,5 +1,91 @@
 use super::*;
 
+#[gpui_kit::test]
+fn queued_navigation_is_ordered_detached_and_merges_other_sections(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    let directory = tempfile::tempdir().expect("state directory");
+    let path = directory.path().join("window.json");
+    let other_path = directory.path().join("other-server.json");
+    let first = SessionId::new();
+    let last = SessionId::new();
+    let executor = cx.background_executor.clone();
+    let (release, gate) = futures::channel::oneshot::channel::<()>();
+    let mut pending = Some(
+        executor
+            .spawn(async move {
+                gate.await.expect("release write");
+            })
+            .shared(),
+    );
+    for (thread, seen) in [
+        (first, HashMap::from([(first, 4)])),
+        (last, HashMap::from([(first, 9), (last, 2)])),
+    ] {
+        let path = path.clone();
+        enqueue(&mut pending, &executor, move || {
+            Store::open(path)
+                .save_navigation(Some(Some(thread)), &seen)
+                .expect("navigation");
+        });
+    }
+    let other = other_path.clone();
+    enqueue(&mut pending, &executor, move || {
+        Store::open(other)
+            .save_navigation(Some(Some(first)), &HashMap::new())
+            .expect("other server");
+    });
+    cx.run_until_parked();
+    assert!(
+        !path.exists(),
+        "a blocked predecessor prevents out-of-order writes"
+    );
+    let mut concurrent = Store::open(path.clone());
+    concurrent.set_bookmarked(first, true).expect("bookmark");
+    concurrent.set_pinned(last, true).expect("pin");
+    concurrent.set_workspace_hidden(None, true).expect("hide");
+    concurrent
+        .save_reads(&HashMap::from([(last, 7)]))
+        .expect("other window read");
+    // Dropping the window's completion handle must not cancel queued transactions.
+    drop(pending);
+    release.send(()).expect("unblock write");
+    cx.run_until_parked();
+    let restored = Store::open(path);
+    assert_eq!(restored.thread(), Some(last));
+    assert_eq!(
+        restored.seen_replies(),
+        HashMap::from([(first, 9), (last, 7)])
+    );
+    assert_eq!(restored.bookmarks(), HashSet::from([first]));
+    assert_eq!(restored.pinned(), HashSet::from([last]));
+    assert_eq!(restored.hidden_workspaces(), HashSet::from([None]));
+    let other = Store::open(other_path);
+    assert_eq!(other.thread(), Some(first));
+    assert!(other.seen_replies().is_empty());
+}
+
+#[gpui_kit::test]
+fn queued_removal_follows_older_read_snapshots(cx: &mut gpui_kit::TestAppContext) {
+    let directory = tempfile::tempdir().expect("state directory");
+    let path = directory.path().join("window.json");
+    let id = SessionId::new();
+    let executor = cx.background_executor.clone();
+    let mut pending = None;
+    let before = path.clone();
+    enqueue(&mut pending, &executor, move || {
+        Store::open(before)
+            .save_navigation(Some(Some(id)), &HashMap::from([(id, 9)]))
+            .expect("read");
+    });
+    let after = path.clone();
+    enqueue(&mut pending, &executor, move || {
+        Store::open(after).forget_reads(&[id]).expect("forget");
+    });
+    cx.run_until_parked();
+    assert!(Store::open(path).seen_replies().is_empty());
+}
+
 #[test]
 fn bookmarks_persist_independently_and_stale_writers_preserve_them() {
     let directory = tempfile::tempdir().expect("state directory");

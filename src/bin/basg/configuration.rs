@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use bas::config::Store;
+use bas::config::FrontendStore as Store;
 use gpui_kit::{App, Global};
 
 struct Configuration(Store);

@@ -10,7 +10,7 @@ impl Agents {
             && self
                 .document
                 .as_ref()
-                .is_some_and(|document| document.settings.daemon.agents.contains(registration))
+                .is_some_and(|document| document.settings.agents.contains(registration))
             && registration
                 .as_custom()
                 .is_none_or(|spec| spec.kind != Kind::Embedded)
@@ -24,7 +24,6 @@ impl Agents {
             .and_then(|document| {
                 document
                     .settings
-                    .daemon
                     .agents
                     .iter()
                     .find(|r| r.id().as_str() == id)
@@ -81,7 +80,7 @@ impl Agents {
         // Confirm the saved identity again; never remove a replacement with the same ID.
         if self.catalog_service.is_none() {
             match self.store.load() {
-                Ok(document) if document.settings.daemon.agents.contains(&registration) => {}
+                Ok(document) if document.settings.agents.contains(&registration) => {}
                 Ok(_) => {
                     self.message = DraftError::Changed.to_string();
                     cx.notify();

@@ -30,6 +30,8 @@ struct FixtureService {
 
 #[derive(Default)]
 struct Probes {
+    policy_error: Option<RpcStatus>,
+    policy_reads: usize,
     configuration_error: Option<RpcStatus>,
     catalog_error: Option<RpcStatus>,
     authentication_error: Option<RpcStatus>,
@@ -49,6 +51,37 @@ macro_rules! fixture_service {
     ($($method:ident($request:ty) -> $response:ty;)*) => {
         #[tonic::async_trait]
         impl pb::bas_server::Bas for FixtureService {
+            async fn get_acp_configuration(
+                &self, _: Request<pb::GetAcpConfigurationRequest>,
+            ) -> Result<Response<pb::AcpConfiguration>, RpcStatus> {
+                let mut probes = self.probes.lock().expect("probes");
+                probes.policy_reads += 1;
+                if let Some(error) = &probes.policy_error { return Err(error.clone()); }
+                let document = bas::config::DaemonStore::at(self.store.path().to_owned())
+                    .load().expect("fixture settings").settings;
+                Ok(Response::new(pb::AcpConfiguration {
+                    profile: "fixture-daemon".into(),
+                    revision: serde_json::to_string(&document).expect("revision"),
+                    policy_json: serde_json::to_vec(&document.acp).expect("policy"),
+                    registrations_json: serde_json::to_vec(&document.agents).expect("agents"),
+                }))
+            }
+
+            async fn save_acp_configuration(
+                &self, request: Request<pb::SaveAcpConfigurationRequest>,
+            ) -> Result<Response<pb::AcpConfiguration>, RpcStatus> {
+                let request = request.into_inner();
+                let baseline = self.get_acp_configuration(Request::new(pb::GetAcpConfigurationRequest {})).await?.into_inner();
+                if request.profile != baseline.profile || request.revision != baseline.revision {
+                    return Err(RpcStatus::aborted("policy changed"));
+                }
+                let store = bas::config::DaemonStore::at(self.store.path().to_owned());
+                let mut document = store.load().expect("fixture document");
+                let policy = serde_json::from_slice(&request.policy_json).expect("valid policy");
+                store.save_acp(&mut document, policy).map_err(|e| RpcStatus::invalid_argument(e.to_string()))?;
+                self.get_acp_configuration(Request::new(pb::GetAcpConfigurationRequest {})).await
+            }
+
             async fn get_agent_configuration(
                 &self, _: Request<pb::GetAgentConfigurationRequest>,
             ) -> Result<Response<pb::AgentConfiguration>, RpcStatus> {
@@ -350,7 +383,13 @@ impl Fixture {
         });
         let mut page = None;
         let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
-            let view = cx.new(|cx| Agents::new(self.store.clone(), window, cx));
+            let view = cx.new(|cx| {
+                Agents::new(
+                    bas::config::DaemonStore::at(self.store.path().to_owned()),
+                    window,
+                    cx,
+                )
+            });
             view.update(cx, |page, cx| {
                 let agents = self
                     .store
@@ -430,6 +469,73 @@ impl Fixture {
 }
 
 #[gpui_kit::test]
+fn policy_page_saves_to_remote_and_preserves_draft_when_server_rejects(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("policy fixture");
+    let fixture = Fixture::with_transport(directory.path().join("server.json"), true);
+    let store = bas::config::DaemonStore::at(fixture.store.path().to_owned());
+    cx.update(super::super::super::tests::init);
+    cx.update(|cx| {
+        crate::agents::init(
+            fixture.address.clone().into(),
+            fixture.runtime.handle().clone(),
+            cx,
+        )
+    });
+    let mut page = None;
+    let window = cx.open_window(size(px(780.), px(820.)), |window, cx| {
+        let view = cx.new(|cx| crate::settings::acp::Page::new(window, cx));
+        view.update(cx, |page, cx| page.open(window, cx));
+        page = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let page = page.expect("policy page");
+    fixture.pump_until(cx, |cx| {
+        page.read(cx).message.is_empty() && fixture.probes.lock().expect("probes").policy_reads > 0
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("acp-policy-idle", cx);
+        window.press("ctrl-a", cx);
+        window.input("120", cx);
+        window.click("acp-policy-size", cx);
+        window.press("ctrl-a", cx);
+        window.input("0", cx);
+        window.render_frame(cx);
+        assert!(window.find("acp-policy-save").visible());
+        window.click("acp-policy-save", cx);
+    })
+    .expect("edit policy through controls");
+    fixture.pump_until(cx, |cx| {
+        page.read(cx).message == crate::i18n::tr!("acp-policy-saved")
+    });
+    let policy = store.load().expect("remote file").settings.acp;
+    assert_eq!(policy.idle_timeout_secs.expect("timeout").get(), 120);
+    assert_eq!(policy.pool_size, 0);
+    fixture.probes.lock().expect("probes").policy_error =
+        Some(RpcStatus::aborted("policy changed"));
+    cx.update_window(window.into(), |_, window, cx| {
+        window.click("acp-policy-size", cx);
+        window.press("ctrl-a", cx);
+        window.input("2", cx);
+        window.render_frame(cx);
+        window.click("acp-policy-save", cx);
+    })
+    .expect("edit stale policy");
+    fixture.pump_until(cx, |cx| page.read(cx).message.contains("policy changed"));
+    assert_eq!(store.load().expect("no overwrite").settings.acp, policy);
+    fixture.probes.lock().expect("probes").policy_error = None;
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("acp-policy-save", cx);
+    })
+    .expect("retry retained draft");
+    fixture.pump_until(cx, |cx| {
+        page.read(cx).message == crate::i18n::tr!("acp-policy-saved")
+    });
+    assert_eq!(store.load().expect("saved draft").settings.acp.pool_size, 2);
+}
+
+#[gpui_kit::test]
 fn fetched_registrations_survive_remote_catalog_failure(cx: &mut TestAppContext) {
     use bas::config::{AgentSpec, agent::Command};
     let directory = tempfile::tempdir().expect("settings");
@@ -461,7 +567,7 @@ fn fetched_registrations_survive_remote_catalog_failure(cx: &mut TestAppContext)
         // This store is deliberately unrelated to the daemon's settings.
         let view = cx.new(|cx| {
             Agents::new(
-                bas::config::Store::at(directory.path().join("client.json")),
+                bas::config::DaemonStore::at(directory.path().join("client.json")),
                 window,
                 cx,
             )

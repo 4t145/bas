@@ -16,7 +16,7 @@ impl Agents {
             Some(Status::Connected(_)) => IconName::Check,
             Some(Status::AuthenticationRequired { .. }) => IconName::LogIn,
             Some(Status::Failed(_) | Status::Missing(_)) => IconName::CircleAlert,
-            _ => IconName::RefreshCw,
+            _ => IconName::Activity,
         };
         let hint = status.map_or(crate::i18n::tr!("agent-check"), status::check_label);
         let result_label = status.map_or(crate::i18n::tr!("agent-unchecked"), status::label);
@@ -41,7 +41,7 @@ impl Agents {
                         id: $format!("{id}-retry"); test_support;
                         absolute; inset_0; invisible;
                         group_hover: group, $gds_uim::m! { visible; };
-                    } [Icon(IconName::RefreshCw) { size: $px(crate::ui::SMALL_ICON); }],
+                    } [Icon(IconName::Activity) { size: $px(crate::ui::SMALL_ICON); }],
                 ],
             ]
         }

@@ -12,6 +12,9 @@ service Bas {
   // Edits only this daemon's agent section, never arbitrary files or frontend settings.
   rpc GetAgentConfiguration(GetAgentConfigurationRequest) returns (AgentConfiguration);
   rpc SaveAgentConfiguration(SaveAgentConfigurationRequest) returns (AgentConfiguration);
+  // Edits only the selected daemon's ACP lifetime and reserve policy.
+  rpc GetAcpConfiguration(GetAcpConfigurationRequest) returns (AcpConfiguration);
+  rpc SaveAcpConfiguration(SaveAcpConfigurationRequest) returns (AcpConfiguration);
   // Lists the agent backends this daemon can launch.
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   // Checks a saved configuration, optionally performing an isolated ACP handshake.
@@ -39,6 +42,8 @@ service Bas {
   // Stops the runtime, using standard ACP close when supported, retaining the transcript.
   rpc CloseSession(GetSessionRequest) returns (GetSessionResponse);
   // Explicitly reloads a stopped, non-archived session, preserving its ID and history.
+  // Also retries a persistence-blocked runtime after storage becomes writable.
+  // Reconciles committed history without resending a prompt; backend restoration remains lazy.
   rpc RestartSession(GetSessionRequest) returns (GetSessionResponse);
   // Reloads the same idle session with the complete additional-root list.
   rpc SetSessionDirectories(SetSessionDirectoriesRequest) returns (GetSessionResponse);
@@ -106,6 +111,20 @@ message SaveAgentConfigurationRequest {
   string profile = 1;
   string revision = 2;
   bytes registrations_json = 3;
+}
+
+message GetAcpConfigurationRequest {}
+message AcpConfiguration {
+  string profile = 1;
+  // Covers policy and agent registrations, so the editor cannot save against stale IDs.
+  string revision = 2;
+  bytes policy_json = 3;
+  bytes registrations_json = 4;
+}
+message SaveAcpConfigurationRequest {
+  string profile = 1;
+  string revision = 2;
+  bytes policy_json = 3;
 }
 
 message ListAgentSessionsRequest {

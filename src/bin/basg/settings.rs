@@ -14,6 +14,7 @@ use gpui_kit::{
     px,
 };
 
+mod acp;
 mod agents;
 mod appearance;
 mod connections;
@@ -22,6 +23,15 @@ pub(crate) mod window;
 
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
+
+/// Settings feedback is informational; copying remains available on other UI surfaces.
+fn feedback(
+    id: impl Into<gpui_kit::SharedString>,
+    text: impl Into<gpui_kit::SharedString>,
+    color: gpui_kit::Hsla,
+) -> crate::ui::Feedback {
+    crate::ui::feedback(id, text, color).without_copy()
+}
 
 // Keep actions distinct from the ghost navigation items, using upstream state styling.
 fn action_button(id: impl Into<gpui_kit::ElementId>) -> Button {
@@ -59,14 +69,16 @@ enum Category {
     Sessions,
     Connections,
     Agents,
+    Acp,
 }
 
 impl Category {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Appearance,
         Self::Sessions,
         Self::Connections,
         Self::Agents,
+        Self::Acp,
     ];
 
     fn id(self) -> &'static str {
@@ -75,6 +87,7 @@ impl Category {
             Self::Sessions => "settings-sessions",
             Self::Connections => "settings-connections",
             Self::Agents => "settings-agents",
+            Self::Acp => "settings-acp",
         }
     }
 
@@ -84,11 +97,19 @@ impl Category {
             Self::Sessions => crate::i18n::tr!("settings-sessions"),
             Self::Connections => crate::i18n::tr!("settings-connections"),
             Self::Agents => crate::i18n::tr!("settings-agents"),
+            Self::Acp => crate::i18n::tr!("settings-acp"),
         }
     }
 
     fn for_query(query: &str) -> Self {
         let query = query.trim().to_lowercase();
+        if query == "acp"
+            || ["pool", "idle", "池", "回收", "预热"]
+                .iter()
+                .any(|word| query.contains(word))
+        {
+            return Self::Acp;
+        }
         if !query.is_empty() && appearance::AppearancePage::matches_session_query(&query) {
             return Self::Sessions;
         }
@@ -132,6 +153,8 @@ pub(crate) struct Settings {
     profiles: Entity<crate::connections::Profiles>,
     agents: Entity<agents::Agents>,
     _agents_subscription: Subscription,
+    acp: Entity<acp::Page>,
+    _acp_subscription: Subscription,
     connection_message: String,
     category: Category,
     /// Section the sidebar points at inside each page.
@@ -150,6 +173,8 @@ impl Settings {
         let appearance = cx.new(|cx| appearance::AppearancePage::new(editor, window, cx));
         let profiles = crate::connections::shared(cx);
         let connections = cx.new(|cx| connections::Page::new(window, cx));
+        let acp = cx.new(|cx| acp::Page::new(window, cx));
+        let acp_subscription = cx.observe(&acp, |_, _, cx| cx.notify());
         let agents_subscription = cx.observe(&agents, Self::on_agents_changed);
         let subscriptions = vec![
             cx.subscribe_in(&search, window, Self::on_search),
@@ -170,6 +195,8 @@ impl Settings {
             profiles,
             agents,
             _agents_subscription: agents_subscription,
+            acp,
+            _acp_subscription: acp_subscription,
             connection_message: String::new(),
             category: Category::Appearance,
             appearance_group: None,
@@ -183,7 +210,7 @@ impl Settings {
         &mut self,
         _: &Entity<InputState>,
         event: &InputEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if matches!(event, InputEvent::Change) {
@@ -191,11 +218,17 @@ impl Settings {
             if !query.trim().is_empty() {
                 let category = Category::for_query(&query);
                 if self.category != Category::Agents
-                    || matches!(category, Category::Sessions | Category::Connections)
+                    || matches!(
+                        category,
+                        Category::Sessions | Category::Connections | Category::Acp
+                    )
                 {
                     self.category = category;
                 }
                 self.expanded.insert(self.category);
+                if self.category == Category::Acp {
+                    self.acp.update(cx, |page, cx| page.open(window, cx));
+                }
             }
             self.appearance.update(cx, |page, cx| {
                 page.query = query.clone();
@@ -220,6 +253,11 @@ impl Settings {
         }
         self.agents = agents;
         self._agents_subscription = cx.observe(&self.agents, Self::on_agents_changed);
+        self.acp = cx.new(|cx| acp::Page::new(window, cx));
+        self._acp_subscription = cx.observe(&self.acp, |_, _, cx| cx.notify());
+        if self.category == Category::Acp {
+            self.acp.update(cx, |page, cx| page.open(window, cx));
+        }
         self.agent_section = None;
         cx.notify();
     }
@@ -267,6 +305,13 @@ impl Settings {
                 cx.notify();
             }
             Category::Agents => self.select_agents(None, window, cx),
+            Category::Acp => {
+                self.category = Category::Acp;
+                self.search
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                self.acp.update(cx, |page, cx| page.open(window, cx));
+                cx.notify();
+            }
             Category::Connections => {
                 self.category = Category::Connections;
                 self.search
@@ -296,7 +341,9 @@ impl Settings {
                     .appearance_path()
                     .to_owned(),
             ),
-            Category::Agents => self.agents.read(cx).settings_path().map(ToOwned::to_owned),
+            Category::Agents | Category::Acp => {
+                self.agents.read(cx).settings_path().map(ToOwned::to_owned)
+            }
             Category::Connections => Some(crate::configuration::store(cx).path().to_owned()),
         }
     }
@@ -306,7 +353,7 @@ impl Settings {
     }
 
     fn on_edit_file(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.category != Category::Agents {
+        if !matches!(self.category, Category::Agents | Category::Acp) {
             self.flush_pending(window, cx);
         }
         if let Some(path) = self.settings_path(cx) {
@@ -330,13 +377,13 @@ impl Settings {
             Category::Appearance | Category::Sessions | Category::Connections => {
                 "settings-frontend-context"
             }
-            Category::Agents => "settings-backend-context",
+            Category::Agents | Category::Acp => "settings-backend-context",
         };
         let context = match self.category {
             Category::Appearance | Category::Sessions | Category::Connections => {
                 crate::i18n::tr!("settings-frontend-context").to_owned()
             }
-            Category::Agents => {
+            Category::Agents | Category::Acp => {
                 let backend = cx
                     .try_global::<crate::agents::catalog::Service>()
                     .map_or_else(
@@ -359,7 +406,7 @@ impl Settings {
                         aria_label: $context.clone();
                         flex_1; min_w_0; truncate;
                     } [$context],
-                    ..$bool::then(self.category == Category::Agents, || self.backend_selector(cx)),
+                    ..$bool::then(matches!(self.category, Category::Agents | Category::Acp), || self.backend_selector(cx)),
                     #div {
                         id: "settings-actions"; test_support;
                         flex; items_center; gap_2; flex_shrink_0;
@@ -380,7 +427,7 @@ impl Settings {
                     $(match self.category {
                         Category::Appearance | Category::Sessions => crate::i18n::tr!("settings-frontend-description").to_owned(),
                         Category::Connections => crate::i18n::tr!("connections-description").to_owned(),
-                        Category::Agents => crate::i18n::tr!("connections-switch-description").to_owned(),
+                        Category::Agents | Category::Acp => crate::i18n::tr!("connections-switch-description").to_owned(),
                     }),
                 ],
             ]
@@ -487,7 +534,7 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Vec<gpui_kit::AnyElement> {
         match category {
-            Category::Sessions | Category::Connections => Vec::new(),
+            Category::Sessions | Category::Connections | Category::Acp => Vec::new(),
             Category::Appearance => appearance::Group::ALL
                 .into_iter()
                 .map(|item| {
@@ -533,11 +580,14 @@ impl Settings {
         let selected = self.category == category;
         let pointing_at_section = match category {
             Category::Appearance => self.appearance_group.is_some(),
-            Category::Sessions | Category::Connections => false,
+            Category::Sessions | Category::Connections | Category::Acp => false,
             Category::Agents => self.agent_section.is_some(),
         };
         let sections = self.section_navigation(category, selected, searching, cx);
-        if matches!(category, Category::Sessions | Category::Connections) {
+        if matches!(
+            category,
+            Category::Sessions | Category::Connections | Category::Acp
+        ) {
             return el! { #div { pl: crate::ui::COMPACT_CONTROL.px; flex; } [
                 #navigation_button($category.id(), $category.title()) {
                     flex_1; selected: selected;
@@ -619,6 +669,7 @@ impl Render for Settings {
         let feedback = match self.category {
             Category::Appearance | Category::Sessions => self.appearance.read(cx).message.clone(),
             Category::Agents => self.agents.read(cx).save_status().unwrap_or_default(),
+            Category::Acp => self.acp.read(cx).message.clone(),
             Category::Connections => self.connections.read(cx).status(cx),
         };
         let feedback = if self.connection_message.is_empty() {
@@ -664,20 +715,20 @@ impl Render for Settings {
                             .into_iter()
                             .map(|category| el! {
                                 #div { flex; flex_col; gap_1; } [
-                                    ..$bool::then(!matches!(category, Category::Sessions | Category::Connections), || el! { #div {
+                                    ..$bool::then(!matches!(category, Category::Sessions | Category::Connections | Category::Acp), || el! { #div {
                                         mt_2; text_size: $crate::ui::SMALL;
                                         text_color: $cx.theme().muted_foreground;
                                     } [
                                         $(match category {
                                             Category::Appearance | Category::Sessions | Category::Connections => crate::i18n::tr!("settings-scope-frontend"),
-                                            Category::Agents => crate::i18n::tr!("settings-scope-backend"),
+                                            Category::Agents | Category::Acp => crate::i18n::tr!("settings-scope-backend"),
                                         }),
                                     ] }),
                                     $self.category_navigation(category, cx),
                                 ]
                             }),
                     ],
-                    $crate::ui::feedback("settings-save-status", feedback, cx.theme().muted_foreground).compact(),
+                    $crate::settings::feedback("settings-save-status", feedback, cx.theme().muted_foreground).compact(),
                 ],
                 #div {
                     flex_1;
@@ -691,6 +742,7 @@ impl Render for Settings {
                             Category::Appearance => self.appearance.clone().into_any_element(),
                             Category::Sessions => self.appearance.update(cx, |page, cx| page.render_sessions(window, cx)),
                             Category::Agents => self.agents.clone().into_any_element(),
+                            Category::Acp => self.acp.clone().into_any_element(),
                             Category::Connections => self.connections.clone().into_any_element(),
                         }),
                     ],

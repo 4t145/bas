@@ -386,7 +386,7 @@ impl Agents {
             let disabled =
                 !self.managed_allowed(cx) || any_busy || entry.status == Status::Unsupported;
             Some(gds_uim::el! {
-                #item::action($format!("agents-install-{}", entry.id), $(if update { IconName::RefreshCw } else { IconName::Download }), $(if update {
+                #item::action($format!("agents-install-{}", entry.id), $(if update { IconName::CircleArrowUp } else { IconName::Download }), $(if update {
                         crate::i18n::tr!("agent-update-action")
                     } else {
                         crate::i18n::tr!("agent-install-action")
@@ -552,7 +552,7 @@ impl Agents {
                             offered(entry)
                                 && !(self.registry.editable()
                                     && self.document.as_ref().is_some_and(|document| {
-                                        document.settings.daemon.agents.iter().any(|registration| {
+                                        document.settings.agents.iter().any(|registration| {
                                             registration.id().as_str() == entry.id
                                         })
                                     }))
@@ -568,12 +568,12 @@ impl Agents {
             .and_then(|catalog| catalog.warning.as_ref());
         gds_uim::el! {
             #div { id: "agents-registry"; test_support; w_full; min_w_0; flex; flex_col; gap_2; } [
-                ..$warning.map(|warning| crate::ui::feedback(
+                ..$warning.map(|warning| crate::settings::feedback(
                     "agents-registry-warning", warning.clone(), cx.theme().muted_foreground,
                 )),
                 ..$entries.is_empty().then(|| gds_uim::el! {
                     #div { py_4; } [
-                        $crate::ui::feedback("agents-registry-status", if self.registry.loading() {
+                        $crate::settings::feedback("agents-registry-status", if self.registry.loading() {
                             crate::i18n::tr!("catalog-loading")
                         } else if self.registry.catalog.is_none() {
                             crate::i18n::tr!("catalog-connect")

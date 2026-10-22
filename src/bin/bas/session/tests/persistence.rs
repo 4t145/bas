@@ -156,6 +156,140 @@ fn runtime_error(error: SessionError) {
 }
 
 #[tokio::test]
+async fn storage_retry_recovers_one_runtime_without_resending_accepted_work() {
+    for working in [false, true] {
+        let storage = ControlledStore::new();
+        let meta = SessionMeta::new(SessionId::new(), "embedded".into(), Owner::current());
+        storage
+            .create(meta.clone(), Some(ResumeData::acp("original")))
+            .await
+            .expect("record");
+        let session =
+            Session::with_storage(meta, Limits::default(), None, Some(storage.clone()), true);
+        session.remember_backend_id("original".into());
+        let (updates, inbox) = mpsc::channel(16);
+        session.listen(inbox);
+        let dispatched = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        session
+            .ready(Box::new(ObservedAgent {
+                alive: Arc::new(()),
+                dispatched: dispatched.clone(),
+            }))
+            .await
+            .expect("ready");
+        let turn = if working {
+            Some(
+                session
+                    .prompt(vec!["already accepted".into()])
+                    .await
+                    .expect("prompt"),
+            )
+        } else {
+            None
+        };
+        let before = session.snapshot();
+        let history = storage
+            .page(session.id(), None, 100)
+            .await
+            .expect("history");
+        let mut old_live = session
+            .try_attach(AttachOptions {
+                replay: 0,
+                cursor: Some(before.meta.revision),
+            })
+            .await
+            .expect("old subscription");
+        storage.reject.store(true, Ordering::SeqCst);
+        assert!(session.set_title("not committed").await.is_err());
+        let failed = session.snapshot();
+        let registry = Registry::with_storage(
+            Arc::new(Catalog::with_defaults()),
+            Arc::new(LocalHost::default()),
+            Limits::default(),
+            storage.clone(),
+        );
+        assert!(
+            registry.restart_session(&session).await.is_err(),
+            "still-full storage stays failed"
+        );
+        assert_eq!(session.snapshot().runtime, failed.runtime);
+        assert_eq!(
+            storage
+                .page(session.id(), None, 100)
+                .await
+                .expect("unchanged"),
+            history
+        );
+        storage.reject.store(false, Ordering::SeqCst);
+        let lease = session.use_backend();
+        assert!(
+            registry.restart_session(&session).await.is_err(),
+            "old operations must settle first"
+        );
+        drop(lease);
+        registry
+            .restart_session(&session)
+            .await
+            .expect("retry storage");
+        let recovered = session.snapshot();
+        assert!(recovered.runtime.failure.is_none());
+        assert_ne!(recovered.runtime.id, failed.runtime.id);
+        assert_eq!(recovered.meta.id, before.meta.id);
+        assert_eq!(recovered.meta.status, SessionStatus::Idle);
+        assert_eq!(recovered.meta.active_turn, None);
+        assert_eq!(recovered.meta.title, before.meta.title);
+        assert_eq!(
+            session.backend_id.get().map(String::as_str),
+            Some("original")
+        );
+        assert!(
+            !session.is_restored(),
+            "backend is restored lazily, never auto-prompted"
+        );
+        assert_eq!(dispatched.load(Ordering::SeqCst), usize::from(working));
+        assert!(matches!(
+            old_live.recv().await,
+            Err(AttachError::Runtime(_))
+        ));
+        let mut current = session
+            .try_attach(AttachOptions {
+                replay: 0,
+                cursor: Some(before.meta.revision),
+            })
+            .await
+            .expect("new subscription");
+        let event = current.recv().await.expect("durable recovery event");
+        assert!(matches!(
+            event.kind,
+            EventKind::TurnInterrupted {
+                reason: bas::model::InterruptionReason::SessionStopped,
+                ..
+            } | EventKind::StatusChanged {
+                status: SessionStatus::Idle
+            }
+        ));
+        let after = storage
+            .page(session.id(), None, 100)
+            .await
+            .expect("retained history");
+        assert_eq!(
+            &after.events[..history.events.len()],
+            history.events.as_slice()
+        );
+        if let Some(turn) = turn {
+            assert!(
+                session
+                    .prompt_acceptance(turn)
+                    .await
+                    .expect("receipt")
+                    .is_some()
+            );
+        }
+        drop(updates);
+    }
+}
+
+#[tokio::test]
 async fn every_commit_boundary_latches_failure_without_rewriting_committed_state() {
     for operation in [
         "prompt",

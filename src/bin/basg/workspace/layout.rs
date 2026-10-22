@@ -28,7 +28,7 @@ impl Workspace {
     pub(super) fn prepare_to_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.audio.update(cx, |player, cx| player.reset(cx));
         self.save_title(cx);
-        self.remember_thread();
+        self.remember_thread(cx);
         self.close_reply_preview(window, cx);
         self.close_menu(window, cx);
     }

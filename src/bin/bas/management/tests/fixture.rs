@@ -115,7 +115,6 @@ pub fn managed(manager: &Manager) -> bas::config::ManagedAgent {
         .load()
         .expect("saved settings")
         .settings
-        .daemon
         .agents
         .into_iter()
         .find_map(|registration| registration.managed().cloned())

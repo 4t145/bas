@@ -133,7 +133,8 @@ fn catalog_removal_invalidates_selection_and_late_watch_updates(cx: &mut TestApp
                                 removed.id,
                                 Cursor::from_raw(2),
                                 EventKind::TurnStarted { turn },
-                            ),
+                            )
+                            .into(),
                         },
                         window,
                         cx,

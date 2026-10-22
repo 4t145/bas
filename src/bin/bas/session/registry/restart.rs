@@ -5,8 +5,8 @@ use tokio_util::task::AbortOnDropHandle;
 
 impl Registry {
     /// # Errors
-    /// Requires a healthy stopped, non-archived record and a restorable backend.
-    /// Unsupported or failed restoration never creates a replacement session.
+    /// Restarts a stopped backend, or reconciles a persistence-blocked runtime with storage.
+    /// Persistence recovery is lazy: it never sends a prompt or creates a replacement session.
     pub async fn restart_session(&self, session: &Arc<Session>) -> Result<(), CreateError> {
         tokio::select! {
             biased;
@@ -20,6 +20,14 @@ impl Registry {
     async fn restart_stopped(&self, session: &Arc<Session>) -> Result<(), CreateError> {
         // Also excludes delete, close, daemon shutdown, and concurrent restarts.
         let gate = Arc::clone(&session.restore_gate).lock_owned().await;
+        if session.snapshot().runtime.failure.is_some() {
+            session
+                .recover_persistence(gate, self.limits.live_capacity.get())
+                .await?;
+            self.permissions.cancel(session.id());
+            self.elicitations.cancel(session.id());
+            return Ok(());
+        }
         self.restart_locked(session, gate, false).await.map(|_| ())
     }
 

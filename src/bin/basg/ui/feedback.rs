@@ -29,6 +29,7 @@ pub(crate) fn message(
         text: text.into(),
         color,
         compact: false,
+        copyable: true,
     }
 }
 
@@ -38,9 +39,15 @@ pub(crate) struct Feedback {
     text: SharedString,
     color: Hsla,
     compact: bool,
+    copyable: bool,
 }
 
 impl Feedback {
+    pub(crate) fn without_copy(mut self) -> Self {
+        self.copyable = false;
+        self
+    }
+
     pub(crate) fn compact(mut self) -> Self {
         self.compact = true;
         self
@@ -70,7 +77,7 @@ impl RenderOnce for Feedback {
                 @$self.compact => { truncate; };
                 hoverable_tooltip: $move |window, cx| super::tooltip::view(hint.clone(), window, cx);
             } [$display],
-            #copy_button($format!("{}-copy", self.id), $self.text) { flex_shrink_0; },
+            ..$self.copyable.then(|| copy_button(format!("{}-copy", self.id), self.text).flex_shrink_0()),
         ] }
     }
 }

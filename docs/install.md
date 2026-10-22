@@ -190,39 +190,41 @@ Registry URL、数据目录和 ELF 修补环境变量见下文；这些选项适
 
 ## 配置 ACP 后端
 
-GUI 与 daemon 默认读取 `$XDG_CONFIG_HOME/bas/settings.json`，未设置 XDG 时为
-`~/.config/bas/settings.json`。两者都支持 `--settings-file` / `BAS_SETTINGS_FILE`；
-使用不同路径的服务不会看到另一路径中的修改。
+GUI 的外观与服务连接保存在 `$XDG_CONFIG_HOME/bas/settings.json`；
+后端 Agent 注册与 ACP 策略保存在 `$XDG_CONFIG_HOME/bas/daemon.json`。
+未设置 XDG 时，Linux 使用 `~/.config/bas/`。
+GUI 使用 `--settings-file` / `BAS_SETTINGS_FILE`，daemon 使用
+`--daemon-settings-file` / `BAS_DAEMON_SETTINGS_FILE`，两者独立选择路径和校验内容。
+daemon 暂时保留显式 `--settings-file` 兼容参数，但不再读取前端的 `BAS_SETTINGS_FILE`；
+旧服务环境请改用 `BAS_DAEMON_SETTINGS_FILE`。GUI 的 Agent 设置通过所连接服务的 RPC 修改后端配置，
+不是写入 GUI 偏好文件。以下为 `daemon.json`：
 
 ```json
 {
-  "appearance": {},
-  "daemon": {
-    "agents": [
-      { "id": "embedded", "kind": "embedded" },
-      {
-        "id": "codex",
-        "kind": "acp",
-        "description": "用于代码审查与实现",
-        "command": { "program": "codex-acp", "args": [] }
-      },
-      {
-        "id": "opencode",
-        "kind": "acp",
-        "command": { "program": "opencode", "args": ["acp"] }
-      },
-      {
-        "id": "pi",
-        "kind": "acp",
-        "command": { "program": "pi-acp", "args": [] }
-      }
-    ],
-    "acp": {
-      "idle_timeout_secs": 1800,
-      "default_agent": "codex",
-      "pool_size": 1,
-      "pools": { "opencode": 2, "pi": 0 }
+  "agents": [
+    { "id": "embedded", "kind": "embedded" },
+    {
+      "id": "codex",
+      "kind": "acp",
+      "description": "用于代码审查与实现",
+      "command": { "program": "codex-acp", "args": [] }
+    },
+    {
+      "id": "opencode",
+      "kind": "acp",
+      "command": { "program": "opencode", "args": ["acp"] }
+    },
+    {
+      "id": "pi",
+      "kind": "acp",
+      "command": { "program": "pi-acp", "args": [] }
     }
+  ],
+  "acp": {
+    "idle_timeout_secs": 1800,
+    "default_agent": "codex",
+    "pool_size": 1,
+    "pools": { "opencode": 2, "pi": 0 }
   }
 }
 ```
@@ -241,13 +243,17 @@ ACP 后端可设置 `cancellation_grace_ms`，表示发送取消后等待本轮�
 该选项不会关闭强制清理机制。
 
 选择目录的优先级为：`--agents` / `BAS_AGENTS` 简写目录、显式
-`--agents-file` / `BAS_AGENTS_FILE` 旧格式数组文件、统一 settings。
+`--agents-file` / `BAS_AGENTS_FILE` 旧格式数组文件、后端 `daemon.json`。
 同一个参数的命令行值优先于环境变量。
 显式指定的文件不存在、JSON 无效、重复 ID 或 ACP 缺少启动程序都会使启动失败；
-默认统一文件不存在时只读导入同目录旧 `appearance.json` 和 `agents.json`；都不存在才使用
-内置后端。读取不会迁移或删除文件；设置窗口第一次成功保存才生成统一文件，并保留另一 section。
+默认 `daemon.json` 不存在时只读导入同目录旧 `settings.json` 的 `daemon`，
+保留其中的 Agent 与 ACP 策略；旧统一文件也不存在时才导入 `agents.json`，都不存在才使用内置后端。
+首次成功保存 Agent 配置生成独立 `daemon.json`，不删除或改写旧文件。
+新文件一旦被运行中的服务观察到，格式错误或消失都不会退回旧配置源。
+显式路径不查找相邻旧文件；显式指向旧统一文件时只更新其中的 `daemon`，
+保留其他字段。前端保存旧统一文件也会保留其不再解析的 `daemon` 字段。
 
-`daemon.acp` 是服务端策略，不读取 GUI 的默认或上次使用 Agent。省略时
+`daemon.json` 的 `acp` 是服务端策略，不读取 GUI 的默认或上次使用 Agent。省略时
 `idle_timeout_secs` 为 `1800`（空闲 30 分钟回收），`pool_size` 为 `1`，
 无默认 Agent 或显式池。默认只为最近使用的 ACP Agent 保留一个备用连接，不为所有 Agent 预热。
 上例沿用 1800 秒空闲回收；`pool_size` 为 `default_agent` 保留预热进程，
@@ -287,6 +293,9 @@ prompt 则将选择与接受事件原子提交。尚未注册就被取消的创�
 下一次实际使用后会开始记录。若希望此时立即预热，请显式配置 `default_agent` 或 `pools`。
 
 ### 空闲回收与备用连接
+
+GUI 可在“设置 → bas · 后端 → ACP 回收与预热”中编辑以下策略。
+页面跟随当前后端选择，保存后立即生效；旧版 bas 须先升级才能提供编辑接口。
 
 空闲回收每 5 秒检查一次，只卸载支持 `session/load` 或 `session/resume` 的 ACP 进程，
 保留 Bas 会话 ID、历史及实时订阅。下次发送请求时恢复原 ACP 会话，不创建替代对话。
@@ -366,7 +375,7 @@ INITIAL_AGENT_MODE=workspace-write
 
 修改服务环境文件后需重启 bas；已有 Agent 进程保留启动时的环境。
 其他可选值为 `read-only`、`agent`、`agent-full-access`。
-自定义 Agent 也可在 `settings.json` 的该 Agent `env` 中设置；
+自定义 Agent 也可在 `daemon.json` 的该 Agent `env` 中设置；
 修改目录安装记录以外的 Agent 配置会使它成为自定义注册，后续目录更新将报告注册冲突，
 因此目录管理的安装宜使用服务环境设置默认值。
 
@@ -441,7 +450,7 @@ BAS_HISTORY=8192
 ```
 
 服务的 PATH 包含 `~/.local/bin`、`~/.nix-profile/bin` 和系统软件路径；
-其他位置的 ACP 程序应在 `settings.json` 的 `daemon.agents` 中使用绝对路径。此运行时环境文件不进入 Nix 安装包。
+其他位置的 ACP 程序应在 `daemon.json` 的 `agents` 中使用绝对路径。此运行时环境文件不进入 Nix 安装包。
 
 同名版本更新时重新运行安装目标即可；跨改名升级先按 [手动迁移说明](rename-migration.md) 处理。
 脚本会替换同名的旧 profile 条目，`install-bas-service` 还会重启

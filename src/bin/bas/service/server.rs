@@ -76,6 +76,24 @@ impl Service {
 
 #[tonic::async_trait]
 impl Bas for Service {
+    async fn get_acp_configuration(
+        &self,
+        _: Request<pb::GetAcpConfigurationRequest>,
+    ) -> Result<Response<pb::AcpConfiguration>, Status> {
+        Ok(Response::new(self.manager()?.acp_configuration()?))
+    }
+
+    async fn save_acp_configuration(
+        &self,
+        request: Request<pb::SaveAcpConfigurationRequest>,
+    ) -> Result<Response<pb::AcpConfiguration>, Status> {
+        Ok(Response::new(
+            self.manager()?
+                .save_acp_configuration(request.into_inner(), &self.registry)
+                .await?,
+        ))
+    }
+
     async fn get_agent_configuration(
         &self,
         _request: Request<pb::GetAgentConfigurationRequest>,
@@ -233,7 +251,7 @@ impl Bas for Service {
                 let store = manager
                     .store()
                     .ok_or_else(|| anyhow::anyhow!("No writable settings catalog"))?;
-                registry.reload_catalog(|| Ok(store.load()?.settings.daemon.agents))?;
+                registry.reload_catalog(|| Ok(store.load()?.settings.agents))?;
                 Ok(spec)
             });
             let update = match result {
@@ -274,7 +292,6 @@ impl Bas for Service {
                     .ok_or_else(|| anyhow::anyhow!("No writable settings catalog"))?
                     .load()?
                     .settings
-                    .daemon
                     .agents)
             })
             .map_err(|error| Status::internal(error.to_string()))?;

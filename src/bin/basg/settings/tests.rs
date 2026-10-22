@@ -2,8 +2,7 @@ use super::*;
 use bas::{config::ConnectionProfile, service::Target};
 use gpui_kit::{TestAppContext, component::Root, size, test::TestWindowExt};
 
-#[gpui_kit::test]
-fn settings_footer_copies_original_multiline_feedback(cx: &mut TestAppContext) {
+fn check_footer_without_copy(cx: &mut TestAppContext, message: String) {
     let directory = tempfile::tempdir().expect("settings directory");
     let path = directory.path().join("settings.json");
     std::fs::write(&path, "{}").expect("settings fixture");
@@ -18,10 +17,6 @@ fn settings_footer_copies_original_multiline_feedback(cx: &mut TestAppContext) {
         crate::application::init(cx);
         crate::agents::init(Target::Local.into(), runtime.handle().clone(), cx);
     });
-    let message = format!(
-        "Connection response\n{}\n trailing space ",
-        "endpoint/".repeat(80)
-    );
     let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
         let settings = cx.new(|cx| {
             let mut settings = Settings::new(window, cx);
@@ -33,14 +28,30 @@ fn settings_footer_copies_original_multiline_feedback(cx: &mut TestAppContext) {
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("settings-save-status").visible());
-        window.click("settings-save-status-copy", cx);
+        assert!(window.try_find("settings-save-status-copy").is_none());
         assert_eq!(
-            cx.read_from_clipboard().expect("copied feedback").text(),
-            Some(message.clone()),
+            window.find("settings-save-status-message").label(),
+            Some(message.as_str()),
         );
         assert!(window.find("settings-connections").visible());
     })
     .expect("settings feedback window");
+}
+
+#[gpui_kit::test]
+fn settings_footer_preserves_feedback_without_copy_action(cx: &mut TestAppContext) {
+    check_footer_without_copy(
+        cx,
+        format!(
+            "Connection response\n{}\n trailing space ",
+            "endpoint/".repeat(80)
+        ),
+    );
+}
+
+#[gpui_kit::test]
+fn empty_settings_footer_has_no_orphan_copy_button(cx: &mut TestAppContext) {
+    check_footer_without_copy(cx, String::new());
 }
 
 #[gpui_kit::test]
@@ -69,6 +80,7 @@ fn frontend_connections_and_backend_switching_are_distinct_settings_scopes(
     });
     let entity = entity.unwrap();
     let old_agents = cx.update(|cx| entity.read(cx).agents.clone());
+    let old_policy = cx.update(|cx| entity.read(cx).acp.entity_id());
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
         window.click("settings-connections", cx);
@@ -108,6 +120,12 @@ fn frontend_connections_and_backend_switching_are_distinct_settings_scopes(
             Some(Target::Pipe("bas-other".into()).into())
         );
         assert_ne!(entity.read(cx).agents.entity_id(), old_agents.entity_id());
+        assert_ne!(entity.read(cx).acp.entity_id(), old_policy);
+        window.click("settings-acp", cx);
+        window.render_frame(cx);
+        assert!(window.find("acp-policy-page").visible());
+        assert!(window.find("settings-backend-context").visible());
+        assert!(window.find("settings-backend-selector").visible());
         entity.update(cx, |settings, cx| settings.choose_backend("local", cx));
     })
     .unwrap();

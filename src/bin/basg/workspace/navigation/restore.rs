@@ -1,5 +1,6 @@
 use std::{fs, io::Write, path::PathBuf};
 
+use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 
 use crate::workspace::*;
@@ -8,6 +9,29 @@ use crate::workspace::*;
 mod tests;
 
 const READ_SAVE_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// A shared completion allows quit to await writes without tying their lifetime
+/// to a window. Each successor waits for its predecessor, never on the UI thread.
+pub(in crate::workspace) type PendingSave = futures::future::Shared<Task<()>>;
+
+pub(in crate::workspace) fn enqueue(
+    pending: &mut Option<PendingSave>,
+    executor: &gpui_kit::BackgroundExecutor,
+    write: impl FnOnce() + Send + 'static,
+) {
+    let previous = pending.take();
+    let task = executor
+        .spawn(async move {
+            if let Some(previous) = previous {
+                previous.await;
+            }
+            write();
+        })
+        .shared();
+    // Closing or replacing the workspace must not cancel an accepted write.
+    executor.spawn(task.clone()).detach();
+    *pending = Some(task);
+}
 
 #[derive(Default, Deserialize, Serialize)]
 struct Saved {
@@ -127,6 +151,7 @@ impl Store {
 
     /// # Errors
     /// Returns lock, read or write failures without replacing corrupt state.
+    #[cfg(test)]
     pub fn save_reads(&mut self, seen: &HashMap<SessionId, u64>) -> Result<(), Error> {
         if !seen
             .iter()
@@ -196,11 +221,35 @@ impl Store {
 
     /// # Errors
     /// Returns filesystem or serialization failures; the previous state remains intact.
+    #[cfg(test)]
     pub fn save(&mut self, thread: Option<SessionId>) -> Result<(), Error> {
         let _lock = self.lock()?;
         let mut saved = self.latest()?;
         saved.thread = thread;
         self.write(saved)
+    }
+
+    /// # Errors
+    /// Returns lock, parse or write failures without replacing unrelated sections.
+    fn save_navigation(
+        &mut self,
+        thread: Option<Option<SessionId>>,
+        seen: &HashMap<SessionId, u64>,
+    ) -> Result<(), Error> {
+        let _lock = self.lock()?;
+        let mut saved = self.latest()?;
+        let mut changed = false;
+        if let Some(thread) = thread {
+            changed |= saved.thread != thread;
+            saved.thread = thread;
+        }
+        for (&id, &cursor) in seen {
+            if cursor > saved.seen_replies.get(&id).copied().unwrap_or(0) {
+                saved.seen_replies.insert(id, cursor);
+                changed = true;
+            }
+        }
+        if changed { self.write(saved) } else { Ok(()) }
     }
 
     /// # Errors
@@ -276,27 +325,67 @@ impl Workspace {
         if self.navigation.restore.store.is_some() {
             self.navigation.restore.read_save = Some(cx.spawn(async move |view, cx| {
                 cx.background_executor().timer(READ_SAVE_DELAY).await;
-                let _ = view.update(cx, |view, _| view.persist_read_state());
+                let _ = view.update(cx, |view, cx| view.persist_read_state(cx));
             }));
         }
     }
 
-    pub(in crate::workspace) fn persist_read_state(&mut self) {
-        self.navigation.restore.read_save.take();
-        if let Some(store) = &mut self.navigation.restore.store
-            && let Err(error) = store.save_reads(&self.sessions.seen_replies)
-        {
-            tracing::warn!(%error, "cannot save read replies");
-        }
+    pub(in crate::workspace) fn persist_read_state(&mut self, cx: &mut Context<Self>) {
+        self.queue_navigation(None, cx);
     }
 
-    pub(in crate::workspace) fn remember_thread(&mut self) {
-        self.persist_read_state();
-        if let Some(store) = &mut self.navigation.restore.store
-            && let Err(error) = store.save(self.selected.id)
-        {
-            tracing::warn!(%error, "cannot save last Bas thread");
+    pub(in crate::workspace) fn remember_thread(&mut self, cx: &mut Context<Self>) {
+        self.queue_navigation(Some(self.selected.id), cx);
+    }
+
+    fn queue_navigation(&mut self, thread: Option<Option<SessionId>>, cx: &mut Context<Self>) {
+        self.navigation.restore.read_save.take();
+        let Some(store) = &mut self.navigation.restore.store else {
+            return;
+        };
+        if let Some(thread) = thread {
+            store.saved.thread = thread;
         }
+        let path = store.path.clone();
+        let seen = self.sessions.seen_replies.clone();
+        enqueue(
+            &mut self.navigation.restore.pending_save,
+            cx.background_executor(),
+            move || {
+                let mut store = Store {
+                    path,
+                    saved: Saved::default(),
+                };
+                if let Err(error) = store.save_navigation(thread, &seen) {
+                    tracing::warn!(%error, "cannot save navigation state");
+                }
+            },
+        );
+    }
+
+    pub(in crate::workspace) fn forget_read_state(
+        &mut self,
+        removed: &[SessionId],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(store) = &self.navigation.restore.store else {
+            return;
+        };
+        let path = store.path.clone();
+        let removed = removed.to_vec();
+        enqueue(
+            &mut self.navigation.restore.pending_save,
+            cx.background_executor(),
+            move || {
+                let mut store = Store {
+                    path,
+                    saved: Saved::default(),
+                };
+                if let Err(error) = store.forget_reads(&removed) {
+                    tracing::warn!(%error, "cannot remove saved read replies");
+                }
+            },
+        );
     }
 
     pub(in crate::workspace) fn restore_thread(

@@ -15,6 +15,9 @@ use gpui_kit::{
 const AVATAR_SIZE: f32 = 32.;
 const ICON_SIZE: f32 = 22.;
 
+#[cfg(all(test, feature = "gui-tests"))]
+mod tests;
+
 pub(super) fn action(
     id: impl Into<ElementId>,
     icon: IconName,
@@ -141,7 +144,7 @@ impl RenderOnce for Item {
                     } [$self.entry.description.clone()],
                     $self.entry.links(),
                 ],
-                ..$self.feedback.map(|feedback| crate::ui::feedback(
+                ..$self.feedback.map(|feedback| crate::settings::feedback(
                     format!("agents-operation-{id}"), feedback, cx.theme().primary,
                 )),
                 ..$self.content.map(|content| gds_uim::el! {

@@ -28,7 +28,7 @@ pub(super) async fn watch_cached(
         if updates
             .send(Update::HistoryWindow {
                 epoch,
-                window,
+                window: window.into(),
                 cached: true,
             })
             .await

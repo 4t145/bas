@@ -121,7 +121,7 @@ fn reconnect_keeps_existing_messages_and_draft_visible(cx: &mut TestAppContext) 
                 view.update(
                     Update::Event {
                         epoch: view.selected.epoch,
-                        event,
+                        event: event.into(),
                     },
                     window,
                     cx,

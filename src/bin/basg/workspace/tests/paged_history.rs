@@ -49,7 +49,7 @@ fn show_page(
     view.update(
         Update::HistoryWindow {
             epoch: view.selected.epoch,
-            window: history,
+            window: history.into(),
             cached: false,
         },
         window,
@@ -118,7 +118,7 @@ fn native_scrolling_survives_pages_resync_and_cached_switch(cx: &mut TestAppCont
                     view.update(
                         Update::Event {
                             epoch: view.selected.epoch,
-                            event: page(&meta, 101, 101).events.remove(0),
+                            event: page(&meta, 101, 101).events.remove(0).into(),
                         },
                         window,
                         cx,
@@ -142,7 +142,7 @@ fn native_scrolling_survives_pages_resync_and_cached_switch(cx: &mut TestAppCont
                     Update::OlderHistory {
                         epoch: view.selected.epoch,
                         before,
-                        result: Ok(tall_page(&meta, before - 20, before - 1)),
+                        result: Ok(tall_page(&meta, before - 20, before - 1).into()),
                     },
                     window,
                     cx,
@@ -223,7 +223,7 @@ fn native_scrolling_survives_pages_resync_and_cached_switch(cx: &mut TestAppCont
             view.update(
                 Update::Event {
                     epoch: view.selected.epoch,
-                    event: page(&meta, 111, 111).events.remove(0),
+                    event: page(&meta, 111, 111).events.remove(0).into(),
                 },
                 window,
                 cx,
@@ -304,7 +304,7 @@ fn regrouping_before_reader_preserves_pixels_and_expansion(cx: &mut TestAppConte
                 Update::OlderHistory {
                     epoch: view.selected.epoch,
                     before: 21,
-                    result: Ok(tools(1, 20, 18..=20)),
+                    result: Ok(tools(1, 20, 18..=20).into()),
                 },
                 window,
                 cx,
@@ -379,7 +379,7 @@ fn disk_cached_window_accepts_the_next_live_event(cx: &mut TestAppContext) {
             view.update(
                 Update::HistoryWindow {
                     epoch: view.selected.epoch,
-                    window: page(&meta, 21, 40),
+                    window: page(&meta, 21, 40).into(),
                     cached: true,
                 },
                 window,
@@ -397,7 +397,7 @@ fn disk_cached_window_accepts_the_next_live_event(cx: &mut TestAppContext) {
             view.update(
                 Update::Event {
                     epoch: view.selected.epoch,
-                    event: page(&meta, 41, 41).events.remove(0),
+                    event: page(&meta, 41, 41).events.remove(0).into(),
                 },
                 window,
                 cx,
@@ -451,7 +451,7 @@ fn prepend_keeps_anchor_live_events_and_requests_only_once(cx: &mut TestAppConte
             view.update(
                 Update::Event {
                     epoch: view.selected.epoch,
-                    event,
+                    event: event.into(),
                 },
                 window,
                 cx,
@@ -465,7 +465,7 @@ fn prepend_keeps_anchor_live_events_and_requests_only_once(cx: &mut TestAppConte
                 Update::OlderHistory {
                     epoch: view.selected.epoch,
                     before: 21,
-                    result: Ok(older),
+                    result: Ok(older.into()),
                 },
                 window,
                 cx,
@@ -602,7 +602,7 @@ fn older_failure_retries_in_place_and_late_page_cannot_replace_another_session(
                 Update::OlderHistory {
                     epoch,
                     before: 21,
-                    result: Ok(page(&first, 1, 20)),
+                    result: Ok(page(&first, 1, 20).into()),
                 },
                 window,
                 cx,

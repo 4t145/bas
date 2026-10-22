@@ -13,7 +13,7 @@ pub(crate) mod tooltip;
 pub(crate) mod window_controls;
 pub(crate) use button::Button;
 pub(crate) use content_row::ContentRow;
-pub(crate) use feedback::{copy_button, message as feedback};
+pub(crate) use feedback::{Feedback, copy_button, message as feedback};
 
 use gds_uim::el;
 use gpui_kit::{

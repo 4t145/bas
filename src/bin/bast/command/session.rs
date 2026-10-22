@@ -14,6 +14,7 @@ impl clap::Session {
             clap::Session::Create { agent, title, cwd } => create(client, agent, title, cwd).await,
             clap::Session::List { all } => list(client, all).await,
             clap::Session::Show { session } => show(client, &session).await,
+            clap::Session::Recover { session } => recover(client, &session).await,
             clap::Session::Archive { session } => set_archived(client, &session, true).await,
             clap::Session::Restore { session } => set_archived(client, &session, false).await,
             clap::Session::Remove { session } => remove(client, &session).await,
@@ -110,6 +111,23 @@ async fn show(client: &mut Client, session: &str) -> Result<()> {
         render::session(&session)?;
     }
     Ok(())
+}
+
+async fn recover(client: &mut Client, session: &str) -> Result<()> {
+    let response = client
+        .restart_session(pb::GetSessionRequest {
+            session: session.to_owned(),
+        })
+        .await
+        .context(
+            "session recovery failed; ensure storage has free space and upgrade bas if unsupported",
+        )?
+        .into_inner();
+    render::session(
+        &response
+            .session
+            .context("recovery response omitted the session")?,
+    )
 }
 
 async fn remove(client: &mut Client, session: &str) -> Result<()> {

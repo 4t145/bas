@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use bas::service::HistoryWindow;
+use crate::connection::PreparedHistory;
 use gpui_kit::ListOffset;
 
 use super::*;
@@ -61,13 +61,10 @@ impl Cache {
         }
         timeline.loading_before = None;
         timeline.older_error = None;
-        let Some(history) = &timeline.history else {
+        if timeline.history.is_none() {
             return;
-        };
-        // Account for the retained events and their reconstructed presentation.
-        let bytes = serde_json::to_vec(history)
-            .map(|bytes| bytes.len().saturating_mul(3))
-            .unwrap_or(usize::MAX);
+        }
+        let bytes = timeline.retained_bytes();
         if bytes > HOT_BYTES {
             return;
         }
@@ -83,6 +80,23 @@ impl Cache {
 }
 
 impl state::TimelineState {
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.history_weight
+            .bytes()
+            .saturating_add(self.presentation_bytes)
+            .saturating_add(self.presentation_meta_bytes)
+    }
+
+    /// Catalog and operation responses can replace metadata independently of history.
+    pub(super) fn merge_meta(&mut self, meta: &SessionMeta) {
+        if let Some(conversation) = &mut self.conversation
+            && crate::conversation::merge_meta(&mut conversation.session, meta)
+        {
+            self.presentation_meta_bytes =
+                crate::connection::Prepared::from(&conversation.session).bytes;
+        }
+    }
+
     fn row_identities(&self) -> Vec<Vec<String>> {
         self.conversation
             .as_ref()
@@ -127,6 +141,9 @@ impl state::TimelineState {
         // Identical identities can have updated text or tool results on resync.
         // This public API preserves the absolute within-row anchor.
         self.list.remeasure_items(0..new.len());
+        // Only the metadata snapshot is measured here, never historical message text.
+        self.presentation_meta_bytes =
+            crate::connection::Prepared::from(&conversation.session).bytes;
         self.conversation = Some(conversation);
     }
 
@@ -239,10 +256,14 @@ impl Workspace {
 
     pub(super) fn apply_history_window(
         &mut self,
-        mut history: HistoryWindow,
+        prepared: PreparedHistory,
         cached: bool,
         cx: &mut Context<Self>,
     ) {
+        let PreparedHistory {
+            value: mut history,
+            mut weight,
+        } = prepared;
         let session = history.session.meta.id;
         if self.selected.id != Some(session) {
             return;
@@ -274,6 +295,7 @@ impl Workspace {
                 .splice(0..0, old.events[..prefix].iter().cloned());
             history.context = old.context.clone();
             history.before = old.before;
+            weight.retain_prefix(&self.selected.timeline.history_weight, prefix);
         }
         if self.selected.timeline.loading_before.is_some()
             && self.selected.timeline.loading_before != history.before
@@ -309,12 +331,30 @@ impl Workspace {
                 .as_ref()
                 .is_some_and(|old| old.session.id == session)
         {
+            let cursor = self
+                .selected
+                .timeline
+                .conversation
+                .as_ref()
+                .expect("current conversation was checked")
+                .cursor;
+            let suffix = history
+                .events
+                .partition_point(|event| event.cursor.raw() <= cursor);
+            if history.cursor > cursor {
+                self.selected.timeline.presentation_bytes = self
+                    .selected
+                    .timeline
+                    .presentation_bytes
+                    .saturating_add(weight.suffix_bytes(suffix).saturating_mul(2));
+            }
             self.selected
                 .timeline
                 .conversation
                 .take()
                 .expect("current conversation was checked")
         } else {
+            self.selected.timeline.presentation_bytes = weight.bytes().saturating_mul(2);
             Conversation::new(meta.clone())
         };
         conversation.merge_meta(&meta);
@@ -377,6 +417,7 @@ impl Workspace {
         let reconcile_started = std::time::Instant::now();
         self.selected.timeline.clear_caches();
         self.selected.timeline.history = Some(history);
+        self.selected.timeline.history_weight = weight;
         self.selected.timeline.show(conversation, old_rows);
         if let Some(position) = position
             && !self.selected.timeline.restore_position(position)
@@ -422,7 +463,7 @@ impl Workspace {
     pub(super) fn older_history_loaded(
         &mut self,
         before: u64,
-        result: Result<HistoryWindow, Failure>,
+        result: Result<PreparedHistory, Failure>,
         cx: &mut Context<Self>,
     ) {
         let timeline = &mut self.selected.timeline;
@@ -451,13 +492,26 @@ impl Workspace {
             ));
             return;
         }
+        let PreparedHistory {
+            value: page,
+            weight,
+        } = page;
         history.before = page.before;
         history.context = page.context;
         history.events.splice(0..0, page.events);
+        timeline.history_weight.prepend(weight);
         let history = history.clone();
         // An older response may carry newer metadata, but cannot advance the live
         // cursor or replace events received while that request was in flight.
-        self.apply_history_window(history, true, cx);
+        let weight = timeline.history_weight.clone();
+        self.apply_history_window(
+            PreparedHistory {
+                value: history,
+                weight,
+            },
+            true,
+            cx,
+        );
     }
 
     pub(super) fn render_older_history(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -509,3 +563,6 @@ fn row_identities(conversation: &Conversation) -> Vec<Vec<String>> {
         })
         .collect()
 }
+
+#[cfg(all(test, feature = "gui-tests"))]
+mod tests;

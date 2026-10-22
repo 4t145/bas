@@ -130,7 +130,7 @@ fn footer_switches_backends_in_place_and_restores_drafts(cx: &mut TestAppContext
                     view.update(
                         Update::Event {
                             epoch: view.selected.epoch,
-                            event: event.clone(),
+                            event: event.clone().into(),
                         },
                         window,
                         cx,

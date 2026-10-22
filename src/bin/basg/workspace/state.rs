@@ -156,6 +156,7 @@ impl NavigationState {
             .unwrap_or_default();
         self.restore.store = store;
         self.restore.on_connect = true;
+        self.restore.read_save.take();
     }
 }
 
@@ -164,6 +165,7 @@ pub(super) struct RestoreState {
     pub(super) store: Option<navigation::restore::Store>,
     pub(super) on_connect: bool,
     pub(super) read_save: Option<Task<()>>,
+    pub(super) pending_save: Option<navigation::restore::PendingSave>,
 }
 
 #[derive(Default)]
@@ -377,6 +379,10 @@ impl<T: 'static> ObservedPanel<T> {
 pub(super) struct TimelineState {
     pub(super) conversation: Option<Conversation>,
     pub(super) history: Option<bas::service::HistoryWindow>,
+    pub(super) history_weight: crate::connection::HistoryWeight,
+    // Transient / failed-runtime presentation can outlive its committed window.
+    pub(super) presentation_bytes: usize,
+    pub(super) presentation_meta_bytes: usize,
     pub(super) loading_before: Option<u64>,
     pub(super) older_error: Option<Failure>,
     pub(super) restore: Option<super::timeline::Position>,
@@ -392,6 +398,9 @@ impl TimelineState {
         Self {
             conversation: None,
             history: None,
+            history_weight: Default::default(),
+            presentation_bytes: 0,
+            presentation_meta_bytes: 0,
             loading_before: None,
             older_error: None,
             restore: None,
@@ -412,6 +421,9 @@ impl TimelineState {
         self.clear_caches();
         self.conversation = None;
         self.history = None;
+        self.history_weight = Default::default();
+        self.presentation_bytes = 0;
+        self.presentation_meta_bytes = 0;
         self.loading_before = None;
         self.older_error = None;
         self.restore = None;

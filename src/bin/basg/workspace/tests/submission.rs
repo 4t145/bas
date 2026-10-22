@@ -95,7 +95,8 @@ fn prior_turn_replies_cannot_settle_new_composition_or_advance_queue(cx: &mut Te
                             turn: prior.turn,
                             result: Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)),
                         },
-                    ),
+                    )
+                    .into(),
                 },
                 window,
                 cx,

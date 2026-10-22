@@ -282,7 +282,7 @@ fn history_window_replay_invalidates_rendered_documents_without_erasing_composit
             if let Update::HistoryWindow { window, .. } = &mut replacement {
                 // Keep the authoritative watermark: an older response is stale,
                 // not a request to replace the currently displayed history.
-                window.cursor = 1;
+                window.value.cursor = 1;
             }
             view.update(replacement, window, cx);
             assert!(view.selected.timeline.markdown.borrow().is_empty());

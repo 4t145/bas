@@ -8,6 +8,13 @@ impl Workspace {
         let Some(session) = self.selected.id else {
             return;
         };
+        if self.sessions.runtimes.failure(session).is_some() {
+            if self.backend.connected && self.sessions.pending.restarting.insert(session) {
+                self.command(Command::RestartSession(session), cx);
+                cx.notify();
+            }
+            return;
+        }
         if matches!(
             self.selected.stream,
             StreamState::Loading | StreamState::Live
@@ -23,6 +30,25 @@ impl Workspace {
             cx,
         );
         cx.notify();
+    }
+
+    pub(super) fn history_retry_label(&self) -> &'static str {
+        if self
+            .selected
+            .id
+            .is_some_and(|id| self.sessions.runtimes.failure(id).is_some())
+        {
+            crate::i18n::tr!("session-persistence-retry")
+        } else {
+            crate::i18n::tr!("session-history-retry")
+        }
+    }
+
+    pub(super) fn history_retry_disabled(&self) -> bool {
+        self.selected.id.is_some_and(|id| {
+            self.sessions.pending.restarting.contains(&id)
+                || (self.sessions.runtimes.failure(id).is_some() && !self.backend.connected)
+        })
     }
 
     pub(super) fn history_request(
@@ -132,9 +158,7 @@ impl Workspace {
                 if let Some(meta) = self.sessions.entries.iter_mut().find(|meta| meta.id == id) {
                     crate::conversation::merge_meta(meta, &snapshot.meta);
                 }
-                if let Some(conversation) = &mut self.selected.timeline.conversation {
-                    conversation.merge_meta(&snapshot.meta);
-                }
+                self.selected.timeline.merge_meta(&snapshot.meta);
                 if let Some(outbox) = self.sessions.outboxes.get_mut(&id) {
                     outbox.pause();
                 }
@@ -197,13 +221,16 @@ impl Workspace {
         }
         match result {
             Ok(snapshot) => {
+                let recovered = self.sessions.runtimes.failure(id).is_some();
                 self.sessions.runtimes.observe(&snapshot, false);
                 if let Some(meta) = self.sessions.entries.iter_mut().find(|meta| meta.id == id) {
                     crate::conversation::merge_meta(meta, &snapshot.meta);
                 }
                 if self.selected.id == Some(id) {
-                    if let Some(conversation) = &mut self.selected.timeline.conversation {
-                        conversation.merge_meta(&snapshot.meta);
+                    self.selected.timeline.merge_meta(&snapshot.meta);
+                    if recovered {
+                        self.command(Command::Refresh, cx);
+                        return;
                     }
                     self.selected.reload();
                     self.command(

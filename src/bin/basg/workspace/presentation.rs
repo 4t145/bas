@@ -42,7 +42,6 @@ impl Workspace {
             self.resume_workspace_picker(window, cx);
         } else {
             self.prepare_to_close(window, cx);
-            self.persist_read_state();
         }
         self.sync_foreground(window);
         cx.notify();

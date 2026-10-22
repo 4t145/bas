@@ -47,8 +47,8 @@ impl Agents {
             id: "agents-save-feedback"; test_support; flex; flex_col; gap_2;
             p_3; border_1; border_color: $cx.theme().border; rounded_md;
         } [
-            $crate::ui::feedback("agents-save-result", label, cx.theme().foreground),
-            ..$error.map(|error| crate::ui::feedback("agents-save-error", error, cx.theme().danger)),
+            $crate::settings::feedback("agents-save-result", label, cx.theme().foreground),
+            ..$error.map(|error| crate::settings::feedback("agents-save-error", error, cx.theme().danger)),
             #div { flex; items_center; gap_2; } [
                 Button("agents-saved-chat") {
                     small; icon: IconName::MessageCircle; label: $crate::i18n::tr!("agent-start-chat");

@@ -99,7 +99,7 @@ async fn mtls_handshakes_rpc_stream_and_mixed_listeners() {
     .expect("settings file");
     command
         .env_remove("BAS_AGENTS")
-        .env("BAS_SETTINGS_FILE", &settings)
+        .env("BAS_DAEMON_SETTINGS_FILE", &settings)
         .env("BAS_ACP_DATA_DIR", directory.path().join("acp"));
     command.args([
         "--notify",

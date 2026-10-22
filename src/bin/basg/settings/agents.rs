@@ -25,7 +25,7 @@ pub(super) fn shared(window: &mut Window, cx: &mut App) -> Entity<Agents> {
     {
         return agents.clone();
     }
-    let agents = cx.new(|cx| Agents::new(crate::configuration::store(cx), window, cx));
+    let agents = cx.new(|cx| Agents::new(Store::new(None), window, cx));
     if !cx.has_global::<SharedAgents>() {
         cx.set_global(SharedAgents::default());
     }
@@ -41,7 +41,7 @@ fn selected_target(cx: &App) -> Option<bas::service::tls::ConnectionOptions> {
 }
 use crate::agents::{Status, catalog, check};
 use bas::config::{
-    AgentRegistration, Document, Store,
+    AgentRegistration, DaemonDocument as Document, DaemonStore as Store,
     agent::{AgentSpec, Command, Kind},
     validate_registrations,
 };
@@ -223,7 +223,7 @@ enum Editor {
 }
 
 struct AgentDocument {
-    settings: bas::config::Settings,
+    settings: bas::config::Daemon,
     local: Option<Document>,
 }
 
@@ -278,8 +278,10 @@ impl Agents {
     ) -> Result<(), String> {
         let agents = serde_json::from_slice(&configuration.registrations_json)
             .map_err(|error| format!("Invalid agent configuration: {error}"))?;
-        let mut settings = bas::config::Settings::default();
-        settings.daemon.agents = agents;
+        let settings = bas::config::Daemon {
+            agents,
+            ..Default::default()
+        };
         self.document = Some(AgentDocument {
             settings,
             local: None,
@@ -449,7 +451,6 @@ impl Agents {
             .map(|document| {
                 document
                     .settings
-                    .daemon
                     .agents
                     .iter()
                     .filter_map(AgentRegistration::as_custom)
@@ -462,7 +463,6 @@ impl Agents {
     fn accept_document(&mut self, document: Document) {
         self.registration_errors = document
             .settings
-            .daemon
             .agents
             .iter()
             .filter_map(|registration| {
@@ -491,13 +491,13 @@ impl Agents {
         let mut entries: Vec<_> = if self.configuration.is_some() {
             self.document
                 .iter()
-                .flat_map(|document| &document.settings.daemon.agents)
+                .flat_map(|document| &document.settings.agents)
                 .map(|registration| self.remote_configuration_entry(registration))
                 .collect()
         } else if self.registry.editable() && self.catalog_service.is_none() {
             self.document
                 .iter()
-                .flat_map(|document| &document.settings.daemon.agents)
+                .flat_map(|document| &document.settings.agents)
                 .map(|registration| match registration.resolve() {
                     Ok(spec) => self.configured_entry(&spec),
                     Err(error) => {
@@ -617,7 +617,6 @@ impl Agents {
         let managed = self.document.as_ref().and_then(|document| {
             document
                 .settings
-                .daemon
                 .agents
                 .iter()
                 .find(|registration| registration.id().as_str() == id)
@@ -906,7 +905,7 @@ impl Agents {
             .as_ref()
             .is_some_and(|id| id != &spec.id || !self.catalog().iter().any(|saved| saved == &spec))
             || self.document.as_ref().is_some_and(|document| {
-                document.settings.daemon.agents.iter().any(|registration| {
+                document.settings.agents.iter().any(|registration| {
                     registration.id() == &spec.id && registration.managed().is_some()
                 })
             })
@@ -956,7 +955,6 @@ impl Agents {
             .as_ref()
             .ok_or(DraftError::NotLoaded)?
             .settings
-            .daemon
             .agents
             .clone();
         let mut spec = self.editor.spec().cloned().ok_or(DraftError::NotSelected)?;
@@ -1042,7 +1040,6 @@ impl Agents {
                     self.checks.retain(|id, _| {
                         document
                             .settings
-                            .daemon
                             .agents
                             .iter()
                             .any(|registration| registration.id() == id)
@@ -1087,14 +1084,10 @@ impl Agents {
             return Source::Embedded;
         }
         if self.registry.editable()
-            && let Some(registration) = self.document.as_ref().and_then(|document| {
-                document
-                    .settings
-                    .daemon
-                    .agents
-                    .iter()
-                    .find(|r| r.id() == &spec.id)
-            })
+            && let Some(registration) = self
+                .document
+                .as_ref()
+                .and_then(|document| document.settings.agents.iter().find(|r| r.id() == &spec.id))
         {
             return if registration.managed().is_some() {
                 Source::Registry
@@ -1253,7 +1246,7 @@ impl Agents {
                         $crate::i18n::tr!("agent-remove-confirm-help")
                     ]
                 }),
-                ..$bool::then(!self.message.is_empty(), || crate::ui::feedback(
+                ..$bool::then(!self.message.is_empty(), || crate::settings::feedback(
                     "agents-form-message", self.message.clone(), cx.theme().danger,
                 )),
                 $actions,
@@ -1413,14 +1406,14 @@ impl Agents {
         let heading = gds_uim::el! {
             #div { p_5; flex_shrink_0; flex; flex_col; gap_2; } [
                 $header,
-                ..$dirty.then(|| crate::ui::feedback(
+                ..$dirty.then(|| crate::settings::feedback(
                     "agents-dirty", crate::i18n::tr!("settings-unsaved"), cx.theme().foreground,
                 )),
-                ..$bool::then(!self.message.is_empty() && self.editor.spec().is_none(), || crate::ui::feedback(
+                ..$bool::then(!self.message.is_empty() && self.editor.spec().is_none(), || crate::settings::feedback(
                     "agents-message", self.message.clone(), cx.theme().muted_foreground,
                 )),
                 ..$bool::then(page == Page::Onboarding, || self.saved_feedback(cx)).flatten(),
-                ..$bool::then(!self.registration_errors.is_empty(), || crate::ui::feedback(
+                ..$bool::then(!self.registration_errors.is_empty(), || crate::settings::feedback(
                     "agents-registration-errors", self.registration_errors.clone(), cx.theme().foreground,
                 )),
             ]

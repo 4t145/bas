@@ -125,7 +125,8 @@ fn initialized_agent_waits_for_complete_history_and_no_pending_drafts(cx: &mut T
                         EventKind::Acp(bas::acp::SessionUpdate::AgentMessageChunk(
                             bas::acp::ContentChunk::new(ContentBlock::from("startup banner")),
                         )),
-                    ),
+                    )
+                    .into(),
                 },
                 window,
                 cx,

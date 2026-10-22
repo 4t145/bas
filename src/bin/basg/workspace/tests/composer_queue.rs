@@ -150,7 +150,7 @@ fn immediate_queue_send_waits_for_cancel_and_completion_and_keeps_other_drafts_p
                 event: Event::new(meta.id, Cursor::from_raw(1), EventKind::TurnFinished {
                     turn: previous,
                     result: Ok(bas::acp::PromptResponse::new(bas::acp::StopReason::Cancelled)),
-                }),
+                }).into(),
             }, window, cx);
         });
         let command = fixture.commands.try_recv().expect("send selected draft");
@@ -167,7 +167,7 @@ fn immediate_queue_send_waits_for_cancel_and_completion_and_keeps_other_drafts_p
                 event: Event::new(meta.id, Cursor::from_raw(3), EventKind::TurnFinished {
                     turn: accepted.turn,
                     result: Ok(bas::acp::PromptResponse::new(bas::acp::StopReason::EndTurn)),
-                }),
+                }).into(),
             }, window, cx);
         });
         assert!(fixture.commands.try_recv().is_err());
@@ -202,7 +202,7 @@ fn finishing_before_cancel_acknowledgement_keeps_the_immediate_draft_until_succe
                     event: Event::new(meta.id, Cursor::from_raw(1), EventKind::TurnFinished {
                         turn: previous,
                         result: Ok(bas::acp::PromptResponse::new(bas::acp::StopReason::EndTurn)),
-                    }),
+                    }).into(),
                 }, window, cx);
             });
             assert!(fixture.commands.try_recv().is_err(), "a finished turn cannot bypass cancel acknowledgement");

@@ -20,6 +20,7 @@ use crate::storage::{self, Storage};
 
 mod directories;
 mod lifecycle;
+mod recovery;
 mod submission;
 #[cfg(test)]
 mod tests;
@@ -45,6 +46,8 @@ pub enum SessionError {
     Runtime(#[from] RuntimeFailure),
     #[error("session is {0:?}")]
     Inactive(SessionStatus),
+    #[error("session operations are still finishing; retry recovery shortly")]
+    RecoveryBusy,
     #[error(transparent)]
     Agent(#[from] agent::Error),
     #[error(transparent)]

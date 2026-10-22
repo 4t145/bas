@@ -36,8 +36,11 @@ pub struct Args {
     /// Explicit legacy JSON agent catalog.
     #[arg(long, env = config::AGENTS_FILE_ENV, value_name = "PATH")]
     agents_file: Option<PathBuf>,
-    /// Unified settings file; defaults to the user's bas/settings.json.
-    #[arg(long, env = "BAS_SETTINGS_FILE", value_name = "PATH")]
+    /// Backend settings; defaults to the user's bas/daemon.json.
+    #[arg(long, env = "BAS_DAEMON_SETTINGS_FILE", value_name = "PATH")]
+    daemon_settings_file: Option<PathBuf>,
+    /// Deprecated explicit backend settings path; use --daemon-settings-file.
+    #[arg(long, value_name = "PATH", conflicts_with = "daemon_settings_file")]
     settings_file: Option<PathBuf>,
     /// Desktop notification policy: auto, always (required), or never.
     #[arg(long, env = config::NOTIFY_ENV, default_value = "auto")]
@@ -74,7 +77,11 @@ impl Args {
     /// # Errors
     /// Returns an error if the selected agent catalog is invalid or empty.
     pub fn config(&self) -> Result<Config> {
-        let mut source = config::CatalogSource::settings(self.settings_file.clone())?;
+        let mut source = config::CatalogSource::settings(
+            self.daemon_settings_file
+                .clone()
+                .or_else(|| self.settings_file.clone()),
+        )?;
         if let Some(agents) = &self.agents {
             source = source.with_agents(
                 config::parse_agents(agents)

@@ -116,7 +116,8 @@ bast agents
 
 ## 配置
 
-应用外观、前端服务连接和 ACP 后端统一保存在 `bas/settings.json`，可在设置窗口中编辑。
+应用外观与前端服务连接保存在 `bas/settings.json`，Agent 注册与 ACP 策略由后端的
+`bas/daemon.json` 管理，可在设置窗口中通过服务接口编辑。
 服务连接列表及后端切换见 [服务连接类型](docs/connections.md#在-basg-中管理和切换服务)；
 关于窗口显示应用版本和 [build tag](docs/build-tags.md)。
 服务监听、权限及容量等启动参数仍通过命令行或环境变量设置，命令行同名参数优先。
@@ -125,8 +126,9 @@ bast agents
 | --- | --- | --- |
 | `BAS_LISTEN` | `local` | 监听目标；支持本地 IPC 或显式 TCP，多目标以 `;` 分隔，见 [连接类型](docs/connections.md) |
 | `BAS_AGENTS` | 未设置 | 简写后端目录，设置后覆盖 JSON 配置，见下 |
-| `BAS_SETTINGS_FILE` | 用户配置目录下的 `bas/settings.json` | GUI 与 daemon 共用配置；Linux 默认 `~/.config`，跨平台目录见 [GUI 说明](docs/gui.md#统一设置中的外观偏好) |
-| `BAS_AGENTS_FILE` | 未设置 | 显式兼容旧版独立 agent 数组；设置后覆盖统一文件的 agent 目录 |
+| `BAS_SETTINGS_FILE` | 用户配置目录下的 `bas/settings.json` | 仅 GUI 偏好；Linux 默认 `~/.config`，跨平台目录见 [GUI 说明](docs/gui.md#统一设置中的外观偏好) |
+| `BAS_DAEMON_SETTINGS_FILE` | 用户配置目录下的 `bas/daemon.json` | 后端 Agent 注册与 ACP 策略，不读取 GUI 偏好路径 |
+| `BAS_AGENTS_FILE` | 未设置 | 显式兼容旧版独立 agent 数组；设置后覆盖后端文件的 agent 目录 |
 | `BAS_NOTIFY` | `auto` | `auto` 允许无桌面运行，`always` 要求通知服务可用，`never` 禁用 |
 | `BAS_HISTORY` | `4096` | 每个会话的内存历史窗口容量；localdb 的磁盘历史不受此容量限制 |
 | `BAS_STORAGE` | `localdb` | 会话存储：`localdb`（默认 SQLite） / `memory`（显式关闭持久化） |
@@ -158,12 +160,13 @@ $ BAS_AGENTS='embedded;opencode=acp:opencode acp;gemini=acp:gemini --acp' bas
 ```
 
 `kind` 取 `embedded` 或 `acp`；外部后端必须给出命令行（按空白切分，不支持引号）。
-未设置简写目录时，读取显式 `--agents-file` 兼容文件，否则读取 `--settings-file` /
-`BAS_SETTINGS_FILE` 或默认 `settings.json` 的 `daemon.agents`。
-JSON 支持完整参数数组，示例见 [contrib/settings.json](contrib/settings.json)。
+未设置简写目录时，读取显式 `--agents-file` 兼容文件，否则读取 `--daemon-settings-file` /
+`BAS_DAEMON_SETTINGS_FILE` 或默认 `daemon.json` 的 `agents`。
+JSON 支持完整参数数组，示例见 [contrib/daemon.json](contrib/daemon.json)。
 文件目录每秒热更新，新建会话采用新配置，已有会话保持原后端，不需要重启。
-默认统一文件不存在时只读导入原 `appearance.json` 和 `agents.json`；设置窗口首次保存后写入
-统一文件，保留旧文件。两者也都不存在时使用 `embedded`。
+默认后端文件不存在时，只读导入旧 `settings.json` 的 `daemon`；该文件也不存在才导入
+`agents.json`。首次成功保存后端配置时生成 `daemon.json` 并保留旧文件。
+显式旧 `--settings-file` 仍兼容；旧服务环境变量须改为 `BAS_DAEMON_SETTINGS_FILE`。
 
 ## BasG
 

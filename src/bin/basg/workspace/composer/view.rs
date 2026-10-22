@@ -111,8 +111,9 @@ impl Workspace {
                         $crate::ui::feedback("composer-feedback", message, cx.theme().danger).compact(),
                     ],
                     ..$retry.then(|| gds_uim::el! {
-                        #crate::ui::icon_action("history-resync-retry", IconName::RefreshCw, $crate::i18n::tr!("session-history-retry")) {
+                        #crate::ui::icon_action("history-resync-retry", IconName::RefreshCw, $self.history_retry_label()) {
                             flex_shrink_0;
+                            disabled: $self.history_retry_disabled();
                             on_click: $cx.listener(|this, _, _, cx| this.retry_history(cx));
                         }
                     }),
@@ -294,7 +295,7 @@ impl Workspace {
                 $self.attachment_button(cx) {
                     w: $px(layout::ICON_BUTTON_SIZE); h: $px(layout::ICON_BUTTON_SIZE); p_0;
                 },
-                $self.directories_button(cx),
+                ..$self.supports_directories().then(|| self.directories_button(cx)),
                 #div { flex_1; min_w_0; } [$self.render_config_options(cx)],
                 ..$self.render_queue(cx),
                 ..$((self.working() && !self.composer.input.read(cx).value().trim().is_empty())

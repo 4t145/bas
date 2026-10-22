@@ -5,7 +5,7 @@ use super::{
     source::{self, Files, Sources},
 };
 use anyhow::{Context as _, Result};
-use bas::config::{Document as SettingsDocument, Store};
+use bas::config::{FrontendDocument as SettingsDocument, FrontendStore as Store};
 use std::path::PathBuf;
 
 #[cfg(test)]
