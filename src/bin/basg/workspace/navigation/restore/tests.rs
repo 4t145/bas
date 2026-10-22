@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "gui-tests")]
 #[gpui_kit::test]
 fn queued_navigation_is_ordered_detached_and_merges_other_sections(
     cx: &mut gpui_kit::TestAppContext,
@@ -65,6 +66,7 @@ fn queued_navigation_is_ordered_detached_and_merges_other_sections(
     assert!(other.seen_replies().is_empty());
 }
 
+#[cfg(feature = "gui-tests")]
 #[gpui_kit::test]
 fn queued_removal_follows_older_read_snapshots(cx: &mut gpui_kit::TestAppContext) {
     let directory = tempfile::tempdir().expect("state directory");
