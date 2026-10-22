@@ -280,11 +280,14 @@ async fn reload_errors_are_deduplicated_without_logging_configuration_values() {
             "stdout",
         ]);
     let mut daemon = Daemon::start(command).await;
-    std::fs::write(
-        &path,
-        r#"{"daemon":{"agents":[{"id":"a","kind":"sensitive-config-value"}]}}"#,
+    // Publish one invalid snapshot; a truncate/write can expose a different EOF error.
+    let mut invalid = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+    std::io::Write::write_all(
+        &mut invalid,
+        br#"{"daemon":{"agents":[{"id":"a","kind":"sensitive-config-value"}]}}"#,
     )
     .unwrap();
+    invalid.persist(&path).unwrap();
     tokio::time::sleep(Duration::from_millis(2300)).await;
     assert_eq!(ids(&mut daemon).await, ["valid"]);
     let mut errors = 0;
