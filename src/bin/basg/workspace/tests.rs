@@ -22,6 +22,7 @@ mod submission;
 mod thread_actions;
 mod timeline;
 mod tool_content;
+mod turn_navigation;
 mod workspace_removal;
 
 struct Fixture {
@@ -572,6 +573,9 @@ fn selecting_an_agent_initializes_options_before_any_prompt(cx: &mut TestAppCont
         matches!(fixture.commands.try_recv(), Ok(Command::Watch { session, .. }) if session == created.id)
     );
     assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::HistoryOverview { session, .. }) if session == created.id)
+    );
+    assert!(
         matches!(fixture.commands.try_recv(), Ok(Command::SetConfig(request)) if request.session_id.to_string() == created.id.to_string())
     );
     assert!(
@@ -606,7 +610,14 @@ fn modes_and_output_fold_preserve_the_thread_and_draft(cx: &mut TestAppContext) 
     let mut fixture = fixture(cx);
     let session = session();
     attach(&fixture, session.clone(), cx);
-    let _ = fixture.commands.try_recv();
+    assert!(matches!(
+        fixture.commands.try_recv(),
+        Ok(Command::Watch { .. })
+    ));
+    assert!(matches!(
+        fixture.commands.try_recv(),
+        Ok(Command::HistoryOverview { .. })
+    ));
     cx.update_window(fixture.window.into(), |_, window, cx| {
         window.render_frame(cx);
         window.input("保留草稿", cx);
@@ -714,6 +725,9 @@ fn late_initialization_cannot_steal_another_agent_or_workspace(cx: &mut TestAppC
     .expect("window");
     assert!(
         matches!(fixture.commands.try_recv(), Ok(Command::Watch { session, .. }) if session == latest.id)
+    );
+    assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::HistoryOverview { session, .. }) if session == latest.id)
     );
     assert!(fixture.commands.try_recv().is_err());
 }
@@ -1579,6 +1593,9 @@ fn reopening_restores_the_selected_thread_and_deleted_threads_fall_back(cx: &mut
     .expect("restore selection");
     assert!(
         matches!(fixture.commands.try_recv(), Ok(Command::Watch { session, .. }) if session == previous.id)
+    );
+    assert!(
+        matches!(fixture.commands.try_recv(), Ok(Command::HistoryOverview { session, .. }) if session == previous.id)
     );
     assert!(
         fixture.commands.try_recv().is_err(),

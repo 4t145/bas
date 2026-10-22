@@ -61,6 +61,7 @@ impl Cache {
         }
         timeline.loading_before = None;
         timeline.older_error = None;
+        timeline.navigation.park();
         if timeline.history.is_none() {
             return;
         }
@@ -85,6 +86,7 @@ impl state::TimelineState {
             .bytes()
             .saturating_add(self.presentation_bytes)
             .saturating_add(self.presentation_meta_bytes)
+            .saturating_add(self.navigation.retained_bytes())
     }
 
     /// Catalog and operation responses can replace metadata independently of history.
@@ -441,6 +443,9 @@ impl Workspace {
             return;
         };
         let timeline = &mut self.selected.timeline;
+        if timeline.navigation.location.is_some() {
+            return;
+        }
         let Some(before) = timeline.history.as_ref().and_then(|history| history.before) else {
             return;
         };

@@ -196,6 +196,63 @@ async fn client_windows_preserve_payloads_and_snapshot_across_pages() {
     assert_eq!(recent.cursor, 600);
     assert_eq!(recent.session.meta.id, fixture.session);
     assert_eq!(recent.session.meta.revision.raw(), 600);
+    let overview = fixture
+        .client
+        .history_overview(fixture.session, TIMEOUT)
+        .await
+        .expect("complete prompt markers");
+    assert_eq!(overview.cursor, 600);
+    assert_eq!(
+        overview
+            .entries
+            .iter()
+            .map(|entry| entry.cursor)
+            .collect::<Vec<_>>(),
+        [1, 201, 401]
+    );
+    let direct = fixture
+        .client
+        .history_window_at(fixture.session, 1, TIMEOUT)
+        .await
+        .expect("jump directly from latest to oldest");
+    assert_eq!(direct.window.events, fixture.events[..200]);
+    assert_eq!(direct.window.cursor, 600);
+    assert_eq!(direct.after, Some(201));
+    let forward = fixture
+        .client
+        .history_window_at(
+            fixture.session,
+            direct.after.expect("forward cursor"),
+            TIMEOUT,
+        )
+        .await
+        .expect("next page");
+    assert_eq!(forward.window.events, fixture.events[200..400]);
+    assert_eq!(forward.after, Some(401));
+    let containing = fixture
+        .client
+        .history_window_at(fixture.session, 250, TIMEOUT)
+        .await
+        .expect("containing middle turn");
+    assert_eq!(containing, forward);
+    assert_eq!(
+        fixture
+            .client
+            .history_window_at(fixture.session, 601, TIMEOUT)
+            .await
+            .expect_err("future cursor")
+            .code(),
+        Code::InvalidArgument
+    );
+    assert_eq!(
+        fixture
+            .client
+            .history_overview(SessionId::new(), TIMEOUT)
+            .await
+            .expect_err("missing session")
+            .code(),
+        Code::NotFound
+    );
     let older = fixture
         .client
         .history_window(fixture.session, recent.before, 1, TIMEOUT)
@@ -235,7 +292,131 @@ async fn oversized_safe_window_errors_instead_of_returning_half_a_message() {
         .await
         .expect_err("complete message does not fit");
     assert_eq!(error.code(), Code::ResourceExhausted);
+    assert_eq!(
+        fixture
+            .client
+            .history_window_at(fixture.session, 1, TIMEOUT)
+            .await
+            .expect_err("oversized location")
+            .code(),
+        Code::ResourceExhausted
+    );
+    assert_eq!(
+        fixture
+            .client
+            .history_overview(fixture.session, TIMEOUT)
+            .await
+            .expect("metadata does not contain bodies")
+            .entries
+            .len(),
+        1
+    );
     fixture.registry.shutdown().await;
+}
+
+struct NoReadStartup;
+
+#[async_trait::async_trait]
+impl crate::agent::Driver for NoReadStartup {
+    fn kind(&self) -> crate::agent::Kind {
+        crate::agent::Kind::Acp
+    }
+
+    async fn launch(
+        &self,
+        _: crate::agent::LaunchRequest,
+    ) -> Result<Box<dyn crate::agent::Agent>, crate::agent::Error> {
+        panic!("history reads must not launch ACP")
+    }
+
+    async fn restore(
+        &self,
+        _: crate::agent::LaunchRequest,
+        _: String,
+    ) -> Result<Box<dyn crate::agent::Agent>, crate::agent::Error> {
+        panic!("history reads must not restore ACP")
+    }
+}
+
+#[tokio::test]
+async fn navigation_reads_never_launch_or_restore_acp() {
+    let storage = Arc::new(Memory::new(NonZeroUsize::new(10).expect("capacity")));
+    let mut meta = SessionMeta::new(SessionId::new(), "read-only".into(), Owner::current());
+    meta.status = bas::model::SessionStatus::Idle;
+    storage
+        .create(
+            meta.clone(),
+            Some(crate::storage::ResumeData::acp("native-session")),
+        )
+        .await
+        .expect("stored ACP session");
+    let event = Event::new(meta.id, Cursor::from_raw(1), prompt(0));
+    meta.apply_event(&event);
+    storage
+        .commit(meta.clone(), &[event], None)
+        .await
+        .expect("stored prompt");
+    let mut catalog = Catalog::new();
+    catalog
+        .insert(
+            crate::agent::AgentSpec::acp(
+                "read-only",
+                crate::agent::Command::new("unused", std::iter::empty::<String>()),
+            ),
+            Arc::new(NoReadStartup),
+        )
+        .expect("ACP driver");
+    let mut registry = Registry::with_storage(
+        Arc::new(catalog),
+        Arc::new(LocalHost::default()),
+        Limits::default(),
+        storage,
+    );
+    registry.recover().await.expect("recover metadata");
+    let registry = Arc::new(registry);
+    let session = registry.get(meta.id).await.expect("session");
+    let before = session.snapshot();
+    let service = Service::new(registry.clone());
+    let overview = service
+        .load_history_overview(Request::new(pb::LoadHistoryOverviewRequest {
+            session: meta.id.to_string(),
+        }))
+        .await
+        .expect("overview")
+        .into_inner();
+    assert_eq!(overview.entries.len(), 1);
+    let location = service
+        .load_history_window_at(Request::new(pb::LoadHistoryWindowAtRequest {
+            session: meta.id.to_string(),
+            cursor: 1,
+        }))
+        .await
+        .expect("location")
+        .into_inner();
+    assert_eq!(location.window.expect("window").events.len(), 1);
+    assert_eq!(session.snapshot(), before);
+    assert_eq!(
+        service
+            .load_history_window_at(Request::new(pb::LoadHistoryWindowAtRequest {
+                session: meta.id.to_string(),
+                cursor: 0
+            }))
+            .await
+            .expect_err("zero cursor")
+            .code(),
+        Code::InvalidArgument
+    );
+    assert_eq!(
+        service
+            .load_history_overview(Request::new(pb::LoadHistoryOverviewRequest {
+                session: "invalid".into()
+            }))
+            .await
+            .expect_err("invalid session")
+            .code(),
+        Code::InvalidArgument
+    );
+    registry.shutdown().await;
 }
 
 #[tokio::test]

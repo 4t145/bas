@@ -434,6 +434,43 @@ impl Workspace {
             view.composer.expanded = !compact;
         }
         view.sync_composer_mode(cx);
+        if matches!(fixture, "turn-navigation" | "turn-navigation-many") {
+            let entries = conversation
+                .items
+                .iter()
+                .filter_map(|item| {
+                    let Item::Message { message, .. } = item else {
+                        return None;
+                    };
+                    if message.role != bas::model::Role::User {
+                        return None;
+                    }
+                    Some(bas::service::HistoryOverviewEntry {
+                        cursor: turn_navigation::message_cursor(message)?.saturating_sub(1),
+                        timestamp_millis: message.at.millis() as i64,
+                        preview: message
+                            .content
+                            .iter()
+                            .filter_map(|block| {
+                                if let bas::model::ContentBlock::Text(text) = block {
+                                    Some(text.text.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<String>(),
+                    })
+                })
+                .collect();
+            view.selected.timeline.navigation.overview = Some(
+                bas::service::HistoryOverview {
+                    session: session.id,
+                    cursor: conversation.cursor,
+                    entries,
+                }
+                .into(),
+            );
+        }
         view.selected.timeline.conversation = Some(conversation);
         view.window.output_open = matches!(
             fixture,
@@ -571,7 +608,7 @@ impl Workspace {
             "attachment-preview" => hover_attachment,
             "multiline-hover" => Some("tool-command-tool-multiline".to_owned()),
             "usage-hover" => Some("session-usage".to_owned()),
-            "turn-navigation-hover" => Some("turn-marker-0".to_owned()),
+            "turn-navigation-hover" => Some("turn-marker-1".to_owned()),
             _ => None,
         };
         if let Some(hover) = hover {

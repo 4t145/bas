@@ -65,7 +65,7 @@ async fn storage_failure_can_be_retried_without_restarting_daemon_or_resending_p
     let writer = rusqlite::Connection::open(&database).expect("fault injector");
     writer
         .execute_batch(
-            "CREATE TRIGGER storage_unavailable BEFORE INSERT ON events
+            "CREATE TRIGGER storage_unavailable BEFORE INSERT ON history_chunks
          BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;",
         )
         .expect("inject failure");
@@ -218,6 +218,16 @@ async fn localdb_survives_daemon_restart_with_history_and_the_same_session_id() 
     .await
     .expect("first turn completes");
     cli(&daemon, &["session", "archive", &id]).await;
+    let inspector = rusqlite::Connection::open(&database).expect("inspect isolated test database");
+    let blocks: i64 = inspector
+        .query_row(
+            "SELECT COUNT(*) FROM history_chunks WHERE session_id = ?1 AND first_cursor < last_cursor",
+            [&id],
+            |row| row.get(0),
+        )
+        .expect("completed turn blocks");
+    assert!(blocks > 0, "the real daemon packs completed turns");
+    drop(inspector);
     daemon.stop().await;
     drop(stream);
     drop(daemon);

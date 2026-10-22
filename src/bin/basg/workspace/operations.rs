@@ -43,6 +43,8 @@ impl Workspace {
             | Command::RespondElicitation { session, .. }
             | Command::Resume { session, .. }
             | Command::OlderHistory { session, .. }
+            | Command::HistoryOverview { session, .. }
+            | Command::HistoryLocation { session, .. }
             | Command::Watch { session, .. } => Some(*session),
             Command::SetConfig(request) => request.session_id.to_string().parse().ok(),
             _ => None,
@@ -214,6 +216,25 @@ impl Workspace {
             } => {
                 if self.selected.id == Some(session) && self.selected.epoch == epoch {
                     self.older_history_loaded(before, Err(message.into()), cx);
+                }
+            }
+            Command::HistoryOverview {
+                session,
+                epoch,
+                request,
+            } => {
+                if self.selected.id == Some(session) && self.selected.epoch == epoch {
+                    self.history_overview_loaded(request, Err(message.into()), cx);
+                }
+            }
+            Command::HistoryLocation {
+                session,
+                epoch,
+                request,
+                ..
+            } => {
+                if self.selected.id == Some(session) && self.selected.epoch == epoch {
+                    self.history_location_loaded(request, Err(message.into()), cx);
                 }
             }
             Command::ForgetHistory(_) => {}

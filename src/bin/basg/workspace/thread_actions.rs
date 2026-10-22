@@ -16,6 +16,7 @@ impl Workspace {
             self.sessions.discard_content(session);
             self.sessions.pending.forget(session);
             self.sessions.seen_replies.remove(&session);
+            self.navigation.marker_bookmarks.remove(&session);
             self.renaming.forget(session);
             self.command(Command::ForgetHistory(session), cx);
         }

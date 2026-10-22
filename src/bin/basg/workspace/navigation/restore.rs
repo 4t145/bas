@@ -41,9 +41,30 @@ struct Saved {
     #[serde(default)]
     bookmarks: std::collections::BTreeSet<SessionId>,
     #[serde(default)]
+    marker_bookmarks: std::collections::BTreeMap<SessionId, std::collections::BTreeSet<u64>>,
+    #[serde(default)]
     seen_replies: std::collections::BTreeMap<SessionId, u64>,
     #[serde(default)]
     hidden_workspaces: std::collections::BTreeSet<Option<PathBuf>>,
+}
+
+impl Saved {
+    fn set_marker_bookmarked(&mut self, session: SessionId, cursor: u64, bookmarked: bool) -> bool {
+        if bookmarked {
+            self.marker_bookmarks
+                .entry(session)
+                .or_default()
+                .insert(cursor)
+        } else if let Some(cursors) = self.marker_bookmarks.get_mut(&session) {
+            let changed = cursors.remove(&cursor);
+            if cursors.is_empty() {
+                self.marker_bookmarks.remove(&session);
+            }
+            changed
+        } else {
+            false
+        }
+    }
 }
 
 pub(in crate::workspace) struct Store {
@@ -128,6 +149,64 @@ impl Store {
         self.saved.bookmarks.iter().copied().collect()
     }
 
+    /// Stable original logical turn/page start cursors, not loaded item indexes.
+    /// These are independent of the sidebar's thread-level bookmarks.
+    pub fn marker_bookmarks(&self) -> HashMap<SessionId, HashSet<u64>> {
+        self.saved
+            .marker_bookmarks
+            .iter()
+            .map(|(&session, cursors)| (session, cursors.iter().copied().collect()))
+            .collect()
+    }
+
+    /// Updates the local snapshot immediately and persists only this marker.
+    /// Cursor zero is not a logical turn/page start and is ignored.
+    pub fn queue_marker_bookmark(
+        &mut self,
+        pending: &mut Option<PendingSave>,
+        executor: &gpui_kit::BackgroundExecutor,
+        session: SessionId,
+        cursor: u64,
+        bookmarked: bool,
+    ) {
+        if cursor == 0 {
+            return;
+        }
+        self.saved
+            .set_marker_bookmarked(session, cursor, bookmarked);
+        let path = self.path.clone();
+        enqueue(pending, executor, move || {
+            let mut store = Store {
+                path,
+                saved: Saved::default(),
+            };
+            if let Err(error) = store.save_marker_bookmark(session, cursor, bookmarked) {
+                tracing::warn!(%error, "cannot save marker bookmark");
+            }
+        });
+    }
+
+    /// # Errors
+    /// Returns lock, parse or write failures without replacing unrelated state.
+    fn save_marker_bookmark(
+        &mut self,
+        session: SessionId,
+        cursor: u64,
+        bookmarked: bool,
+    ) -> Result<(), Error> {
+        if cursor == 0 {
+            return Ok(());
+        }
+        let _lock = self.lock()?;
+        let mut saved = self.latest()?;
+        if saved.set_marker_bookmarked(session, cursor, bookmarked) {
+            self.write(saved)
+        } else {
+            self.saved = saved;
+            Ok(())
+        }
+    }
+
     /// # Errors
     /// Returns persistence failures without changing this or another window's saved state.
     pub fn set_bookmarked(&mut self, id: SessionId, bookmarked: bool) -> Result<(), Error> {
@@ -176,6 +255,7 @@ impl Store {
         }
     }
 
+    /// Removes read cursors and marker bookmarks for deleted sessions.
     /// # Errors
     /// Returns persistence failures without altering unrelated saved state.
     pub fn forget_reads(&mut self, removed: &[SessionId]) -> Result<(), Error> {
@@ -187,6 +267,7 @@ impl Store {
         let mut changed = false;
         for id in removed {
             changed |= saved.seen_replies.remove(id).is_some();
+            changed |= saved.marker_bookmarks.remove(id).is_some();
         }
         if changed {
             self.write(saved)
@@ -194,6 +275,32 @@ impl Store {
             self.saved = saved;
             Ok(())
         }
+    }
+
+    fn queue_forget_reads(
+        &mut self,
+        pending: &mut Option<PendingSave>,
+        executor: &gpui_kit::BackgroundExecutor,
+        removed: &[SessionId],
+    ) {
+        if removed.is_empty() {
+            return;
+        }
+        for id in removed {
+            self.saved.seen_replies.remove(id);
+            self.saved.marker_bookmarks.remove(id);
+        }
+        let path = self.path.clone();
+        let removed = removed.to_vec();
+        enqueue(pending, executor, move || {
+            let mut store = Store {
+                path,
+                saved: Saved::default(),
+            };
+            if let Err(error) = store.forget_reads(&removed) {
+                tracing::warn!(%error, "cannot remove saved read replies and marker bookmarks");
+            }
+        });
     }
 
     /// # Errors
@@ -368,23 +475,13 @@ impl Workspace {
         removed: &[SessionId],
         cx: &mut Context<Self>,
     ) {
-        let Some(store) = &self.navigation.restore.store else {
+        let Some(store) = &mut self.navigation.restore.store else {
             return;
         };
-        let path = store.path.clone();
-        let removed = removed.to_vec();
-        enqueue(
+        store.queue_forget_reads(
             &mut self.navigation.restore.pending_save,
             cx.background_executor(),
-            move || {
-                let mut store = Store {
-                    path,
-                    saved: Saved::default(),
-                };
-                if let Err(error) = store.forget_reads(&removed) {
-                    tracing::warn!(%error, "cannot remove saved read replies");
-                }
-            },
+            removed,
         );
     }
 

@@ -10,9 +10,36 @@ use gpui_kit::{
     component::input::*, prelude::*,
 };
 
+mod persistence;
+use persistence::{Feedback, PendingWrite};
+mod pools;
+use pools::PoolRow;
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
 mod view;
+
+#[derive(Default)]
+struct Pages(std::collections::HashMap<Option<bas::service::tls::ConnectionOptions>, Entity<Page>>);
+impl gpui_kit::Global for Pages {}
+
+pub(super) fn shared(window: &mut Window, cx: &mut App) -> Entity<Page> {
+    use gpui_kit::AppContext;
+    let target = cx.try_global::<Service>().map(Service::address);
+    if let Some(page) = cx
+        .try_global::<Pages>()
+        .and_then(|pages| pages.0.get(&target))
+    {
+        return page.clone();
+    }
+    let page = cx.new(|cx| Page::new(window, cx));
+    if !cx.has_global::<Pages>() {
+        cx.set_global(Pages::default());
+    }
+    cx.update_global::<Pages, _>(|pages, _| {
+        pages.0.insert(target, page.clone());
+    });
+    page
+}
 
 pub(super) struct Page {
     service: Option<Service>,
@@ -22,13 +49,15 @@ pub(super) struct Page {
     idle: Entity<InputState>,
     size: Entity<InputState>,
     default_agent: Option<AgentId>,
-    pools: Vec<(AgentId, Entity<InputState>)>,
+    pools: Vec<PoolRow>,
     focus: FocusHandle,
     scroll: ScrollHandle,
-    task: Option<Task<()>>,
-    pub message: String,
+    load_task: Option<Task<()>>,
+    pending: Option<Task<()>>,
+    write: Option<PendingWrite>,
+    flush_after_write: bool,
+    feedback: Feedback,
     subscriptions: Vec<Subscription>,
-    pool_subscriptions: Vec<Subscription>,
 }
 
 impl Page {
@@ -46,64 +75,47 @@ impl Page {
             pools: Vec::new(),
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
-            task: None,
-            message: String::new(),
+            load_task: None,
+            pending: None,
+            write: None,
+            flush_after_write: false,
+            feedback: Feedback::Idle,
             subscriptions: Vec::new(),
-            pool_subscriptions: Vec::new(),
         };
         for input in [&page.idle, &page.size] {
             page.subscriptions
-                .push(cx.subscribe(input, |_, _, event, cx| {
+                .push(cx.subscribe(input, |this, _, event, cx| {
                     if matches!(event, InputEvent::Change) {
-                        cx.notify();
+                        this.changed(cx);
+                    } else if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.feedback = Feedback::Idle;
+                        this.flush_pending(cx);
                     }
                 }));
         }
+        page.subscriptions.push(cx.on_app_quit(|this, cx| {
+            this.prepare_to_leave(cx);
+            let write = this.write.clone();
+            async move {
+                if let Some(write) = write {
+                    write.await;
+                }
+            }
+        }));
         page
     }
 
     pub(super) fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window, cx);
-        if self.baseline.is_none() {
-            self.request(None, window, cx);
+        if !self.dirty(cx) && self.write.is_none() {
+            self.load(window, cx);
         }
     }
 
-    fn request(
-        &mut self,
-        save: Option<pb::SaveAcpConfigurationRequest>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.task.is_some() {
-            return;
+    pub(super) fn ensure_loaded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.baseline.is_none() {
+            self.load(window, cx);
         }
-        let Some(service) = &self.service else {
-            self.message = crate::i18n::tr!("acp-policy-no-service").into();
-            cx.notify();
-            return;
-        };
-        let saving = save.is_some();
-        let request = service.acp_configuration(save);
-        self.message = crate::i18n::tr!("acp-policy-loading").into();
-        self.task = Some(cx.spawn_in(window, async move |page, cx| {
-            let result = request.await;
-            let _ = page.update_in(cx, |page, window, cx| {
-                page.task = None;
-                match result.and_then(|value| page.accept(value, window, cx)) {
-                    Ok(()) => {
-                        page.message = if saving {
-                            crate::i18n::tr!("acp-policy-saved").into()
-                        } else {
-                            String::new()
-                        }
-                    }
-                    Err(error) => page.message = error,
-                }
-                cx.notify();
-            });
-        }));
-        cx.notify();
     }
 
     fn accept(
@@ -132,29 +144,11 @@ impl Page {
             input.set_value(policy.pool_size.to_string(), window, cx)
         });
         self.default_agent = policy.default_agent.clone();
-        self.pools.clear();
-        self.pool_subscriptions.clear();
-        for agent in agents
+        self.pools = policy
+            .pools
             .iter()
-            .filter(|a| a.as_custom().is_none_or(|s| s.kind == Kind::Acp))
-        {
-            let input = cx.new(|cx| {
-                InputState::new(window, cx).default_value(
-                    policy
-                        .pools
-                        .get(agent.id())
-                        .map(usize::to_string)
-                        .unwrap_or_default(),
-                )
-            });
-            self.pool_subscriptions
-                .push(cx.subscribe(&input, |_, _, event, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        cx.notify();
-                    }
-                }));
-            self.pools.push((agent.id().clone(), input));
-        }
+            .map(|(id, size)| PoolRow::new(id.clone(), *size, window, cx))
+            .collect();
         self.agents = agents;
         self.policy = Some(policy);
         self.baseline = Some(value);
@@ -179,11 +173,8 @@ impl Page {
                 .map_err(|_| crate::i18n::tr!("acp-policy-invalid-size").to_owned())
         };
         let mut pools = std::collections::BTreeMap::new();
-        for (id, input) in &self.pools {
-            let value = input.read(cx).value();
-            if !value.trim().is_empty() {
-                pools.insert(id.clone(), number(&value)?);
-            }
+        for pool in &self.pools {
+            pools.insert(pool.agent.clone(), number(&pool.size.read(cx).value())?);
         }
         let policy = AcpLifecycle {
             idle_timeout_secs,
@@ -202,30 +193,6 @@ impl Page {
     }
 
     fn disabled(&self) -> bool {
-        self.baseline.is_none() || self.task.is_some()
-    }
-
-    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.disabled() {
-            return;
-        }
-        let Some(baseline) = &self.baseline else {
-            return;
-        };
-        match self.candidate(cx) {
-            Ok(policy) => self.request(
-                Some(pb::SaveAcpConfigurationRequest {
-                    profile: baseline.profile.clone(),
-                    revision: baseline.revision.clone(),
-                    policy_json: serde_json::to_vec(&policy).expect("serializable policy"),
-                }),
-                window,
-                cx,
-            ),
-            Err(error) => {
-                self.message = error;
-                cx.notify();
-            }
-        }
+        self.baseline.is_none() || self.load_task.is_some()
     }
 }

@@ -12,7 +12,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::{Error, Page, PromptAcceptance, ResumeData, SqliteStore, StoredSession};
 use crate::storage::Storage;
-use crate::storage::Window;
+use crate::storage::{Location, Window};
+use bas::service::HistoryOverview;
 
 type Reply<T> = oneshot::Sender<Result<T, Error>>;
 
@@ -27,6 +28,8 @@ enum Command {
     List(Reply<Vec<SessionMeta>>),
     Page(SessionId, Option<Cursor>, usize, Reply<Page>),
     Window(SessionId, Option<Cursor>, usize, Reply<Window>),
+    Overview(SessionId, Reply<HistoryOverview>),
+    WindowAt(SessionId, Cursor, Reply<Location>),
     Tail(SessionId, usize, Reply<Vec<Event>>),
     Delete(SessionId, Reply<bool>),
     #[cfg(test)]
@@ -46,7 +49,16 @@ impl Command {
                 let _ = reply.send(store.create(meta, resume).await);
             }
             Self::Commit(meta, events, acceptance, reply) => {
-                let _ = reply.send(store.commit(meta, &events, acceptance).await);
+                let id = meta.id;
+                let result = store.commit(meta, &events, acceptance).await;
+                let committed = result.is_ok();
+                let _ = reply.send(result);
+                if committed && let (Some(first), Some(last)) = (events.first(), events.last()) {
+                    let from = Cursor::from_raw(first.cursor.raw().saturating_sub(1));
+                    if let Err(error) = store.pack_ready(id, from..=last.cursor).await {
+                        tracing::warn!(session = %id, %error, "cannot pack history segment; committed chunks retained");
+                    }
+                }
             }
             Self::Acceptance(session, turn, reply) => {
                 let _ = reply.send(store.acceptance(session, turn).await);
@@ -65,6 +77,12 @@ impl Command {
             }
             Self::Window(id, before, limit, reply) => {
                 let _ = reply.send(store.window(id, before, limit).await);
+            }
+            Self::Overview(id, reply) => {
+                let _ = reply.send(store.overview(id).await);
+            }
+            Self::WindowAt(id, cursor, reply) => {
+                let _ = reply.send(store.window_at(id, cursor).await);
             }
             Self::Tail(id, count, reply) => {
                 let _ = reply.send(store.tail(id, count).await);
@@ -220,6 +238,14 @@ impl Storage for LocalDb {
         Box::pin(self.request(move |reply| Command::Tail(id, count, reply)))
     }
 
+    fn overview(&self, id: SessionId) -> BoxFuture<'_, Result<HistoryOverview, Error>> {
+        Box::pin(self.request(move |reply| Command::Overview(id, reply)))
+    }
+
+    fn window_at(&self, id: SessionId, cursor: Cursor) -> BoxFuture<'_, Result<Location, Error>> {
+        Box::pin(self.request(move |reply| Command::WindowAt(id, cursor, reply)))
+    }
+
     fn delete(&self, id: SessionId) -> BoxFuture<'_, Result<bool, Error>> {
         Box::pin(self.request(move |reply| Command::Delete(id, reply)))
     }
@@ -250,24 +276,22 @@ impl TestSql {
                     .await?;
             }
             Self::ClearHistoryIndex => {
-                for table in [
-                    "history_index",
-                    "history_dependencies",
-                    "history_context_keys",
-                    "history_turns",
-                ] {
+                for table in ["history_segments", "history_state"] {
                     sql::statement(format!("DELETE FROM {table}"))
                         .exec(&mut db)
                         .await?;
                 }
+                sql::statement("UPDATE history_chunks SET segment_start = NULL")
+                    .exec(&mut db)
+                    .await?;
             }
             Self::CorruptFirstPayload => {
-                sql::statement("UPDATE events SET payload = X'00' WHERE cursor = 1")
+                sql::statement("UPDATE history_chunks SET payload = X'00' WHERE first_cursor = 1")
                     .exec(&mut db)
                     .await?;
             }
             Self::RejectThirdEvent => {
-                sql::statement("CREATE TRIGGER fail_third BEFORE INSERT ON events WHEN NEW.cursor = 3 BEGIN SELECT RAISE(ABORT, 'failure'); END")
+                sql::statement("CREATE TRIGGER fail_third BEFORE INSERT ON history_chunks WHEN NEW.first_cursor = 3 BEGIN SELECT RAISE(ABORT, 'failure'); END")
                     .exec(&mut db)
                     .await?;
             }

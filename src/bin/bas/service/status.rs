@@ -44,6 +44,12 @@ impl From<SessionError> for Status {
                 | crate::storage::Error::EmptyPage
                 | crate::storage::Error::NotTurnBoundary(_),
             ) => Status::invalid_argument(error.to_string()),
+            SessionError::Storage(crate::storage::Error::NavigationUnsupported) => {
+                Status::unimplemented(error.to_string())
+            }
+            SessionError::Storage(crate::storage::Error::NotFound(_)) => {
+                Status::not_found(error.to_string())
+            }
             SessionError::Storage(_) => Status::unavailable(error.to_string()),
             SessionError::CommitTask(_) => Status::unavailable(error.to_string()),
             SessionError::Agent(crate::agent::Error::AcpRaw { error, raw }) => {

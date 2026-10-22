@@ -1,5 +1,7 @@
 use super::*;
 
+mod marker_bookmarks;
+
 #[cfg(feature = "gui-tests")]
 #[gpui_kit::test]
 fn queued_navigation_is_ordered_detached_and_merges_other_sections(

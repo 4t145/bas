@@ -20,6 +20,8 @@ impl Workspace {
             | Update::DirectoriesUpdated { session, .. }
             | Update::Submission { session, .. }
             | Update::TrackingFailed { session, .. }
+            | Update::HistoryOverview { session, .. }
+            | Update::HistoryLocation { session, .. }
             | Update::Cancelled { session, .. } => Some(*session),
             // Creation must still settle its pending attempt; catalogs filter each entry.
             // Session watch messages without an ID are invalidated by selection's epoch.
@@ -337,7 +339,33 @@ impl Workspace {
                 window: history,
                 cached,
             } if epoch == self.selected.epoch => {
-                self.apply_history_window(history, cached, cx);
+                if !cached {
+                    self.request_history_overview(history.cursor, cx);
+                }
+                if self.selected.timeline.navigation.detached {
+                    if !cached {
+                        self.sessions.runtimes.observe(&history.session, false);
+                        self.selected.timeline.merge_meta(&history.session.meta);
+                    }
+                } else {
+                    self.apply_history_window(history, cached, cx);
+                }
+            }
+            Update::HistoryOverview {
+                session,
+                epoch,
+                request,
+                result,
+            } if epoch == self.selected.epoch && self.selected.id == Some(session) => {
+                self.history_overview_loaded(request, result, cx);
+            }
+            Update::HistoryLocation {
+                session,
+                epoch,
+                request,
+                result,
+            } if epoch == self.selected.epoch && self.selected.id == Some(session) => {
+                self.history_location_loaded(request, result, cx);
             }
             Update::OlderHistory {
                 epoch,
@@ -373,7 +401,20 @@ impl Workspace {
                     value: event,
                     bytes,
                 } = event;
+                if self.selected.id == Some(event.session)
+                    && matches!(
+                        event.kind,
+                        bas::model::EventKind::TurnStarted { .. }
+                            | bas::model::EventKind::Acp(
+                                bas::acp::SessionUpdate::UserMessageChunk(_)
+                            )
+                    )
+                {
+                    self.request_history_overview(event.cursor.raw(), cx);
+                }
+                let browsing = self.selected.timeline.navigation.detached;
                 if let Some(history) = &mut self.selected.timeline.history
+                    && !browsing
                     && event.session == history.session.meta.id
                     && !event.is_transient()
                     && event.cursor.raw() > history.cursor
@@ -383,16 +424,17 @@ impl Workspace {
                     history.events.push(event.clone());
                     self.selected.timeline.history_weight.append(bytes);
                 }
-                if self
-                    .selected
-                    .timeline
-                    .conversation
-                    .as_ref()
-                    .is_some_and(|conversation| {
-                        conversation.session.id == event.session
-                            && !event.is_transient()
-                            && event.cursor.raw() > conversation.cursor
-                    })
+                if !browsing
+                    && self
+                        .selected
+                        .timeline
+                        .conversation
+                        .as_ref()
+                        .is_some_and(|conversation| {
+                            conversation.session.id == event.session
+                                && !event.is_transient()
+                                && event.cursor.raw() > conversation.cursor
+                        })
                 {
                     self.selected.timeline.presentation_bytes = self
                         .selected
@@ -408,11 +450,28 @@ impl Workspace {
                     .find(|meta| meta.id == event.session)
                 {
                     meta.apply_event(&event);
+                    // Browsing an older slice must not freeze current controls.
+                    // Text deltas do not change their state; avoid measuring the
+                    // metadata snapshot for every streamed text fragment.
+                    if browsing
+                        && !matches!(
+                            event.kind,
+                            bas::model::EventKind::Acp(
+                                bas::acp::SessionUpdate::UserMessageChunk(_)
+                                    | bas::acp::SessionUpdate::AgentMessageChunk(_)
+                                    | bas::acp::SessionUpdate::AgentThoughtChunk(_)
+                            )
+                        )
+                    {
+                        self.selected.timeline.merge_meta(meta);
+                    }
                 }
                 if let Some(outbox) = self.sessions.outboxes.get_mut(&event.session) {
                     outbox.observe(&event);
                 }
-                if let Some(conversation) = &mut self.selected.timeline.conversation {
+                if let Some(conversation) = &mut self.selected.timeline.conversation
+                    && !browsing
+                {
                     let old_count = conversation.rows.len();
                     let expanded_activity = conversation
                         .rows
@@ -515,6 +574,8 @@ impl Workspace {
             }
             Update::HistoryWindow { .. }
             | Update::OlderHistory { .. }
+            | Update::HistoryOverview { .. }
+            | Update::HistoryLocation { .. }
             | Update::HistoryMeta { .. }
             | Update::Event { .. }
             | Update::Stream { .. }

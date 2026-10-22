@@ -13,8 +13,6 @@ use gpui_kit::{
     px,
 };
 
-const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Group {
     Theme,
@@ -79,7 +77,7 @@ enum Field {
     ComposerEnter,
 }
 impl Field {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 11] = [
         Self::Language,
         Self::Source,
         Self::Mode,
@@ -91,7 +89,6 @@ impl Field {
         Self::Fallbacks,
         Self::LineHeight,
         Self::Opacity,
-        Self::ComposerEnter,
     ];
     fn id(self) -> &'static str {
         match self {
@@ -267,7 +264,7 @@ impl AppearancePage {
                             })
                             .unwrap_or_default();
                         this.pending = Some(cx.spawn_in(window, async move |view, cx| {
-                            cx.background_executor().timer(DEBOUNCE).await;
+                            cx.background_executor().timer(super::SAVE_DELAY).await;
                             let _ = view.update_in(cx, |this, window, cx| this.save(window, cx));
                         }));
                         cx.notify();
@@ -480,6 +477,13 @@ impl AppearancePage {
             &Preferences {
                 confirm_session_delete: self.form.confirm_delete,
                 auto_collapse_activity: self.form.auto_collapse_activity,
+                composer_enter_behavior: self
+                    .form
+                    .composer_enter
+                    .read(cx)
+                    .selected_value()
+                    .copied()
+                    .unwrap_or_default(),
                 default_agent: self
                     .form
                     .default_agent

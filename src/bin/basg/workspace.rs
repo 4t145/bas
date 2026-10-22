@@ -525,6 +525,7 @@ impl Workspace {
             },
         };
         self.command(command, cx);
+        self.request_history_overview(0, cx);
         cx.notify();
     }
 

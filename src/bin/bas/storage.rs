@@ -73,6 +73,12 @@ pub struct Window {
     pub cursor: Cursor,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Location {
+    pub window: Window,
+    pub after: Option<Cursor>,
+}
+
 /// Small acceptance ledger entry retained until its session is deleted,
 /// independently of history eviction. It never stores a second prompt payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +101,8 @@ pub enum Error {
     EmptyPage,
     #[error("history cursor {0} is not a turn boundary")]
     NotTurnBoundary(Cursor),
+    #[error("history navigation is not supported by this storage backend")]
+    NavigationUnsupported,
     #[error("cursor {requested} is ahead of latest {latest}")]
     Future { requested: Cursor, latest: Cursor },
     #[error("history after {requested} was evicted through {evicted_through}")]
@@ -213,6 +221,23 @@ pub trait Storage: Send + Sync {
         before: Option<Cursor>,
         limit: usize,
     ) -> BoxFuture<'_, Result<Window, Error>>;
+    /// Reads the complete prompt catalog from one committed snapshot.
+    ///
+    /// # Errors
+    /// Fails rather than claiming completeness if unsupported or history expired.
+    fn overview(
+        &self,
+        _id: SessionId,
+    ) -> BoxFuture<'_, Result<bas::service::HistoryOverview, Error>> {
+        Box::pin(async { Err(Error::NavigationUnsupported) })
+    }
+    /// Reads the containing logical page directly, expanding replay dependencies.
+    ///
+    /// # Errors
+    /// Fails for missing, zero/future/expired cursors or unsupported backends.
+    fn window_at(&self, _id: SessionId, _cursor: Cursor) -> BoxFuture<'_, Result<Location, Error>> {
+        Box::pin(async { Err(Error::NavigationUnsupported) })
+    }
     /// Returns the most recent `count` events in ascending cursor order.
     ///
     /// # Errors
@@ -290,6 +315,19 @@ fn check_window(before: Option<Cursor>, limit: usize, latest: Cursor) -> Result<
         && requested.raw() > latest.raw().saturating_add(1)
     {
         return Err(Error::Future { requested, latest });
+    }
+    Ok(())
+}
+
+fn check_location(cursor: Cursor, latest: Cursor) -> Result<(), Error> {
+    if cursor == Cursor::START {
+        return Err(Error::NotTurnBoundary(cursor));
+    }
+    if cursor > latest {
+        return Err(Error::Future {
+            requested: cursor,
+            latest,
+        });
     }
     Ok(())
 }

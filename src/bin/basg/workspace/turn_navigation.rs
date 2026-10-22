@@ -1,71 +1,93 @@
-use bas::model::{ContentBlock, Message, Role};
-use gpui_kit::ListOffset;
-use unicode_segmentation::UnicodeSegmentation;
+//! Complete prompt navigation is a read-only catalog, not the loaded body window.
+use bas::model::{Message, Role};
+use gpui_kit::{ListOffset, ScrollDelta, ScrollWheelEvent};
+use std::collections::BTreeMap;
 
 use super::*;
 
+mod history;
+mod state;
+mod view;
+pub(super) use state::Navigation;
+
 pub(super) const RAIL_WIDTH: f32 = 24.;
-const TICK_WIDTH: f32 = 14.;
-const ACTIVE_TICK_WIDTH: f32 = 20.;
-const MARKER_HEIGHT: f32 = 12.;
-const VISIBLE_PROMPTS: usize = 20;
-const PREVIEW_GRAPHEMES: usize = 72;
+const WHEEL_STEP_PIXELS: f32 = 24.;
 
-struct TurnTarget {
-    item_index: usize,
-    row: usize,
-    preview: String,
-}
-
-fn marker_tick(
-    id: impl Into<gpui_kit::ElementId>,
-    group: SharedString,
-    active: bool,
-    cx: &App,
-) -> AnyElement {
-    gds_uim::el! {
-        #div { size_full; flex; items_center; justify_center; } [
-            #div {
-                id: id; test_support;
-                w: $(if active { ACTIVE_TICK_WIDTH } else { TICK_WIDTH }).px;
-                h: $(if active { 3. } else { 2. }).px; rounded_full;
-                bg: $(if active { cx.theme().primary } else { cx.theme().muted_foreground.opacity(0.7) });
-                group_hover: group, $gds_uim::m! {
-                    w: ACTIVE_TICK_WIDTH.px; h: 3.0.px; bg: $cx.theme().primary;
-                };
-            }
-        ]
-    }.into_any_element()
+pub(super) fn message_cursor(message: &Message) -> Option<u64> {
+    // Conversation derives presentation IDs from the first original event cursor.
+    let id = uuid::Uuid::parse_str(&message.id.to_string()).ok()?;
+    u64::try_from(id.as_u128()).ok()
 }
 
 impl Workspace {
-    fn turn_targets(&self) -> Vec<TurnTarget> {
-        let Some(conversation) = &self.selected.timeline.conversation else {
-            return Vec::new();
+    fn marker_rows(&self) -> BTreeMap<u64, usize> {
+        let mut rows = BTreeMap::new();
+        let Some(overview) = &self.selected.timeline.navigation.overview else {
+            return rows;
         };
-        conversation
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(item_index, item)| {
-                let Item::Message { message, .. } = item else {
-                    return None;
-                };
-                if message.role != Role::User {
-                    return None;
-                }
-                Some(TurnTarget {
-                    item_index,
-                    row: conversation.row_for_item(item_index)?,
-                    preview: prompt_preview(message),
-                })
-            })
-            .collect()
+        let Some(conversation) = &self.selected.timeline.conversation else {
+            return rows;
+        };
+        for (index, item) in conversation.items.iter().enumerate() {
+            let Item::Message { message, .. } = item else {
+                continue;
+            };
+            if message.role != Role::User {
+                continue;
+            }
+            let Some(cursor) = message_cursor(message) else {
+                continue;
+            };
+            let end = overview
+                .entries
+                .partition_point(|entry| entry.cursor <= cursor);
+            if let Some(entry) = end
+                .checked_sub(1)
+                .and_then(|index| overview.entries.get(index))
+                && let Some(row) = conversation.row_for_item(index)
+            {
+                rows.entry(entry.cursor).or_insert(row);
+            }
+        }
+        rows
+    }
+
+    fn active_marker(&self) -> Option<u64> {
+        let navigation = &self.selected.timeline.navigation;
+        if let Some(pending) = &navigation.location
+            && !pending.append
+        {
+            return Some(pending.cursor);
+        }
+        if let Some(selected) = navigation.selected {
+            return Some(selected);
+        }
+        if !navigation.detached && self.selected.timeline.list.is_following_tail() {
+            return None;
+        }
+        let top = self.selected.timeline.list.logical_scroll_top().item_ix;
+        self.marker_rows()
+            .into_iter()
+            .rev()
+            .find(|(_, row)| *row <= top)
+            .map(|(cursor, _)| cursor)
     }
 
     pub(super) fn scroll_conversation_to_top(&mut self, cx: &mut Context<Self>) {
-        self.selected.timeline.list.scroll_to(ListOffset::default());
-        self.load_older_history(cx);
+        if let Some(cursor) = self
+            .selected
+            .timeline
+            .navigation
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.entries.first())
+            .map(|entry| entry.cursor)
+        {
+            self.navigate_to_marker(cursor, cx);
+        } else {
+            self.selected.timeline.list.scroll_to(ListOffset::default());
+            self.load_older_history(cx);
+        }
         cx.notify();
     }
 
@@ -79,25 +101,57 @@ impl Workspace {
     }
 
     pub(super) fn jump_conversation_turn(&mut self, previous: bool, cx: &mut Context<Self>) {
-        let targets = self.turn_targets();
-        let top = self.selected.timeline.list.logical_scroll_top();
-        let current = targets.iter().rposition(|target| target.row <= top.item_ix);
+        let Some(overview) = &self.selected.timeline.navigation.overview else {
+            return;
+        };
+        let active = self.active_marker();
+        let current = active.and_then(|cursor| {
+            overview
+                .entries
+                .iter()
+                .position(|entry| entry.cursor == cursor)
+        });
         let next = match (current, previous) {
             (Some(index), true) => index.checked_sub(1),
             (Some(index), false) => Some(index + 1),
-            (None, false) => Some(0),
-            (None, true) => None,
+            (None, true) => overview.entries.len().checked_sub(1),
+            (None, false) => Some(overview.entries.len()),
         };
-        if let Some(target) = next.and_then(|index| targets.get(index)) {
-            self.selected.timeline.list.scroll_to(ListOffset {
-                item_ix: target.row,
-                offset_in_item: px(0.),
-            });
-            cx.notify();
+        if let Some(cursor) = next
+            .and_then(|index| overview.entries.get(index))
+            .map(|entry| entry.cursor)
+        {
+            self.navigate_to_marker(cursor, cx);
+        } else if !previous {
+            self.scroll_conversation_to_end(cx);
         }
     }
 
     pub(super) fn scroll_conversation_to_end(&mut self, cx: &mut Context<Self>) {
+        let navigation = &mut self.selected.timeline.navigation;
+        navigation.selected = None;
+        navigation.location = None;
+        navigation.location_error = None;
+        if navigation.detached {
+            navigation.detached = false;
+            navigation.after = None;
+            self.selected.timeline.history = None;
+            self.selected.timeline.conversation = None;
+            self.selected.timeline.restore = None;
+            self.selected.timeline.list.reset(0);
+            self.selected.reload();
+            if let Some(session) = self.selected.id {
+                self.command(
+                    Command::Watch {
+                        session,
+                        epoch: self.selected.epoch,
+                    },
+                    cx,
+                );
+                self.selected.timeline.navigation.overview_request = None;
+                self.request_history_overview(0, cx);
+            }
+        }
         self.selected
             .timeline
             .list
@@ -105,151 +159,77 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn render_turn_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(conversation) = &self.selected.timeline.conversation else {
-            return gds_uim::el! { #div }.into_any_element();
-        };
-        let prompts = self.turn_targets();
-        let list = &self.selected.timeline.list;
-        let at_end = list.is_following_tail() || list.is_scrolled_to_end().unwrap_or(false);
-        let top = list.logical_scroll_top().item_ix;
-        let active = (!at_end)
-            .then(|| {
-                prompts
-                    .iter()
-                    .rfind(|target| target.row <= top)
-                    .map(|target| target.item_index)
-            })
-            .flatten();
-        let session = conversation.session.id;
-        let rail = gds_uim::el! { #div {
-            id: "turn-navigation"; test_support; absolute;
-            top: 0.0.px; bottom: 0.0.px;
-            right: $px(-RAIL_WIDTH);
-            flex; flex_col; justify_center; py_1; w: RAIL_WIDTH.px; flex_shrink_0;
-        } };
-        let mut markers = gds_uim::el! { #div {
-            id: $SharedString::from(format!("turn-prompts-{session}"));
-            test_support; w_full; min_h_0;
-            max_h: $px(MARKER_HEIGHT * VISIBLE_PROMPTS as f32);
-            overflow_y_scroll;
-        } };
-
-        for target in prompts {
-            let item_index = target.item_index;
-            let selected = active == Some(item_index);
-            let marker_id = SharedString::from(format!("turn-marker-{item_index}"));
-            let group = marker_id.clone();
-            let prompt: SharedString = target.preview.into();
-            let tick = marker_tick(
-                SharedString::from(format!("turn-marker-line-{item_index}")),
-                group.clone(),
-                selected,
-                cx,
-            );
-            let marker = gds_uim::el! { #crate::ui::tooltip::bounded(
-                marker_id,
-                tick,
-                $prompt.clone(),
-            ) {
-                test_support; role: gpui_kit::Role::Button;
-                aria_label: prompt; group: group; h: MARKER_HEIGHT.px;
-                flex_shrink_0; w_full; cursor_pointer;
-                on_click: $cx.listener(move |this, _, _, cx| {
-                    this.on_turn_navigation_prompt(session, item_index, cx);
-                });
-            } };
-            markers = gds_uim::el! { $markers [$marker] };
-        }
-
-        let group = SharedString::from("turn-marker-end");
-        let tick = marker_tick("turn-marker-line-end", group.clone(), at_end, cx);
-        let end = gds_uim::el! { #div {
-            id: $group.clone();
-            hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("conversation-end"), ScrollConversationToEnd);
-            test_support; role: gpui_kit::Role::Button;
-            aria_label: $crate::i18n::tr!("conversation-end"); group: group;
-            h: MARKER_HEIGHT.px; flex_shrink_0; w_full; cursor_pointer;
-            on_click: $cx.listener(Self::on_turn_navigation_end);
-        } [$tick] };
-        gds_uim::el! { $rail [
-            #div {
-                id: "turn-shortcuts"; test_support; flex; flex_col;
-                w_full; max_h_full; rounded_md;
-                hover => { bg: $cx.theme().muted.opacity(0.24); };
-                on_scroll_wheel: $|_, _, cx| cx.stop_propagation();
-            } [$markers, $end]
-        ] }
-        .into_any_element()
-    }
-
-    fn on_turn_navigation_end(
+    pub(super) fn on_navigation_wheel(
         &mut self,
-        _: &gpui_kit::ClickEvent,
+        event: &ScrollWheelEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.scroll_conversation_to_end(cx);
-    }
-
-    fn on_turn_navigation_prompt(
-        &mut self,
-        session: SessionId,
-        item_index: usize,
-        cx: &mut Context<Self>,
-    ) {
-        if self.selected.id != Some(session) {
+        let delta = match event.delta {
+            ScrollDelta::Pixels(point) => f32::from(point.y),
+            ScrollDelta::Lines(point) => point.y,
+        };
+        if !event.modifiers.alt {
+            self.selected.timeline.navigation.wheel_pixels = 0.;
+            self.selected.timeline.navigation.selected = None;
+            if delta < 0.
+                && self
+                    .selected
+                    .timeline
+                    .list
+                    .is_scrolled_to_end()
+                    .unwrap_or(false)
+            {
+                self.load_next_history(cx);
+            }
             return;
         }
-        if let Some(row) = self
-            .selected
-            .timeline
-            .conversation
-            .as_ref()
-            .and_then(|conversation| conversation.row_for_item(item_index))
-        {
-            self.selected.timeline.list.scroll_to(ListOffset {
-                item_ix: row,
-                offset_in_item: px(0.),
-            });
-            cx.notify();
+        cx.stop_propagation();
+        if delta == 0. {
+            return;
         }
-    }
-}
-
-fn prompt_preview(message: &Message) -> String {
-    let mut preview = String::new();
-    let mut graphemes = 0;
-    let mut space_pending = false;
-    for block in &message.content {
-        let ContentBlock::Text(text) = block else {
-            continue;
-        };
-        for grapheme in text.text.graphemes(true) {
-            if grapheme.chars().all(char::is_whitespace) {
-                space_pending = !preview.is_empty();
-                continue;
-            }
-            if space_pending {
-                if graphemes == PREVIEW_GRAPHEMES {
-                    preview.push('…');
-                    return preview;
+        let step = match event.delta {
+            ScrollDelta::Lines(_) => true,
+            ScrollDelta::Pixels(_) => {
+                let accumulated = &mut self.selected.timeline.navigation.wheel_pixels;
+                if accumulated.signum() != delta.signum() {
+                    *accumulated = 0.;
                 }
-                preview.push(' ');
-                graphemes += 1;
-                space_pending = false;
+                *accumulated += delta;
+                if accumulated.abs() >= WHEEL_STEP_PIXELS {
+                    *accumulated = 0.;
+                    true
+                } else {
+                    false
+                }
             }
-            if graphemes == PREVIEW_GRAPHEMES {
-                preview.push('…');
-                return preview;
-            }
-            preview.push_str(grapheme);
-            graphemes += 1;
+        };
+        if step {
+            self.jump_conversation_turn(delta > 0., cx);
         }
     }
-    if preview.is_empty() {
-        crate::i18n::tr!("attachment-message").into()
-    } else {
-        preview
+
+    fn toggle_marker_bookmark(&mut self, session: SessionId, cursor: u64, cx: &mut Context<Self>) {
+        if self.selected.id != Some(session) || cursor == 0 {
+            return;
+        }
+        let bookmarks = self.navigation.marker_bookmarks.entry(session).or_default();
+        let bookmarked = if bookmarks.remove(&cursor) {
+            false
+        } else {
+            bookmarks.insert(cursor);
+            true
+        };
+        let restore = &mut self.navigation.restore;
+        if let Some(store) = &mut restore.store {
+            store.queue_marker_bookmark(
+                &mut restore.pending_save,
+                cx.background_executor(),
+                session,
+                cursor,
+                bookmarked,
+            );
+        }
+        cx.notify();
     }
 }

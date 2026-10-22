@@ -122,3 +122,17 @@ impl std::ops::Deref for PreparedHistory {
         &self.value
     }
 }
+
+pub(crate) struct PreparedLocation {
+    pub(crate) window: PreparedHistory,
+    pub(crate) after: Option<u64>,
+}
+
+impl From<bas::service::HistoryLocation> for PreparedLocation {
+    fn from(value: bas::service::HistoryLocation) -> Self {
+        Self {
+            window: value.window.into(),
+            after: value.after,
+        }
+    }
+}

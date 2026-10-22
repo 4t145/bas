@@ -49,6 +49,237 @@ fn prompt(id: &str) -> EventKind {
         "content":{"type":"text","text":"prompt"}}))
 }
 
+fn prompt_text(id: Option<&str>, text: &str) -> EventKind {
+    update(json!({"sessionUpdate":"user_message_chunk", "messageId":id,
+        "content":{"type":"text","text":text}}))
+}
+
+async fn navigation_contract(storage: &dyn Storage) {
+    let mut meta = state();
+    storage.create(meta.clone(), None).await.expect("create");
+    let empty = storage.overview(meta.id).await.expect("empty overview");
+    assert_eq!(empty.cursor, 0);
+    assert!(empty.entries.is_empty());
+    assert!(matches!(
+        storage.window_at(meta.id, Cursor::START).await,
+        Err(Error::NotTurnBoundary(_))
+    ));
+    assert!(matches!(
+        storage.window_at(meta.id, Cursor::from_raw(1)).await,
+        Err(Error::Future { .. })
+    ));
+    assert!(matches!(
+        storage.overview(SessionId::new()).await,
+        Err(Error::NotFound(_))
+    ));
+
+    let turn = TurnId::new();
+    let events = append(
+        storage,
+        &mut meta,
+        vec![
+            update(json!({"sessionUpdate":"usage_update","used":5,"size":100})),
+            independent(),
+            prompt_text(Some("first"), "old"),
+            prompt_text(Some("first"), "est"),
+            chunk(Some("answer-1")),
+            prompt_text(None, "mid"),
+            prompt_text(None, "dle"),
+            chunk(Some("answer-2")),
+            EventKind::TurnStarted { turn },
+            prompt_text(Some("live"), "li"),
+            independent(),
+            prompt_text(Some("live"), "ve"),
+            EventKind::TurnFinished {
+                turn,
+                result: Ok(bas::acp::PromptResponse::new(bas::acp::StopReason::EndTurn)),
+            },
+            independent(),
+        ],
+    )
+    .await;
+    let latest = storage.window(meta.id, None, 1).await.expect("latest body");
+    assert_eq!(latest.events, events[8..]);
+    let overview = storage.overview(meta.id).await.expect("complete overview");
+    assert_eq!(overview.session, meta.id);
+    assert_eq!(overview.cursor, 14);
+    assert_eq!(
+        overview
+            .entries
+            .iter()
+            .map(|entry| entry.cursor)
+            .collect::<Vec<_>>(),
+        [3, 6, 9]
+    );
+    assert_eq!(
+        overview
+            .entries
+            .iter()
+            .map(|entry| entry.preview.as_str())
+            .collect::<Vec<_>>(),
+        ["oldest", "middle", "live"]
+    );
+    for (entry, index) in overview.entries.iter().zip([2, 5, 8]) {
+        assert_eq!(entry.timestamp_millis, events[index].at.millis() as i64);
+    }
+
+    let oldest = storage
+        .window_at(meta.id, Cursor::from_raw(4))
+        .await
+        .expect("direct oldest containing page");
+    assert_eq!(oldest.window.events, events[2..5]);
+    assert_eq!(oldest.window.context, events[..1]);
+    assert_eq!(oldest.window.before, Some(Cursor::from_raw(3)));
+    assert_eq!(oldest.after, Some(Cursor::from_raw(6)));
+    assert_eq!(oldest.window.cursor, meta.revision);
+    assert_eq!(oldest.window.meta, meta);
+    let middle = storage
+        .window_at(meta.id, oldest.after.expect("next page"))
+        .await
+        .expect("forward middle");
+    assert_eq!(middle.window.events, events[5..8]);
+    assert_eq!(middle.window.context, events[..1]);
+    assert_eq!(middle.after, Some(Cursor::from_raw(9)));
+    let last = storage
+        .window_at(meta.id, middle.after.expect("next page"))
+        .await
+        .expect("forward latest");
+    assert_eq!(last.window, latest);
+    assert_eq!(last.after, None);
+
+    // Updating an imported identity still targets its original marker, even
+    // after other prompts and a sealed explicit turn.
+    append(storage, &mut meta, vec![prompt_text(Some("first"), "!")]).await;
+    let changed = storage.overview(meta.id).await.expect("updated label");
+    assert_eq!(changed.entries.len(), 3);
+    assert_eq!(changed.entries[0].preview, "oldest!");
+    assert_eq!(
+        changed.entries[0].timestamp_millis,
+        overview.entries[0].timestamp_millis
+    );
+    let new = append(storage, &mut meta, vec![prompt_text(Some("next"), "next")]).await;
+    let stale_target = storage
+        .window_at(meta.id, Cursor::from_raw(6))
+        .await
+        .expect("old marker remains valid");
+    assert_eq!(stale_target.window.events, events[5..8]);
+    assert_eq!(stale_target.window.cursor, new[0].cursor);
+    assert_eq!(stale_target.after, Some(Cursor::from_raw(9)));
+    assert!(matches!(
+        storage.window_at(meta.id, meta.revision.next()).await,
+        Err(Error::Future { .. })
+    ));
+}
+
+#[tokio::test]
+async fn memory_navigation_contract() {
+    navigation_contract(&Memory::new(NonZeroUsize::new(64).expect("capacity"))).await;
+}
+
+#[tokio::test]
+async fn sqlite_navigation_contract() {
+    navigation_contract(&LocalDb::open(":memory:").await.expect("open")).await;
+}
+
+async fn navigation_dependencies(storage: &dyn Storage) {
+    let mut meta = state();
+    storage.create(meta.clone(), None).await.expect("create");
+    let events = append(
+        storage,
+        &mut meta,
+        vec![
+            prompt("old"),
+            chunk(Some("shared")),
+            prompt("middle"),
+            chunk(Some("shared")),
+            prompt("newest"),
+            independent(),
+        ],
+    )
+    .await;
+    let middle = storage
+        .window_at(meta.id, Cursor::from_raw(3))
+        .await
+        .expect("expanded middle");
+    assert_eq!(middle.window.events, events[..4]);
+    assert_eq!(middle.window.before, None);
+    assert_eq!(middle.after, Some(Cursor::from_raw(5)));
+}
+
+#[tokio::test]
+async fn addressed_pages_expand_dependencies_but_not_newer_pages() {
+    navigation_dependencies(&Memory::new(NonZeroUsize::new(64).expect("capacity"))).await;
+    navigation_dependencies(&LocalDb::open(":memory:").await.expect("open")).await;
+}
+
+async fn bounded_preview(storage: &dyn Storage) {
+    let mut meta = state();
+    storage.create(meta.clone(), None).await.expect("create");
+    append(
+        storage,
+        &mut meta,
+        vec![EventKind::TurnStarted {
+            turn: TurnId::new(),
+        }],
+    )
+    .await;
+    let first = storage.overview(meta.id).await.expect("accepted turn");
+    assert_eq!(first.entries.len(), 1);
+    assert_eq!(first.entries[0].preview, "");
+    append(storage, &mut meta, vec![prompt_text(Some("live"), "small")]).await;
+    assert_eq!(
+        storage.overview(meta.id).await.expect("live").entries[0].preview,
+        "small"
+    );
+    append(
+        storage,
+        &mut meta,
+        vec![prompt_text(Some("live"), &"界".repeat(600))],
+    )
+    .await;
+    let full = storage
+        .overview(meta.id)
+        .await
+        .expect("bounded live preview");
+    assert_eq!(full.entries.len(), 1);
+    assert_eq!(full.entries[0].cursor, 1);
+    assert_eq!(
+        full.entries[0].timestamp_millis,
+        first.entries[0].timestamp_millis
+    );
+    assert_eq!(
+        full.entries[0].preview,
+        format!("small{}", "界".repeat(251))
+    );
+}
+
+#[tokio::test]
+async fn live_prompt_preview_is_incremental_bounded_and_stable() {
+    bounded_preview(&Memory::new(NonZeroUsize::new(64).expect("capacity"))).await;
+    bounded_preview(&LocalDb::open(":memory:").await.expect("open")).await;
+}
+
+#[tokio::test]
+async fn evicted_memory_history_never_claims_a_complete_overview() {
+    let storage = Memory::new(NonZeroUsize::new(2).expect("capacity"));
+    let mut meta = state();
+    storage.create(meta.clone(), None).await.expect("create");
+    append(
+        &storage,
+        &mut meta,
+        vec![prompt("old"), independent(), prompt("new")],
+    )
+    .await;
+    assert!(matches!(
+        storage.overview(meta.id).await,
+        Err(Error::Expired { .. })
+    ));
+    assert!(matches!(
+        storage.window_at(meta.id, Cursor::from_raw(1)).await,
+        Err(Error::Expired { .. })
+    ));
+}
+
 async fn window_contract(storage: &dyn Storage) {
     let mut meta = state();
     storage.create(meta.clone(), None).await.expect("create");

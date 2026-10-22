@@ -6,7 +6,7 @@ use anyhow::Result;
 use bas::{
     acp,
     model::*,
-    service::{Client, HistoryWindow, pb, tls::ConnectionOptions as Target},
+    service::{Client, HistoryOverview, HistoryWindow, pb, tls::ConnectionOptions as Target},
 };
 use tokio::{
     runtime::Handle,
@@ -21,7 +21,7 @@ mod failure;
 mod foreground;
 mod history;
 mod prepared;
-pub(crate) use prepared::{HistoryWeight, Prepared, PreparedHistory};
+pub(crate) use prepared::{HistoryWeight, Prepared, PreparedHistory, PreparedLocation};
 mod model;
 mod permissions;
 mod tracking;
@@ -110,6 +110,17 @@ pub(super) enum Command {
         session: SessionId,
         epoch: u64,
         before: u64,
+    },
+    HistoryOverview {
+        session: SessionId,
+        epoch: u64,
+        request: u64,
+    },
+    HistoryLocation {
+        session: SessionId,
+        epoch: u64,
+        request: u64,
+        cursor: u64,
     },
     ForgetHistory(SessionId),
     Detach,
@@ -231,6 +242,18 @@ pub(super) enum Update {
         epoch: u64,
         before: u64,
         result: Result<PreparedHistory, Failure>,
+    },
+    HistoryOverview {
+        session: SessionId,
+        epoch: u64,
+        request: u64,
+        result: Result<Prepared<HistoryOverview>, Failure>,
+    },
+    HistoryLocation {
+        session: SessionId,
+        epoch: u64,
+        request: u64,
+        result: Result<PreparedLocation, Failure>,
     },
     HistoryMeta {
         epoch: u64,
@@ -376,6 +399,26 @@ async fn run_cached(
                         tasks.spawn(async move {
                             let result = history.older(client, session, before).await.map(Into::into);
                             let _ = updates.send(Update::OlderHistory { epoch, before, result }).await;
+                        });
+                    }
+                    Command::HistoryOverview { session, epoch, request } => {
+                        let mut client = client.clone();
+                        let updates = updates.clone();
+                        tasks.spawn(async move {
+                            let result = client.history_overview(session, REQUEST_TIMEOUT)
+                                .await.map(Into::into).map_err(Failure::from);
+                            let _ = updates.send(Update::HistoryOverview { session, epoch, request, result }).await;
+                        });
+                    }
+                    Command::HistoryLocation { session, epoch, request, cursor } => {
+                        let mut client = client.clone();
+                        let updates = updates.clone();
+                        tasks.spawn(async move {
+                            // A located slice is not the latest suffix: never let it
+                            // replace the live history cache or its attach frontier.
+                            let result = client.history_window_at(session, cursor, REQUEST_TIMEOUT)
+                                .await.map(Into::into).map_err(Failure::from);
+                            let _ = updates.send(Update::HistoryLocation { session, epoch, request, result }).await;
                         });
                     }
                     Command::ForgetHistory(session) => {
@@ -806,6 +849,8 @@ async fn execute(mut client: Client, command: Command) -> Update {
         | Command::Watch { .. }
         | Command::Resume { .. }
         | Command::OlderHistory { .. }
+        | Command::HistoryOverview { .. }
+        | Command::HistoryLocation { .. }
         | Command::ForgetHistory(_)
         | Command::Detach
         | Command::Foreground(_) => {

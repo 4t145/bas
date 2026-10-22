@@ -1,17 +1,22 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     num::NonZeroUsize,
     sync::Mutex,
 };
 
-use bas::model::history::{Dependency, DependencyIndex};
-use bas::model::{AgentId, Cursor, Event, SessionId, SessionMeta, TurnId};
+use bas::model::history::{Dependency, DependencyIndex, append_prompt_preview};
+use bas::model::{AgentId, Cursor, Event, EventKind, SessionId, SessionMeta, TurnId};
+use bas::service::{HistoryOverview, HistoryOverviewEntry};
 use futures::future::BoxFuture;
 
 use super::{
-    Error, Page, PromptAcceptance, ResumeData, Storage, StoredSession, Window, check_page,
-    check_window, validate_acceptance, validate_commit, validate_create,
+    Error, Location, Page, PromptAcceptance, ResumeData, Storage, StoredSession, Window,
+    check_location, check_page, check_window, validate_acceptance, validate_commit,
+    validate_create,
 };
+
+#[path = "memory/window.rs"]
+mod window;
 
 struct Entry {
     session: StoredSession,
@@ -22,6 +27,8 @@ struct Entry {
     dependencies: VecDeque<Dependency>,
     context: HashMap<String, Context>,
     context_overflow: bool,
+    pages: BTreeSet<Cursor>,
+    prompts: BTreeMap<Cursor, HistoryOverviewEntry>,
 }
 
 #[derive(Clone)]
@@ -98,6 +105,8 @@ impl Storage for Memory {
                     dependencies: VecDeque::new(),
                     context: HashMap::new(),
                     context_overflow: false,
+                    pages: BTreeSet::new(),
+                    prompts: BTreeMap::new(),
                 },
             );
             Ok(())
@@ -124,6 +133,27 @@ impl Storage for Memory {
                 .then(|| meta.agent.clone());
             for event in events {
                 let dependency = entry.index.observe(event);
+                if dependency.segment_start == event.cursor {
+                    entry.pages.insert(dependency.segment_start);
+                }
+                if dependency.starts_prompt {
+                    entry.prompts.insert(
+                        event.cursor,
+                        HistoryOverviewEntry {
+                            cursor: event.cursor.raw(),
+                            timestamp_millis: i64::try_from(event.at.millis()).unwrap_or(i64::MAX),
+                            preview: String::new(),
+                        },
+                    );
+                }
+                if matches!(
+                    event.kind,
+                    EventKind::Acp(bas::acp::SessionUpdate::UserMessageChunk(_))
+                ) && let Some(page) = entry.pages.range(..=dependency.floor).next_back()
+                    && let Some(prompt) = entry.prompts.get_mut(page)
+                {
+                    append_prompt_preview(&mut prompt.preview, event);
+                }
                 if entry.events.len() == self.capacity.get() {
                     let dependency = entry
                         .dependencies
@@ -155,6 +185,20 @@ impl Storage for Memory {
                         .expect("a full event window is nonempty")
                         .cursor;
                     entry.index.evict_through(entry.evicted_through);
+                    while entry
+                        .pages
+                        .first()
+                        .is_some_and(|cursor| *cursor <= entry.evicted_through)
+                    {
+                        entry.pages.pop_first();
+                    }
+                    while entry
+                        .prompts
+                        .first_key_value()
+                        .is_some_and(|(cursor, _)| *cursor <= entry.evicted_through)
+                    {
+                        entry.prompts.pop_first();
+                    }
                 }
                 entry.events.push_back(event.clone());
                 entry.dependencies.push_back(dependency);
@@ -272,134 +316,50 @@ impl Storage for Memory {
         Box::pin(async move {
             let sessions = self.sessions.lock().expect("storage lock is not poisoned");
             let entry = sessions.get(&id).ok_or(Error::NotFound(id))?;
-            let meta = entry.session.meta.clone();
-            check_window(before, limit, meta.revision)?;
-            if before.is_some_and(|cursor| cursor.raw() <= 1) {
-                return Ok(Window {
-                    cursor: meta.revision,
-                    meta,
-                    events: vec![],
-                    context: vec![],
-                    before: None,
-                });
-            }
-            if entry.context_overflow {
+            entry.window(before, limit)
+        })
+    }
+
+    fn overview(&self, id: SessionId) -> BoxFuture<'_, Result<HistoryOverview, Error>> {
+        Box::pin(async move {
+            let sessions = self.sessions.lock().expect("storage lock is not poisoned");
+            let entry = sessions.get(&id).ok_or(Error::NotFound(id))?;
+            if entry.evicted_through != Cursor::START {
                 return Err(Error::Expired {
                     requested: Cursor::START,
                     evicted_through: entry.evicted_through,
                 });
             }
-            let end = entry
-                .events
-                .partition_point(|event| before.is_none_or(|b| event.cursor < b));
-            if end == 0 && entry.evicted_through != Cursor::START {
+            Ok(HistoryOverview {
+                session: id,
+                cursor: entry.session.meta.revision.raw(),
+                entries: entry.prompts.values().cloned().collect(),
+            })
+        })
+    }
+
+    fn window_at(&self, id: SessionId, cursor: Cursor) -> BoxFuture<'_, Result<Location, Error>> {
+        Box::pin(async move {
+            let sessions = self.sessions.lock().expect("storage lock is not poisoned");
+            let entry = sessions.get(&id).ok_or(Error::NotFound(id))?;
+            check_location(cursor, entry.session.meta.revision)?;
+            if cursor <= entry.evicted_through {
                 return Err(Error::Expired {
-                    requested: before.unwrap_or(Cursor::START),
+                    requested: cursor,
                     evicted_through: entry.evicted_through,
                 });
             }
-            if let Some(before) = before
-                && before <= meta.revision
-                && entry
-                    .dependencies
-                    .get(end)
-                    .is_none_or(|d| d.segment_start != before)
-            {
-                return Err(Error::NotTurnBoundary(before));
-            }
-            let mut start = end;
-            for _ in 0..limit {
-                if start == 0 {
-                    break;
-                }
-                let boundary = entry.dependencies[start - 1].segment_start;
-                if boundary <= entry.evicted_through {
-                    return Err(Error::Expired {
-                        requested: boundary,
-                        evicted_through: entry.evicted_through,
-                    });
-                }
-                start = entry
-                    .events
-                    .partition_point(|event| event.cursor < boundary);
-            }
-            loop {
-                let floor = entry.dependencies.range(start..end).map(|d| d.floor).min();
-                let Some(floor) = floor else { break };
-                if floor <= entry.evicted_through {
-                    return Err(Error::Expired {
-                        requested: floor,
-                        evicted_through: entry.evicted_through,
-                    });
-                }
-                let containing = entry.events.partition_point(|event| event.cursor < floor);
-                let boundary = entry.dependencies[containing].segment_start;
-                if boundary <= entry.evicted_through {
-                    return Err(Error::Expired {
-                        requested: boundary,
-                        evicted_through: entry.evicted_through,
-                    });
-                }
-                let expanded = entry
-                    .events
-                    .partition_point(|event| event.cursor < boundary);
-                if expanded >= start {
-                    break;
-                }
-                start = expanded;
-            }
-            let mut context = entry.context.clone();
-            for (event, dependency) in entry.events.iter().zip(&entry.dependencies).take(start) {
-                if let Some(key) = &dependency.context_key {
-                    if let Some(first) = dependency.context_start {
-                        context.insert(
-                            key.clone(),
-                            Context {
-                                first,
-                                last: event.cursor,
-                            },
-                        );
-                    } else {
-                        context.remove(key);
-                    }
-                }
-            }
-            if entry
-                .dependencies
-                .range(start..end)
-                .any(|dependency| dependency.context_key.as_deref() == Some("usage"))
-            {
-                context.remove("usage");
-            }
-            let mut context_cursors: Vec<_> = context
-                .into_values()
-                .flat_map(|context| [context.first, context.last])
-                .collect();
-            context_cursors.sort_unstable();
-            context_cursors.dedup();
-            let mut context = Vec::new();
-            for cursor in context_cursors {
-                let event = entry
-                    .events
-                    .iter()
-                    .find(|event| event.cursor == cursor)
-                    .ok_or(Error::Expired {
-                        requested: cursor,
-                        evicted_through: entry.evicted_through,
-                    })?;
-                context.push(event.clone());
-            }
-            let events: Vec<_> = entry.events.range(start..end).cloned().collect();
-            let before = events
-                .first()
-                .filter(|event| event.cursor.raw() > 1)
-                .map(|event| event.cursor);
-            Ok(Window {
-                cursor: meta.revision,
-                meta,
-                events,
-                context,
-                before,
+            let after = entry
+                .pages
+                .range((
+                    std::ops::Bound::Excluded(cursor),
+                    std::ops::Bound::Unbounded,
+                ))
+                .next()
+                .copied();
+            Ok(Location {
+                window: entry.window(after, 1)?,
+                after,
             })
         })
     }

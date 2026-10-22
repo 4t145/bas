@@ -12,8 +12,12 @@ use super::{
     validate_commit, validate_create,
 };
 
+#[path = "localdb/chunks.rs"]
+mod chunks;
 #[path = "localdb/history.rs"]
 mod history;
+#[path = "localdb/schema.rs"]
+mod schema;
 #[cfg(test)]
 #[path = "localdb/tests.rs"]
 mod tests;
@@ -37,6 +41,21 @@ struct SessionRow {
     resume_payload: Option<Vec<u8>>,
 }
 
+#[derive(Debug, toasty::Model)]
+#[table = "history_chunks"]
+#[key(partition = session_id, local = first_cursor)]
+struct ChunkRow {
+    session_id: String,
+    first_cursor: i64,
+    last_cursor: i64,
+    segment_start: Option<i64>,
+    format: i64,
+    codec: i64,
+    raw_bytes: i64,
+    payload: Vec<u8>,
+}
+
+#[cfg(test)]
 #[derive(Debug, toasty::Model)]
 #[table = "events"]
 #[key(partition = session_id, local = cursor)]
@@ -82,6 +101,21 @@ const MIGRATIONS: MigrationSet = MigrationSet::new(&[
         "last_used_agent",
         include_str!("migrations/0005_last_used_agent.sql"),
     ),
+    MigrationFile::new(
+        6,
+        "turn_blocks",
+        include_str!("migrations/0006_turn_blocks.sql"),
+    ),
+    MigrationFile::new(
+        7,
+        "history_segments",
+        include_str!("migrations/0007_history_segments.sql"),
+    ),
+    MigrationFile::new(
+        8,
+        "history_overview",
+        include_str!("migrations/0008_history_overview.sql"),
+    ),
 ]);
 
 const LAST_USED_AGENT_KEY: &str = "last_used_agent";
@@ -107,12 +141,13 @@ impl SqliteStore {
             toasty_driver_sqlite::Sqlite::open(path)
         };
         let db = toasty::Db::builder()
-            .models(toasty::models!(SessionRow, EventRow, AcceptanceRow))
+            .models(toasty::models!(SessionRow, ChunkRow, AcceptanceRow))
             .max_pool_size(1)
             .build(driver)
             .await?;
         verify_existing_schema(&db).await?;
         MIGRATIONS.apply(&db).await?;
+        schema::verify_history(&db).await?;
         Ok(Self { db })
     }
 }
@@ -125,12 +160,14 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
         .next()
         .ok_or(Error::Corrupt("missing schema version"))?;
     let version: i64 = field(&mut columns(version)?)?;
-    if !(0..=5).contains(&version) {
+    if !(0..=8).contains(&version) {
         return Err(Error::InvalidCommit("unsupported SQLite schema version"));
     }
-    let tables = sql::query(
-        "SELECT name FROM sqlite_master WHERE name IN ('sessions', 'events', 'sessions_recent', 'accepted_prompts')",
-    )
+    let tables = sql::query(if version < 7 {
+        "SELECT name FROM sqlite_master WHERE name IN ('sessions', 'events', 'sessions_recent', 'accepted_prompts')"
+    } else {
+        "SELECT name FROM sqlite_master WHERE name IN ('sessions', 'history_chunks', 'sessions_recent', 'accepted_prompts')"
+    })
     .exec(&mut db.clone())
     .await?;
     if (version == 0 && !tables.is_empty())
@@ -167,6 +204,8 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
         {
             return Err(Error::Corrupt("incompatible sessions table"));
         }
+    }
+    if (1..=6).contains(&version) {
         let rows = sql::query("PRAGMA table_info(events)")
             .exec(&mut db.clone())
             .await?;
@@ -246,6 +285,11 @@ async fn verify_existing_schema(db: &toasty::Db) -> Result<(), Error> {
         {
             return Err(Error::Corrupt("incompatible agent_selection table"));
         }
+    }
+    if version == 6 {
+        schema::verify_legacy_blocks(db).await?;
+    } else if version >= 7 {
+        schema::verify_history_version(db, version).await?;
     }
     Ok(())
 }
@@ -337,17 +381,6 @@ fn decode_session(row: Value) -> Result<StoredSession, Error> {
     Ok(StoredSession { meta, resume })
 }
 
-fn decode_event(id: SessionId, latest: Cursor, row: Value) -> Result<Event, Error> {
-    let mut fields = columns(row)?;
-    let cursor: i64 = field(&mut fields)?;
-    let payload: Vec<u8> = field(&mut fields)?;
-    let event: Event = serde_json::from_slice(&payload)?;
-    if event.session != id || event.cursor != revision(cursor)? || event.cursor > latest {
-        return Err(Error::Corrupt("event payload does not match its row"));
-    }
-    Ok(event)
-}
-
 fn resume_values(resume: Option<ResumeData>) -> (Value, Value) {
     resume.map_or((Value::Null, Value::Null), |r| {
         (Value::I64(i64::from(r.version)), Value::Bytes(r.payload))
@@ -417,10 +450,12 @@ impl SqliteStore {
                 .exec(&mut tx).await?;
         }
         for event in events {
-            sql::statement("INSERT INTO events(session_id, cursor, payload) VALUES (?1, ?2, ?3)")
+            let payload = serde_json::to_vec(std::slice::from_ref(event))?;
+            sql::statement("INSERT INTO history_chunks(session_id, first_cursor, last_cursor, format, codec, raw_bytes, payload) VALUES (?1, ?2, ?2, 1, 0, ?3, ?4)")
                 .bind(meta.id.to_string())
                 .bind(raw(event.cursor)?)
-                .bind(serde_json::to_vec(event)?)
+                .bind(payload.len() as i64)
+                .bind(payload)
                 .exec(&mut tx)
                 .await?;
         }
@@ -491,16 +526,11 @@ impl SqliteStore {
         let fingerprint = fingerprint
             .try_into()
             .map_err(|_| Error::Corrupt("acceptance fingerprint length"))?;
-        let event =
-            sql::query("SELECT cursor, payload FROM events WHERE session_id = ?1 AND cursor = ?2")
-                .bind(session.to_string())
-                .bind(raw(cursor)?)
-                .exec(&mut tx)
-                .await?
-                .into_iter()
-                .next()
-                .ok_or(Error::Corrupt("acceptance event missing"))?;
-        let event = decode_event(session, latest, event)?;
+        let event = chunks::read(&mut tx, session, latest, cursor..=cursor, 1)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or(Error::Corrupt("acceptance event missing"))?;
         let acceptance = PromptAcceptance {
             receipt: TurnReceipt { turn, cursor },
             fingerprint,
@@ -544,50 +574,42 @@ impl SqliteStore {
         after: Option<Cursor>,
         limit: usize,
     ) -> Result<Page, Error> {
-        let latest = self
-            .load(id)
-            .await?
-            .ok_or(Error::NotFound(id))?
-            .meta
-            .revision;
+        let mut db = self.db.clone();
+        let mut tx = db.transaction().await?;
+        let row = sql::query("SELECT id, revision, metadata, resume_version, resume_payload FROM sessions WHERE id = ?1")
+            .bind(id.to_string()).exec(&mut tx).await?.into_iter().next().ok_or(Error::NotFound(id))?;
+        let latest = decode_session(row)?.meta.revision;
         check_page(after, limit, latest)?;
-        let rows = sql::query("SELECT cursor, payload FROM events WHERE session_id = ?1 AND cursor > ?2 AND cursor <= ?3 ORDER BY cursor ASC LIMIT ?4")
-            .bind(id.to_string()).bind(raw(after.unwrap_or(Cursor::START))?)
-            .bind(raw(latest)?)
-            .bind(i64::try_from(limit.saturating_add(1)).unwrap_or(i64::MAX))
-            .exec(&mut self.db.clone()).await?;
-        let mut events = rows
-            .into_iter()
-            .map(|row| decode_event(id, latest, row))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut events = chunks::read(
+            &mut tx,
+            id,
+            latest,
+            after.unwrap_or(Cursor::START).next()..=latest,
+            limit.saturating_add(1),
+        )
+        .await?;
         let next = if events.len() > limit {
             events.truncate(limit);
             events.last().map(|event| event.cursor)
         } else {
             None
         };
+        tx.commit().await?;
         Ok(Page { events, next })
     }
 
     async fn tail(&self, id: SessionId, count: usize) -> Result<Vec<Event>, Error> {
-        let latest = self
-            .load(id)
-            .await?
-            .ok_or(Error::NotFound(id))?
-            .meta
-            .revision;
+        let mut db = self.db.clone();
+        let mut tx = db.transaction().await?;
+        let row = sql::query("SELECT id, revision, metadata, resume_version, resume_payload FROM sessions WHERE id = ?1")
+            .bind(id.to_string()).exec(&mut tx).await?.into_iter().next().ok_or(Error::NotFound(id))?;
+        let latest = decode_session(row)?.meta.revision;
         if count == 0 {
             return Ok(vec![]);
         }
-        let rows = sql::query("SELECT cursor, payload FROM events WHERE session_id = ?1 AND cursor <= ?2 ORDER BY cursor DESC LIMIT ?3")
-            .bind(id.to_string()).bind(raw(latest)?)
-            .bind(i64::try_from(count).unwrap_or(i64::MAX))
-            .exec(&mut self.db.clone()).await?;
-        let mut events = rows
-            .into_iter()
-            .map(|row| decode_event(id, latest, row))
-            .collect::<Result<Vec<_>, _>>()?;
-        events.reverse();
+        let start = Cursor::from_raw(latest.raw().saturating_sub(count as u64)).next();
+        let events = chunks::read(&mut tx, id, latest, start..=latest, count).await?;
+        tx.commit().await?;
         Ok(events)
     }
 
@@ -599,20 +621,11 @@ impl SqliteStore {
             .exec(&mut tx)
             .await?
             != 0;
-        sql::statement("DELETE FROM events WHERE session_id = ?1")
-            .bind(id.to_string())
-            .exec(&mut tx)
-            .await?;
         sql::statement("DELETE FROM accepted_prompts WHERE session_id = ?1")
             .bind(id.to_string())
             .exec(&mut tx)
             .await?;
-        for table in [
-            "history_index",
-            "history_dependencies",
-            "history_context_keys",
-            "history_turns",
-        ] {
+        for table in ["history_chunks", "history_segments", "history_state"] {
             sql::statement(format!("DELETE FROM {table} WHERE session_id = ?1"))
                 .bind(id.to_string())
                 .exec(&mut tx)

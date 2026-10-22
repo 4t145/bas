@@ -87,6 +87,10 @@ service Bas {
   rpc LoadHistory(LoadHistoryRequest) returns (LoadHistoryResponse);
   // Dependency-aligned recent-first history. Old daemons return UNIMPLEMENTED.
   rpc LoadHistoryWindow(LoadHistoryWindowRequest) returns (LoadHistoryWindowResponse);
+  // Complete prompt navigation metadata, independent of loaded body windows.
+  rpc LoadHistoryOverview(LoadHistoryOverviewRequest) returns (LoadHistoryOverviewResponse);
+  // One containing logical page, expanded backwards for replay dependencies.
+  rpc LoadHistoryWindowAt(LoadHistoryWindowAtRequest) returns (LoadHistoryWindowAtResponse);
 }
 
 // One configured agent backend.
@@ -582,4 +586,38 @@ message LoadHistoryWindowResponse {
   optional uint64 before = 4;
   // Snapshot high-water cursor. Attach here after loading the newest window.
   uint64 cursor = 5;
+}
+
+message LoadHistoryOverviewRequest {
+  string session = 1;
+}
+
+message HistoryOverviewEntry {
+  // Stable logical page start, in chronological cursor order.
+  uint64 cursor = 1;
+  int64 timestamp_millis = 2;
+  // At most 256 Unicode scalar values of user text, never an entire body.
+  string preview = 3;
+}
+
+message LoadHistoryOverviewResponse {
+  string session = 1;
+  // Committed snapshot high-water cursor.
+  uint64 cursor = 2;
+  // All prompt targets; initialization and control-only segments are omitted.
+  // RESOURCE_EXHAUSTED is returned rather than silently truncating this list.
+  repeated HistoryOverviewEntry entries = 3;
+}
+
+message LoadHistoryWindowAtRequest {
+  string session = 1;
+  // Any existing event cursor in the desired logical page; zero is invalid.
+  uint64 cursor = 2;
+}
+
+message LoadHistoryWindowAtResponse {
+  LoadHistoryWindowResponse window = 1;
+  // Next logical page start, for a subsequent LoadHistoryWindowAt request.
+  // Absent only when this slice reaches its snapshot high-water cursor.
+  optional uint64 after = 2;
 }

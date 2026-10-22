@@ -115,6 +115,7 @@ pub(super) struct NavigationState {
     pub(super) view: navigation::View,
     pub(super) pinned: HashSet<SessionId>,
     pub(super) bookmarks: HashSet<SessionId>,
+    pub(super) marker_bookmarks: HashMap<SessionId, HashSet<u64>>,
     pub(super) restore: RestoreState,
     pub(super) drafts: DirectoryDrafts,
     pub(super) picker: FolderPicker,
@@ -134,6 +135,7 @@ impl NavigationState {
             view: navigation::View::Workspaces,
             pinned: HashSet::new(),
             bookmarks: HashSet::new(),
+            marker_bookmarks: HashMap::new(),
             restore: RestoreState::default(),
             drafts: DirectoryDrafts::default(),
             picker: FolderPicker::default(),
@@ -142,6 +144,10 @@ impl NavigationState {
     }
 
     pub(super) fn attach_restore(&mut self, store: Option<navigation::restore::Store>) {
+        self.marker_bookmarks = store
+            .as_ref()
+            .map(navigation::restore::Store::marker_bookmarks)
+            .unwrap_or_default();
         self.bookmarks = store
             .as_ref()
             .map(navigation::restore::Store::bookmarks)
@@ -385,6 +391,7 @@ pub(super) struct TimelineState {
     pub(super) presentation_meta_bytes: usize,
     pub(super) loading_before: Option<u64>,
     pub(super) older_error: Option<Failure>,
+    pub(super) navigation: super::turn_navigation::Navigation,
     pub(super) restore: Option<super::timeline::Position>,
     pub(super) markdown: RefCell<HashMap<String, markdown::Document>>,
     pub(super) images: RefCell<HashMap<String, images::Entry>>,
@@ -403,6 +410,7 @@ impl TimelineState {
             presentation_meta_bytes: 0,
             loading_before: None,
             older_error: None,
+            navigation: Default::default(),
             restore: None,
             markdown: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
@@ -426,6 +434,7 @@ impl TimelineState {
         self.presentation_meta_bytes = 0;
         self.loading_before = None;
         self.older_error = None;
+        self.navigation = Default::default();
         self.restore = None;
         self.expanded.clear();
         self.bounds.borrow_mut().clear();

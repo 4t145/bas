@@ -9,6 +9,19 @@ use crate::acp;
 #[cfg(test)]
 mod tests;
 
+/// Maximum Unicode scalar values retained for a prompt navigation label.
+pub const PROMPT_PREVIEW_CHARS: usize = 256;
+
+/// Adds user text only, with bounded work and storage even for oversized chunks.
+pub fn append_prompt_preview(preview: &mut String, event: &Event) {
+    if let EventKind::Acp(acp::SessionUpdate::UserMessageChunk(chunk)) = &event.kind
+        && let acp::ContentBlock::Text(text) = &chunk.content
+    {
+        let remaining = PROMPT_PREVIEW_CHARS.saturating_sub(preview.chars().count());
+        preview.extend(text.text.chars().take(remaining));
+    }
+}
+
 /// Derived state only: identities survive turn boundaries.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DependencyIndex {
@@ -32,6 +45,8 @@ pub struct Dependency {
     pub floor: Cursor,
     /// Start of the containing user turn, or the initialization segment.
     pub segment_start: Cursor,
+    /// A new explicit turn or inferred imported prompt, not a control segment.
+    pub starts_prompt: bool,
     pub context_key: Option<String>,
     /// First insertion of the active plan generation, or the usage snapshot.
     /// `None` with a context key denotes removal.
@@ -244,6 +259,7 @@ impl DependencyIndex {
         Dependency {
             floor: Cursor::from_raw(floor),
             segment_start: Cursor::from_raw(self.segment_start.expect("observed event")),
+            starts_prompt: starts_turn,
             context_key,
             context_start,
         }

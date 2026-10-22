@@ -161,7 +161,7 @@ pub(crate) fn flush_pending(cx: &mut App) {
     let handle = state.handle;
     let settings = state.settings.clone();
     let _ = handle.update(cx, |_, window, cx| {
-        let _ = settings.update(cx, |settings, cx| settings.flush_pending(window, cx));
+        let _ = settings.update(cx, |settings, cx| settings.prepare_to_close(window, cx));
     });
 }
 
@@ -174,7 +174,7 @@ impl Host {
         let settings = cx.new(|cx| Settings::new(window, cx));
         let weak = settings.downgrade();
         window.on_window_should_close(cx, move |window, cx| {
-            let _ = weak.update(cx, |settings, cx| settings.flush_pending(window, cx));
+            let _ = weak.update(cx, |settings, cx| settings.prepare_to_close(window, cx));
             true
         });
         settings.read(cx).focus_handle(cx).focus(window, cx);
@@ -184,7 +184,7 @@ impl Host {
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings
-            .update(cx, |settings, cx| settings.flush_pending(window, cx));
+            .update(cx, |settings, cx| settings.prepare_to_close(window, cx));
         window.remove_window();
     }
 

@@ -295,7 +295,10 @@ impl Workspace {
     fn render_timeline_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let view = cx.entity();
         gds_uim::el! {
-            #div { relative; flex_1; min_h_0; w_full; } [
+            #div {
+                relative; flex_1; min_h_0; w_full;
+                on_scroll_wheel: $cx.listener(Self::on_navigation_wheel);
+            } [
                 $list(self.selected.timeline.list.clone(), move |index, _, cx| {
                     view.update(cx, |this, cx| this.render_item(index, cx))
                 }) { size_full; },
@@ -320,6 +323,7 @@ impl Workspace {
                         .mode(gpui_kit::base::ScrollbarMode::Always),
                 ],
                 ..$self.render_older_history(cx),
+                ..$self.render_history_location_status(cx),
             ]
         }
         .into_any_element()

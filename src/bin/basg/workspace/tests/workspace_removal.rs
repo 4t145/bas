@@ -11,6 +11,7 @@ fn archive_requests(fixture: &mut Fixture) -> HashSet<SessionId> {
             Command::Foreground(_)
             | Command::Watch { .. }
             | Command::Resume { .. }
+            | Command::HistoryOverview { .. }
             | Command::Detach => None,
             _ => panic!("removing a workspace must only archive and change navigation"),
         })

@@ -106,6 +106,20 @@ struct Service {
 
 #[tonic::async_trait]
 impl Bas for Service {
+    async fn load_history_overview(
+        &self,
+        _: Request<pb::LoadHistoryOverviewRequest>,
+    ) -> Result<Response<pb::LoadHistoryOverviewResponse>, Status> {
+        Err(Status::unimplemented("unrelated history overview"))
+    }
+
+    async fn load_history_window_at(
+        &self,
+        _: Request<pb::LoadHistoryWindowAtRequest>,
+    ) -> Result<Response<pb::LoadHistoryWindowAtResponse>, Status> {
+        Err(Status::unimplemented("unrelated history location"))
+    }
+
     async fn get_acp_configuration(
         &self,
         _: Request<pb::GetAcpConfigurationRequest>,

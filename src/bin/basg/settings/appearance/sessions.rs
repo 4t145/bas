@@ -13,6 +13,8 @@ impl AppearancePage {
             crate::i18n::tr!("settings-default-agent"),
             crate::i18n::tr!("settings-auto-collapse-activity"),
             crate::i18n::tr!("settings-auto-collapse-activity-help"),
+            Field::ComposerEnter.label(),
+            Field::ComposerEnter.help(),
         ]
         .iter()
         .any(|text| text.to_lowercase().contains(&query))
@@ -109,7 +111,10 @@ impl AppearancePage {
             ],
             ..$bool::then(Self::matches_session_query(&self.query), || gds_uim::el! {
                 #div { border_t_1; border_color: $cx.theme().border; flex; flex_col; } [
-                    $default_agent, $auto_collapse_activity, $confirm_delete,
+                    $default_agent,
+                    $self.row(Field::ComposerEnter, false, cx),
+                    $auto_collapse_activity,
+                    $confirm_delete,
                 ]
             }),
             ..$bool::then(!Self::matches_session_query(&self.query), || gds_uim::el! {

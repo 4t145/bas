@@ -2,6 +2,67 @@ use super::*;
 use bas::{config::ConnectionProfile, service::Target};
 use gpui_kit::{TestAppContext, component::Root, size, test::TestWindowExt};
 
+#[gpui_kit::test]
+fn settings_group_by_owner_and_keep_conversation_behavior_out_of_appearance_reset(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().expect("settings");
+    let path = directory.path().join("settings.json");
+    std::fs::write(
+        &path,
+        r#"{"appearance":{"ui_font_size":17,"composer_enter_behavior":"newline"}}"#,
+    )
+    .expect("frontend preferences");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::configuration::init(Some(path.clone()), cx);
+        crate::theme::init(None, cx);
+        crate::application::init(cx);
+    });
+    let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        let settings = cx.new(|cx| Settings::new(window, cx));
+        Root::new(settings, window, cx)
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("settings-frontend-group").visible());
+        assert!(window.find("settings-backend-group").visible());
+        assert_eq!(
+            window.find("settings-session-management").label(),
+            Some("会话管理")
+        );
+        assert!(
+            window.find("settings-session-management").bounds().origin.y
+                < window.find("settings-agents").bounds().origin.y
+        );
+        window.click("settings-sessions", cx);
+        window.render_frame(cx);
+        assert!(window.find("appearance-composer-enter").visible());
+        window.click("settings-appearance", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("appearance-composer-enter").is_none());
+        window.click("settings-reset", cx);
+    })
+    .expect("logical settings arrangement");
+    let saved = bas::config::FrontendStore::at(path)
+        .load()
+        .expect("saved frontend");
+    assert_eq!(
+        saved.settings.appearance.composer_enter_behavior,
+        bas::config::appearance::ComposerEnterBehavior::Newline
+    );
+    assert_eq!(saved.settings.appearance.ui_font_size, None);
+    assert!(matches!(
+        Category::for_query("会话管理"),
+        Category::SessionManagement
+    ));
+    assert!(matches!(
+        Category::for_query("预热"),
+        Category::SessionManagement
+    ));
+    assert!(matches!(Category::for_query("Enter"), Category::Sessions));
+}
+
 fn check_footer_without_copy(cx: &mut TestAppContext, message: String) {
     let directory = tempfile::tempdir().expect("settings directory");
     let path = directory.path().join("settings.json");
@@ -121,7 +182,7 @@ fn frontend_connections_and_backend_switching_are_distinct_settings_scopes(
         );
         assert_ne!(entity.read(cx).agents.entity_id(), old_agents.entity_id());
         assert_ne!(entity.read(cx).acp.entity_id(), old_policy);
-        window.click("settings-acp", cx);
+        window.click("settings-session-management", cx);
         window.render_frame(cx);
         assert!(window.find("acp-policy-page").visible());
         assert!(window.find("settings-backend-context").visible());
@@ -132,6 +193,7 @@ fn frontend_connections_and_backend_switching_are_distinct_settings_scopes(
     cx.run_until_parked();
     cx.update(|cx| {
         assert_eq!(entity.read(cx).agents.entity_id(), old_agents.entity_id());
+        assert_eq!(entity.read(cx).acp.entity_id(), old_policy);
         assert_eq!(crate::connections::current(cx), Some(Target::Local.into()));
         crate::connections::manage(Target::Pipe("bas-other".into()).into(), cx);
         window::open_agent_management("embedded", Some(Target::Local.into()), cx)

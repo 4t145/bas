@@ -1,6 +1,138 @@
 use super::*;
 use bas::model::{EventKind, Owner};
 
+#[path = "tests/migration.rs"]
+mod migration;
+
+#[tokio::test]
+async fn schema_five_upgrade_moves_history_without_packing_and_preserves_receipts() {
+    let db = toasty::Db::builder()
+        .models(toasty::models!(SessionRow, EventRow, AcceptanceRow))
+        .max_pool_size(1)
+        .build(toasty_driver_sqlite::Sqlite::in_memory())
+        .await
+        .expect("legacy database");
+    const SCHEMA_FIVE: MigrationSet = MigrationSet::new(&[
+        MigrationFile::new(
+            1,
+            "session_history",
+            include_str!("../migrations/0001_session_history.sql"),
+        ),
+        MigrationFile::new(
+            2,
+            "accepted_prompts",
+            include_str!("../migrations/0002_accepted_prompts.sql"),
+        ),
+        MigrationFile::new(
+            3,
+            "history_dependencies",
+            include_str!("../migrations/0003_history_dependencies.sql"),
+        ),
+        MigrationFile::new(
+            4,
+            "history_turns",
+            include_str!("../migrations/0004_history_turns.sql"),
+        ),
+        MigrationFile::new(
+            5,
+            "last_used_agent",
+            include_str!("../migrations/0005_last_used_agent.sql"),
+        ),
+    ]);
+    SCHEMA_FIVE.apply(&db).await.expect("schema five");
+    let store = SqliteStore { db };
+    let mut meta = SessionMeta::new(SessionId::new(), "legacy".into(), Owner::current());
+    store
+        .create(meta.clone(), Some(ResumeData::acp("original")))
+        .await
+        .expect("create");
+    let turn = TurnId::new();
+    let events: Vec<_> = [
+        EventKind::TurnStarted { turn },
+        EventKind::TitleChanged {
+            title: "legacy turn".into(),
+        },
+        EventKind::TurnInterrupted {
+            turn,
+            reason: bas::model::InterruptionReason::DaemonRestarted,
+        },
+    ]
+    .into_iter()
+    .map(|kind| {
+        let event = Event::new(meta.id, meta.revision.next(), kind);
+        meta.apply_event(&event);
+        event
+    })
+    .collect();
+    let mut db = store.db.clone();
+    for event in &events {
+        sql::statement("INSERT INTO events(session_id, cursor, payload) VALUES (?1, ?2, ?3)")
+            .bind(meta.id.to_string())
+            .bind(raw(event.cursor).expect("cursor"))
+            .bind(serde_json::to_vec(event).expect("JSON"))
+            .exec(&mut db)
+            .await
+            .expect("legacy event");
+    }
+    sql::statement("UPDATE sessions SET revision = ?1, metadata = ?2 WHERE id = ?3")
+        .bind(raw(meta.revision).expect("revision"))
+        .bind(serde_json::to_vec(&meta).expect("JSON"))
+        .bind(meta.id.to_string())
+        .exec(&mut db)
+        .await
+        .expect("legacy metadata");
+    sql::statement("INSERT INTO accepted_prompts VALUES (?1, ?2, 1, ?3)")
+        .bind(meta.id.to_string())
+        .bind(turn.to_string())
+        .bind(vec![7_u8; 32])
+        .exec(&mut db)
+        .await
+        .expect("legacy receipt");
+    verify_existing_schema(&store.db)
+        .await
+        .expect("valid schema five");
+    MIGRATIONS.apply(&store.db).await.expect("upgrade");
+    verify_existing_schema(&store.db)
+        .await
+        .expect("valid schema seven");
+    assert_eq!(
+        store.page(meta.id, None, 10).await.expect("history").events,
+        events
+    );
+    assert_eq!(
+        store.window(meta.id, None, 1).await.expect("window").events,
+        events
+    );
+    assert_eq!(
+        store.acceptance(meta.id, turn).await.expect("receipt"),
+        Some(PromptAcceptance {
+            receipt: TurnReceipt {
+                turn,
+                cursor: Cursor::from_raw(1)
+            },
+            fingerprint: [7; 32],
+        })
+    );
+    let row = sql::query("SELECT COUNT(*) FROM history_chunks WHERE first_cursor != last_cursor")
+        .exec(&mut db)
+        .await
+        .expect("blocks")
+        .remove(0);
+    assert_eq!(
+        field::<i64>(&mut columns(row).expect("row")).expect("count"),
+        0
+    );
+    let row = sql::query("SELECT COUNT(*) FROM history_chunks")
+        .exec(&mut db)
+        .await
+        .expect("unpacked history")
+        .remove(0);
+    assert_eq!(
+        field::<i64>(&mut columns(row).expect("row")).expect("count"),
+        3
+    );
+}
+
 #[tokio::test]
 async fn schema_four_upgrade_starts_without_selection_and_checks_version() {
     let mut db = toasty::Db::builder()
@@ -57,8 +189,8 @@ async fn schema_four_upgrade_starts_without_selection_and_checks_version() {
             .expect("no inferred selection"),
         None
     );
-    verify_existing_schema(&db).await.expect("valid five");
-    sql::statement("PRAGMA user_version = 6")
+    verify_existing_schema(&db).await.expect("valid eight");
+    sql::statement("PRAGMA user_version = 9")
         .exec(&mut db)
         .await
         .expect("future");
@@ -66,7 +198,7 @@ async fn schema_four_upgrade_starts_without_selection_and_checks_version() {
         verify_existing_schema(&db).await,
         Err(Error::InvalidCommit(_))
     ));
-    sql::statement("PRAGMA user_version = 5")
+    sql::statement("PRAGMA user_version = 8")
         .exec(&mut db)
         .await
         .expect("restore");
@@ -203,7 +335,7 @@ async fn schema_three_upgrade_preserves_authoritative_records_and_rebuilds_turns
     assert_eq!(older.before, None);
     verify_existing_schema(&store.db)
         .await
-        .expect("valid schema five");
+        .expect("valid schema seven");
     assert_eq!(
         store.last_used_agent().await.expect("no history inference"),
         None

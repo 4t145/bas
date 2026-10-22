@@ -672,15 +672,49 @@ impl Session {
         limit: usize,
     ) -> Result<bas::service::HistoryWindow, SessionError> {
         let _transaction = self.transaction.lock().await;
-        let (storage, id) = {
-            let state = self.lock();
-            let storage = state.storage.clone().ok_or(storage::Error::InvalidCommit(
-                "dependency-aligned history requires a storage backend",
-            ))?;
-            (storage, state.meta.id)
-        };
+        let (storage, id) = self.history_storage()?;
         let window = storage.window(id, before, limit).await?;
-        Ok(bas::service::HistoryWindow {
+        Ok(self.history_snapshot(window))
+    }
+
+    /// Loads all prompt markers without replaying bodies or restoring an agent.
+    ///
+    /// # Errors
+    /// Returns storage validation, retention, or unsupported-backend errors.
+    pub async fn history_overview(&self) -> Result<bas::service::HistoryOverview, SessionError> {
+        let _transaction = self.transaction.lock().await;
+        let (storage, id) = self.history_storage()?;
+        Ok(storage.overview(id).await?)
+    }
+
+    /// Loads a containing logical page directly, without restoring an agent.
+    ///
+    /// # Errors
+    /// Returns storage validation, retention, or unsupported-backend errors.
+    pub async fn history_window_at(
+        &self,
+        cursor: Cursor,
+    ) -> Result<bas::service::HistoryLocation, SessionError> {
+        let _transaction = self.transaction.lock().await;
+        let (storage, id) = self.history_storage()?;
+        let location = storage.window_at(id, cursor).await?;
+        Ok(bas::service::HistoryLocation {
+            window: self.history_snapshot(location.window),
+            after: location.after.map(Cursor::raw),
+        })
+    }
+
+    fn history_storage(&self) -> Result<(Arc<dyn storage::Storage>, SessionId), SessionError> {
+        let state = self.lock();
+        let storage = state
+            .storage
+            .clone()
+            .ok_or(storage::Error::NavigationUnsupported)?;
+        Ok((storage, state.meta.id))
+    }
+
+    fn history_snapshot(&self, window: storage::Window) -> bas::service::HistoryWindow {
+        bas::service::HistoryWindow {
             session: SessionSnapshot {
                 meta: window.meta,
                 runtime: self.lock().runtime.clone(),
@@ -689,7 +723,7 @@ impl Session {
             context: window.context,
             before: window.before.map(Cursor::raw),
             cursor: window.cursor.raw(),
-        })
+        }
     }
 
     /// Accepts exactly one turn and commits the user message before its updates.

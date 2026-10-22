@@ -32,6 +32,9 @@ struct FixtureService {
 struct Probes {
     policy_error: Option<RpcStatus>,
     policy_reads: usize,
+    policy_writes: Vec<pb::SaveAcpConfigurationRequest>,
+    policy_release: Option<Arc<tokio::sync::Notify>>,
+    policy_read_release: Option<Arc<tokio::sync::Notify>>,
     configuration_error: Option<RpcStatus>,
     catalog_error: Option<RpcStatus>,
     authentication_error: Option<RpcStatus>,
@@ -54,9 +57,13 @@ macro_rules! fixture_service {
             async fn get_acp_configuration(
                 &self, _: Request<pb::GetAcpConfigurationRequest>,
             ) -> Result<Response<pb::AcpConfiguration>, RpcStatus> {
-                let mut probes = self.probes.lock().expect("probes");
-                probes.policy_reads += 1;
-                if let Some(error) = &probes.policy_error { return Err(error.clone()); }
+                let release = {
+                    let mut probes = self.probes.lock().expect("probes");
+                    probes.policy_reads += 1;
+                    if let Some(error) = &probes.policy_error { return Err(error.clone()); }
+                    probes.policy_read_release.take()
+                };
+                if let Some(release) = release { release.notified().await; }
                 let document = bas::config::DaemonStore::at(self.store.path().to_owned())
                     .load().expect("fixture settings").settings;
                 Ok(Response::new(pb::AcpConfiguration {
@@ -71,6 +78,7 @@ macro_rules! fixture_service {
                 &self, request: Request<pb::SaveAcpConfigurationRequest>,
             ) -> Result<Response<pb::AcpConfiguration>, RpcStatus> {
                 let request = request.into_inner();
+                self.probes.lock().expect("probes").policy_writes.push(request.clone());
                 let baseline = self.get_acp_configuration(Request::new(pb::GetAcpConfigurationRequest {})).await?.into_inner();
                 if request.profile != baseline.profile || request.revision != baseline.revision {
                     return Err(RpcStatus::aborted("policy changed"));
@@ -79,7 +87,10 @@ macro_rules! fixture_service {
                 let mut document = store.load().expect("fixture document");
                 let policy = serde_json::from_slice(&request.policy_json).expect("valid policy");
                 store.save_acp(&mut document, policy).map_err(|e| RpcStatus::invalid_argument(e.to_string()))?;
-                self.get_acp_configuration(Request::new(pb::GetAcpConfigurationRequest {})).await
+                let response = self.get_acp_configuration(Request::new(pb::GetAcpConfigurationRequest {})).await?;
+                let release = self.probes.lock().expect("probes").policy_release.take();
+                if let Some(release) = release { release.notified().await; }
+                Ok(response)
             }
 
             async fn get_agent_configuration(
@@ -281,6 +292,8 @@ fixture_service! {
     set_title(pb::SetTitleRequest) -> pb::SetTitleResponse;
     load_history(pb::LoadHistoryRequest) -> pb::LoadHistoryResponse;
     load_history_window(pb::LoadHistoryWindowRequest) -> pb::LoadHistoryWindowResponse;
+    load_history_overview(pb::LoadHistoryOverviewRequest) -> pb::LoadHistoryOverviewResponse;
+    load_history_window_at(pb::LoadHistoryWindowAtRequest) -> pb::LoadHistoryWindowAtResponse;
 }
 
 struct Fixture {
@@ -469,7 +482,199 @@ impl Fixture {
 }
 
 #[gpui_kit::test]
-fn policy_page_saves_to_remote_and_preserves_draft_when_server_rejects(cx: &mut TestAppContext) {
+fn policy_page_autosaves_to_remote_and_preserves_draft_when_server_rejects(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().expect("policy fixture");
+    let fixture = Fixture::with_transport(directory.path().join("server.json"), true);
+    let store = bas::config::DaemonStore::at(fixture.store.path().to_owned());
+    let mut document = store.load().expect("server configuration");
+    store
+        .save_agents(
+            &mut document,
+            vec![
+                bas::config::AgentSpec::acp(
+                    "pool-agent",
+                    bas::config::agent::Command::new("unused", []),
+                )
+                .into(),
+            ],
+        )
+        .expect("registered ACP agent");
+    cx.update(super::super::super::tests::init);
+    cx.update(|cx| {
+        crate::agents::init(
+            fixture.address.clone().into(),
+            fixture.runtime.handle().clone(),
+            cx,
+        )
+    });
+    let mut page = None;
+    let window = cx.open_window(size(px(780.), px(820.)), |window, cx| {
+        let view = cx.new(|cx| crate::settings::acp::Page::new(window, cx));
+        view.update(cx, |page, cx| page.open(window, cx));
+        page = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let page = page.expect("policy page");
+    fixture.pump_until(cx, |cx| {
+        page.read(cx).status(cx).is_empty()
+            && fixture.probes.lock().expect("probes").policy_reads > 0
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("acp-policy-idle", cx);
+        window.press("ctrl-a", cx);
+        window.input("0", cx);
+    })
+    .expect("invalid draft");
+    cx.run_until_parked();
+    cx.executor().advance_clock(crate::settings::SAVE_DELAY);
+    cx.run_until_parked();
+    assert!(
+        fixture
+            .probes
+            .lock()
+            .expect("probes")
+            .policy_writes
+            .is_empty()
+    );
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.find("acp-policy-reload").visible(),
+            "invalid drafts can be discarded"
+        );
+        window.click("acp-policy-reload", cx);
+    })
+    .expect("reload invalid draft");
+    fixture.pump_until(cx, |cx| page.read(cx).status(cx).is_empty());
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("acp-policy-idle", cx);
+        window.press("ctrl-a", cx);
+        window.input("120", cx);
+        window.click("acp-policy-size", cx);
+        window.press("ctrl-a", cx);
+        window.input("0", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("acp-policy-save").is_none());
+    })
+    .expect("edit policy through controls");
+    cx.run_until_parked();
+    assert!(
+        fixture
+            .probes
+            .lock()
+            .expect("probes")
+            .policy_writes
+            .is_empty(),
+        "debounced"
+    );
+    cx.executor().advance_clock(crate::settings::SAVE_DELAY);
+    fixture.pump_until(cx, |cx| {
+        page.read(cx).status(cx) == crate::i18n::tr!("settings-applied")
+    });
+    assert_eq!(
+        fixture.probes.lock().expect("probes").policy_writes.len(),
+        1
+    );
+    let policy = store.load().expect("remote file").settings.acp;
+    assert_eq!(policy.idle_timeout_secs.expect("timeout").get(), 120);
+    assert_eq!(policy.pool_size, 0);
+    fixture.probes.lock().expect("probes").policy_error =
+        Some(RpcStatus::aborted("policy changed"));
+    cx.update_window(window.into(), |_, window, cx| {
+        window.click("acp-policy-size", cx);
+        window.press("ctrl-a", cx);
+        window.input("2", cx);
+        window.render_frame(cx);
+    })
+    .expect("edit stale policy");
+    cx.run_until_parked();
+    cx.executor().advance_clock(crate::settings::SAVE_DELAY);
+    fixture.pump_until(cx, |cx| page.read(cx).status(cx).contains("policy changed"));
+    assert_eq!(store.load().expect("no overwrite").settings.acp, policy);
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert_eq!(
+        fixture.probes.lock().expect("probes").policy_writes.len(),
+        2,
+        "no retry loop"
+    );
+    fixture.probes.lock().expect("probes").policy_error = None;
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("acp-policy-size", cx);
+        window.press("enter", cx);
+    })
+    .expect("retry retained draft");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(
+            page.read(cx).status(cx),
+            crate::i18n::tr!("acp-policy-loading"),
+            "Enter retries the retained draft"
+        )
+    });
+    fixture.pump_until(cx, |cx| {
+        page.read(cx).status(cx) == crate::i18n::tr!("settings-applied")
+    });
+    assert_eq!(store.load().expect("saved draft").settings.acp.pool_size, 2);
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("acp-policy-pool-pool-agent").is_none());
+        window.click("acp-policy-add-pool", cx);
+        window.press("down", cx);
+        window.press("enter", cx);
+    })
+    .expect("add a reserve from the agent picker");
+    cx.run_until_parked();
+    cx.executor().advance_clock(crate::settings::SAVE_DELAY);
+    fixture.pump_until(cx, |cx| {
+        page.read(cx).status(cx) == crate::i18n::tr!("settings-applied")
+            && store
+                .load()
+                .expect("added pool")
+                .settings
+                .acp
+                .pools
+                .get(&"pool-agent".into())
+                == Some(&1)
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("acp-policy-pool-pool-agent").visible());
+        window.click("acp-policy-remove-pool-pool-agent", cx);
+    })
+    .expect("remove the reserve override");
+    cx.run_until_parked();
+    cx.executor().advance_clock(crate::settings::SAVE_DELAY);
+    fixture.pump_until(cx, |cx| {
+        page.read(cx).status(cx) == crate::i18n::tr!("settings-applied")
+            && store
+                .load()
+                .expect("removed pool")
+                .settings
+                .acp
+                .pools
+                .is_empty()
+    });
+    assert_eq!(
+        store
+            .load()
+            .expect("automatic policy unchanged")
+            .settings
+            .acp
+            .pool_size,
+        2
+    );
+}
+
+#[gpui_kit::test]
+fn policy_autosave_keeps_newer_edits_and_flushes_to_original_server_after_close(
+    cx: &mut TestAppContext,
+) {
     let directory = tempfile::tempdir().expect("policy fixture");
     let fixture = Fixture::with_transport(directory.path().join("server.json"), true);
     let store = bas::config::DaemonStore::at(fixture.store.path().to_owned());
@@ -488,51 +693,113 @@ fn policy_page_saves_to_remote_and_preserves_draft_when_server_rejects(cx: &mut 
         page = Some(view.clone());
         Root::new(view, window, cx)
     });
-    let page = page.expect("policy page");
+    let page = page.expect("page");
     fixture.pump_until(cx, |cx| {
-        page.read(cx).message.is_empty() && fixture.probes.lock().expect("probes").policy_reads > 0
+        page.read(cx).status(cx).is_empty()
+            && fixture.probes.lock().expect("probes").policy_reads > 0
     });
+    let release = Arc::new(tokio::sync::Notify::new());
+    fixture.probes.lock().expect("probes").policy_release = Some(release.clone());
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
-        window.click("acp-policy-idle", cx);
-        window.press("ctrl-a", cx);
-        window.input("120", cx);
-        window.click("acp-policy-size", cx);
-        window.press("ctrl-a", cx);
-        window.input("0", cx);
-        window.render_frame(cx);
-        assert!(window.find("acp-policy-save").visible());
-        window.click("acp-policy-save", cx);
-    })
-    .expect("edit policy through controls");
-    fixture.pump_until(cx, |cx| {
-        page.read(cx).message == crate::i18n::tr!("acp-policy-saved")
-    });
-    let policy = store.load().expect("remote file").settings.acp;
-    assert_eq!(policy.idle_timeout_secs.expect("timeout").get(), 120);
-    assert_eq!(policy.pool_size, 0);
-    fixture.probes.lock().expect("probes").policy_error =
-        Some(RpcStatus::aborted("policy changed"));
-    cx.update_window(window.into(), |_, window, cx| {
         window.click("acp-policy-size", cx);
         window.press("ctrl-a", cx);
         window.input("2", cx);
-        window.render_frame(cx);
-        window.click("acp-policy-save", cx);
     })
-    .expect("edit stale policy");
-    fixture.pump_until(cx, |cx| page.read(cx).message.contains("policy changed"));
-    assert_eq!(store.load().expect("no overwrite").settings.acp, policy);
-    fixture.probes.lock().expect("probes").policy_error = None;
+    .expect("first edit");
+    cx.run_until_parked();
+    cx.executor().advance_clock(crate::settings::SAVE_DELAY);
+    fixture.pump_until(cx, |_| {
+        store.load().expect("stored").settings.acp.pool_size == 2
+    });
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
-        window.click("acp-policy-save", cx);
+        window.click("acp-policy-size", cx);
+        window.press("ctrl-a", cx);
+        window.input("3", cx);
     })
-    .expect("retry retained draft");
-    fixture.pump_until(cx, |cx| {
-        page.read(cx).message == crate::i18n::tr!("acp-policy-saved")
+    .expect("edit while acknowledgement is blocked");
+    cx.run_until_parked();
+    cx.executor().advance_clock(crate::settings::SAVE_DELAY);
+    cx.run_until_parked();
+    assert_eq!(
+        fixture.probes.lock().expect("probes").policy_writes.len(),
+        1,
+        "only one revision-bound write is in flight"
+    );
+    cx.update_window(window.into(), |_, window, cx| {
+        crate::agents::init(
+            Target::Pipe("different-backend".into()).into(),
+            fixture.runtime.handle().clone(),
+            cx,
+        );
+        page.update(cx, |page, cx| page.flush_pending(cx));
+        window.remove_window();
+    })
+    .expect("flush and close");
+    drop(page);
+    release.notify_one();
+    fixture.pump_until(cx, |_| {
+        store
+            .load()
+            .expect("saved after close")
+            .settings
+            .acp
+            .pool_size
+            == 3
     });
-    assert_eq!(store.load().expect("saved draft").settings.acp.pool_size, 2);
+    assert_eq!(
+        fixture.probes.lock().expect("probes").policy_writes.len(),
+        2
+    );
+}
+
+#[gpui_kit::test]
+fn cached_policy_page_reopens_after_closing_a_window_during_load(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("policy fixture");
+    let fixture = Fixture::with_transport(directory.path().join("server.json"), true);
+    let release = Arc::new(tokio::sync::Notify::new());
+    fixture.probes.lock().expect("probes").policy_read_release = Some(release.clone());
+    cx.update(super::super::super::tests::init);
+    cx.update(|cx| {
+        crate::agents::init(
+            fixture.address.clone().into(),
+            fixture.runtime.handle().clone(),
+            cx,
+        )
+    });
+    let mut page = None;
+    let first = cx.open_window(size(px(780.), px(820.)), |window, cx| {
+        let view = crate::settings::acp::shared(window, cx);
+        view.update(cx, |page, cx| page.open(window, cx));
+        page = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let page = page.expect("cached page");
+    fixture.pump_until(cx, |_| {
+        fixture.probes.lock().expect("probes").policy_reads == 1
+    });
+    cx.update_window(first.into(), |_, window, cx| {
+        page.update(cx, |page, cx| page.prepare_to_leave(cx));
+        window.remove_window();
+    })
+    .expect("close pending read");
+    let second = cx.open_window(size(px(780.), px(820.)), |window, cx| {
+        let view = crate::settings::acp::shared(window, cx);
+        assert_eq!(view.entity_id(), page.entity_id());
+        view.update(cx, |page, cx| page.open(window, cx));
+        Root::new(view, window, cx)
+    });
+    fixture.pump_until(cx, |cx| {
+        page.read(cx).status(cx).is_empty()
+            && fixture.probes.lock().expect("probes").policy_reads == 2
+    });
+    release.notify_one();
+    cx.update_window(second.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("acp-policy-idle").visible());
+    })
+    .expect("reopened controls");
 }
 
 #[gpui_kit::test]
