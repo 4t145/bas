@@ -132,6 +132,8 @@ rcgen = "=0.13.2"
 # Test-only external SQLite writer for lock-contention regression coverage.
 rusqlite = "=0.40.2"
 tempfile = "3"
+# Exercise the same Windows progress-channel API on non-Windows test hosts.
+reedline = { version = "=0.51.0", default-features = false, features = ["external_printer"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["fs", "poll", "process", "signal", "term", "user"] }
@@ -147,11 +149,19 @@ png = { version = "0.18", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 process-wrap = { version = "=10.0.1", default-features = false, features = ["tokio1", "job-object", "kill-on-drop"] }
+# MIT; crates.io release from https://github.com/nushell/reedline.
+# Its external break signal cancels event-based input without a cooked console read.
+# 0.51 provides a cloneable ExternalPrinter so pending progress survives reader exit.
+reedline = { version = "=0.51.0", default-features = false, features = ["external_printer"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_System_Console",
     "Win32_System_Pipes",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
 ] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

@@ -21,7 +21,7 @@ impl Command {
     pub async fn run(self, client: &mut Client, server: &bas::service::Target) -> Result<()> {
         match self {
             Command::Agents => agents::list(client).await,
-            Command::Agent(command) => agents::manage(command, client, server).await,
+            Command::Agent(command) => command.run(client, server).await,
             Command::Session(command) => command.run(client).await,
             Command::Attach {
                 session,

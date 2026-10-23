@@ -41,6 +41,9 @@ nix develop .#gui -c cargo clippy --all-targets --features gui-tests --locked --
 ```
 
 CI 分别执行默认测试与 headless GUI 测试，不读取 `.env`，也不调用真实模型。
+Windows job 额外执行 `cargo test --bin bast command::agents::terminal --locked`：
+真实 console 用隔离子进程创建，覆盖取消后再次输入、Unicode、进度输出和模式恢复，
+父测试有退出期限；交叉编译不能代替这项 Windows 运行验证。
 状态回归通过受控事件顺序和 ACP fixture 验证：设置响应与通知的提交顺序、
 启动期间历史淘汰、快照版本合并、发送回执与事件交错以及队列编辑保序。
 这些测试不使用固定等待时间推测操作是否完成。

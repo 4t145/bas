@@ -233,10 +233,7 @@ impl Timeline {
             }
             EventKind::TurnFinished { turn, result } => {
                 let stop = match result {
-                    Ok(response) => serde_json::to_value(response.stop_reason)?
-                        .as_str()
-                        .unwrap_or("unknown")
-                        .to_owned(),
+                    Ok(response) => enum_name(&response.stop_reason)?,
                     Err(error) => format!("agent error: {}", error.message),
                 };
                 crate::safe::safe_writeln!(

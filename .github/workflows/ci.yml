@@ -53,6 +53,9 @@ jobs:
         run: cargo build --all-targets --features gui-tests --locked
       - name: Test shared model and configuration
         run: cargo test --lib --locked
+      - name: Test cancellable CLI terminal input
+        if: runner.os == 'Windows'
+        run: 'cargo test --bin bast command::agents::terminal --locked'
       - name: Test local IPC and explicit TCP
         run: 'cargo test --test daemon transport:: --locked'
       - name: Test native installation process ownership

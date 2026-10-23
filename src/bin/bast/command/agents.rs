@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
 use bas::service::{Client, pb};
 
+use crate::clap::Agent;
 use crate::render;
 use crate::safe::safe_println;
+
+mod terminal;
 
 /// Lists the daemon's configured agent backends.
 ///
@@ -20,71 +23,74 @@ pub(super) async fn list(client: &mut Client) -> Result<()> {
     Ok(())
 }
 
-/// # Errors
-/// Reports unsupported daemons, acquisition failures, stale settings or failed login.
-pub(super) async fn manage(
-    command: crate::clap::Agent,
-    client: &mut Client,
-    server: &bas::service::Target,
-) -> Result<()> {
-    use crate::clap::Agent;
-    match command {
-        Agent::Catalog { refresh, json } => {
-            let catalog = catalog(client, refresh).await?;
-            if json {
-                safe_println!("{}", serde_json::to_string_pretty(&catalog)?);
-            } else {
-                if let Some(warning) = catalog.warning {
-                    safe_println!("{warning}");
-                }
-                safe_println!("ID\tNAME\tVERSION\tSTATUS");
-                for entry in catalog.entries {
-                    safe_println!(
-                        "{}\t{}\t{}\t{}",
-                        entry.id,
-                        entry.name,
-                        entry.installed_version.as_deref().unwrap_or(&entry.version),
-                        status(entry.status)
-                    );
+impl Agent {
+    /// Runs an agent subcommand.
+    ///
+    /// # Errors
+    /// Reports unsupported daemons, acquisition failures, stale settings or failed login.
+    pub(crate) async fn run(
+        self,
+        client: &mut Client,
+        server: &bas::service::Target,
+    ) -> Result<()> {
+        match self {
+            Self::Catalog { refresh, json } => {
+                let catalog = catalog(client, refresh).await?;
+                if json {
+                    safe_println!("{}", serde_json::to_string_pretty(&catalog)?);
+                } else {
+                    if let Some(warning) = catalog.warning {
+                        safe_println!("{warning}");
+                    }
+                    safe_println!("ID\tNAME\tVERSION\tSTATUS");
+                    for entry in catalog.entries {
+                        safe_println!(
+                            "{}\t{}\t{}\t{}",
+                            entry.id,
+                            entry.name,
+                            entry.installed_version.as_deref().unwrap_or(&entry.version),
+                            status(entry.status)
+                        );
+                    }
                 }
             }
-        }
-        Agent::Install { id } => {
-            let mut stream = client
-                .install_agent(pb::InstallAgentRequest { id: id.clone() })
-                .await?
-                .into_inner();
-            let mut complete = false;
-            while let Some(update) = stream.message().await? {
-                safe_println!("{}: {}", update.phase, update.message);
-                complete |= update.complete;
+            Self::Install { id } => {
+                let mut stream = client
+                    .install_agent(pb::InstallAgentRequest { id: id.clone() })
+                    .await?
+                    .into_inner();
+                let mut complete = false;
+                while let Some(update) = stream.message().await? {
+                    safe_println!("{}: {}", update.phase, update.message);
+                    complete |= update.complete;
+                }
+                anyhow::ensure!(complete, "Installation ended before registration completed");
+                let spec = spec(client, &id).await?;
+                let checked = check(client, &spec).await?;
+                show_check(&id, &checked);
             }
-            anyhow::ensure!(complete, "Installation ended before registration completed");
-            let spec = spec(client, &id).await?;
-            let checked = check(client, &spec).await?;
-            show_check(&id, &checked);
+            Self::Check { id } => {
+                let spec = spec(client, &id).await?;
+                let checked = check(client, &spec).await?;
+                show_check(&id, &checked);
+                anyhow::ensure!(
+                    checked.status() == pb::AgentCheckStatus::Connected,
+                    "Agent is not ready to create sessions"
+                );
+            }
+            Self::Login { id, method } => {
+                let spec = spec(client, &id).await?;
+                login(client, &spec, method.as_deref(), server).await?;
+            }
+            Self::Remove { id } => {
+                client
+                    .remove_agent(pb::RemoveAgentRequest { id: id.clone() })
+                    .await?;
+                safe_println!("Removed {id}; credentials and version directories retained");
+            }
         }
-        Agent::Check { id } => {
-            let spec = spec(client, &id).await?;
-            let checked = check(client, &spec).await?;
-            show_check(&id, &checked);
-            anyhow::ensure!(
-                checked.status() == pb::AgentCheckStatus::Connected,
-                "Agent is not ready to create sessions"
-            );
-        }
-        Agent::Login { id, method } => {
-            let spec = spec(client, &id).await?;
-            login(client, &spec, method.as_deref(), server).await?;
-        }
-        Agent::Remove { id } => {
-            client
-                .remove_agent(pb::RemoveAgentRequest { id: id.clone() })
-                .await?;
-            safe_println!("Removed {id}; credentials and version directories retained");
-        }
+        Ok(())
     }
-    Ok(())
 }
 
 fn status(status: bas::management::Status) -> &'static str {
@@ -143,6 +149,17 @@ fn show_check(id: &str, checked: &pb::CheckAgentResponse) {
     if checked.status() == pb::AgentCheckStatus::AuthenticationRequired {
         safe_println!("Sign in with: bast agent login {id}");
     }
+}
+
+/// # Errors
+/// Rejects a final authentication check that did not establish session readiness.
+fn finish_login(id: &str, checked: &pb::CheckAgentResponse) -> Result<()> {
+    show_check(id, checked);
+    anyhow::ensure!(
+        checked.status() == pb::AgentCheckStatus::Connected,
+        "Agent setup is incomplete; review its native configuration"
+    );
+    Ok(())
 }
 
 async fn login(
@@ -223,12 +240,7 @@ async fn login(
         };
         match event.kind {
             Some(pb::authentication_event::Kind::Check(ready)) => {
-                show_check(spec.id.as_str(), &ready);
-                anyhow::ensure!(
-                    ready.status() == pb::AgentCheckStatus::Connected,
-                    "Agent setup is incomplete; review its native configuration"
-                );
-                return Ok(());
+                return finish_login(spec.id.as_str(), &ready);
             }
             Some(pb::authentication_event::Kind::Terminal(payload)) => {
                 require_local_terminal(server)?;
@@ -238,6 +250,7 @@ async fn login(
                     std::io::stdin().is_terminal(),
                     "This setup method requires an interactive terminal"
                 );
+                let _input = terminal::Session::acquire().await?;
                 let status = tokio::process::Command::new(&invocation.program)
                     .args(&invocation.args)
                     .envs(&invocation.env)
@@ -264,37 +277,24 @@ async fn login(
                     .request
                     .context("Missing elicitation request")?
                     .decode()?;
-                let response = elicitation_response(&raw);
-                tokio::pin!(response);
-                let response = loop {
-                    tokio::select! {
-                        result = &mut response => break Some(result?),
-                        incoming = output.message() => {
-                            let incoming = incoming?.context("Authentication ended while waiting for input")?;
-                            match incoming.kind {
-                                Some(pb::authentication_event::Kind::Check(ready)) => {
-                                    show_check(spec.id.as_str(), &ready);
-                                    anyhow::ensure!(ready.status() == pb::AgentCheckStatus::Connected,
-                                        "Agent setup is incomplete; review its native configuration");
-                                    return Ok(());
-                                }
-                                Some(pb::authentication_event::Kind::Progress(message)) => safe_println!("{message}"),
-                                Some(pb::authentication_event::Kind::Elicitation(_)) => queued.push_back(incoming),
-                                Some(pb::authentication_event::Kind::ElicitationComplete(_)) => queued.push_back(incoming),
-                                Some(pb::authentication_event::Kind::ElicitationCancelled(ref id)) => {
-                                    if id == &pending.request_id {
-                                        safe_println!("Agent cancelled this input request");
-                                        break None;
-                                    }
-                                    queued.push_back(incoming);
-                                }
-                                _ => anyhow::bail!("Agent changed its setup flow while waiting for input"),
-                            }
-                        }
+                // Acquire before any prompt. Retain the session while its reader
+                // drains, including error paths and final server readiness checks.
+                let input = terminal::Session::acquire().await?;
+                let result = await_elicitation(
+                    &input,
+                    elicitation_response(&raw, &input),
+                    &pending.request_id,
+                    &mut output,
+                    &mut queued,
+                )
+                .await?;
+                let response = match result {
+                    InputResult::Answer(response) => response,
+                    InputResult::Cancelled => {
+                        safe_println!("Agent cancelled this input request");
+                        continue;
                     }
-                };
-                let Some(response) = response else {
-                    continue;
+                    InputResult::Checked(ready) => return finish_login(spec.id.as_str(), &ready),
                 };
                 controls
                     .send(pb::AuthenticationInput {
@@ -325,9 +325,70 @@ async fn login(
     anyhow::bail!("Authentication ended before the readiness check")
 }
 
+enum InputResult {
+    Answer(serde_json::Value),
+    Cancelled,
+    Checked(pb::CheckAgentResponse),
+}
+
+/// # Errors
+/// Reports input/RPC errors and EOF only after the active reader has drained.
+async fn await_elicitation(
+    input: &terminal::Session,
+    response: impl std::future::Future<Output = Result<serde_json::Value>>,
+    request_id: &str,
+    events: &mut (impl futures::Stream<Item = Result<pb::AuthenticationEvent, tonic::Status>> + Unpin),
+    queued: &mut std::collections::VecDeque<pb::AuthenticationEvent>,
+) -> Result<InputResult> {
+    use futures::StreamExt;
+    let mut progress = std::collections::VecDeque::<String>::new();
+    // `?` exits this async scope, not the function: every exit drops the response
+    // future before finish() restores modes and drains pending progress.
+    let result: Result<InputResult> = async {
+        let response = response;
+        tokio::pin!(response);
+        loop {
+            tokio::select! {
+                result = &mut response => break Ok(InputResult::Answer(result?)),
+                printed = input.progress(progress.front().map(String::as_str).unwrap_or_default()),
+                    if !progress.is_empty() => {
+                        printed?;
+                        progress.pop_front();
+                    }
+                incoming = events.next() => {
+                    let incoming = incoming.transpose()?.context("Authentication ended while waiting for input")?;
+                    match incoming.kind {
+                        Some(pb::authentication_event::Kind::Check(ready)) => {
+                            break Ok(InputResult::Checked(ready));
+                        }
+                        Some(pb::authentication_event::Kind::Progress(message)) => progress.push_back(message),
+                        Some(pb::authentication_event::Kind::Elicitation(_)) => queued.push_back(incoming),
+                        Some(pb::authentication_event::Kind::ElicitationComplete(_)) => queued.push_back(incoming),
+                        Some(pb::authentication_event::Kind::ElicitationCancelled(ref id)) => {
+                            if id == request_id {
+                                break Ok(InputResult::Cancelled);
+                            }
+                            queued.push_back(incoming);
+                        }
+                        _ => anyhow::bail!("Agent changed its setup flow while waiting for input"),
+                    }
+                }
+            }
+        }
+    }.await;
+    input.finish().await?;
+    for message in progress {
+        safe_println!("{message}");
+    }
+    result
+}
+
 /// # Errors
 /// Reports unsupported schemas or failure reading an interactive response.
-async fn elicitation_response(raw: &serde_json::Value) -> Result<serde_json::Value> {
+async fn elicitation_response(
+    raw: &serde_json::Value,
+    input: &terminal::Session,
+) -> Result<serde_json::Value> {
     use bas::authentication::elicitation::Mode;
     use std::io::IsTerminal;
     let request = bas::authentication::elicitation::parse_request(raw)?;
@@ -339,7 +400,7 @@ async fn elicitation_response(raw: &serde_json::Value) -> Result<serde_json::Val
     match &request.mode {
         Mode::Url(url) => {
             safe_println!("Open this address in your browser: {}", url.url);
-            action_prompt(None).await
+            action_prompt(input, None).await
         }
         Mode::Form(form) => {
             let mut content = form.defaults();
@@ -361,7 +422,7 @@ async fn elicitation_response(raw: &serde_json::Value) -> Result<serde_json::Val
                     if let Some(default) = content.get(&field.name) {
                         safe_println!("Default: {default}");
                     }
-                    let line = read_line().await?;
+                    let line = input.read_line().await?;
                     let parsed = match parse_input(field, &line) {
                         Ok(value) => value,
                         Err(error) => {
@@ -386,7 +447,7 @@ async fn elicitation_response(raw: &serde_json::Value) -> Result<serde_json::Val
             }
             form.validate(&content)?;
             safe_println!("{}", serde_json::to_string_pretty(&content)?);
-            action_prompt(Some(content)).await
+            action_prompt(input, Some(content)).await
         }
     }
 }
@@ -449,11 +510,18 @@ fn parse_input(
 /// # Errors
 /// Reports an input failure while the user selects submit, decline or cancel.
 async fn action_prompt(
+    input: &terminal::Session,
     content: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> Result<serde_json::Value> {
     loop {
         safe_println!("[a] Accept and continue / [d] Decline / [c] Cancel");
-        let action = match read_line().await?.trim().to_ascii_lowercase().as_str() {
+        let action = match input
+            .read_line()
+            .await?
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "a" | "accept" => "accept",
             "d" | "decline" => "decline",
             "c" | "cancel" | "" => "cancel",
@@ -466,81 +534,6 @@ async fn action_prompt(
         };
         return Ok(response);
     }
-}
-
-/// Read on a process-owned thread so stdin never blocks Tokio's runtime.
-///
-/// # Errors
-/// Reports EOF, thread creation failure or a failed terminal read.
-async fn read_line() -> Result<String> {
-    let (send, receive) = tokio::sync::oneshot::channel();
-    std::thread::Builder::new()
-        .name("bast-elicitation-input".into())
-        .spawn(move || {
-            let result = terminal_line(&send);
-            let _ = send.send(result);
-        })?;
-    receive
-        .await
-        .context("Terminal reader closed")?
-        .map_err(Into::into)
-}
-
-/// # Errors
-/// Reports cancellation, EOF, invalid UTF-8 or a failed terminal read.
-#[cfg(unix)]
-fn terminal_line(
-    send: &tokio::sync::oneshot::Sender<std::io::Result<String>>,
-) -> std::io::Result<String> {
-    use nix::poll::{PollFd, PollFlags};
-    use std::os::fd::AsFd;
-    const INPUT_POLL_MS: u16 = 100;
-    let stdin = std::io::stdin();
-    let mut bytes = Vec::new();
-    loop {
-        if send.is_closed() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "Input request cancelled",
-            ));
-        }
-        let mut descriptors = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
-        if nix::poll::poll(&mut descriptors, INPUT_POLL_MS)? == 0 {
-            continue;
-        }
-        if send.is_closed() {
-            continue;
-        }
-        let mut byte = [0];
-        if nix::unistd::read(&stdin, &mut byte)? == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "Terminal input closed",
-            ));
-        }
-        if byte[0] == b'\n' {
-            return String::from_utf8(bytes)
-                .map(|line| line.trim_end_matches('\r').to_owned())
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error));
-        }
-        bytes.push(byte[0]);
-    }
-}
-
-/// # Errors
-/// Reports EOF or a failed terminal read.
-#[cfg(not(unix))]
-fn terminal_line(
-    _send: &tokio::sync::oneshot::Sender<std::io::Result<String>>,
-) -> std::io::Result<String> {
-    let mut line = String::new();
-    if std::io::stdin().read_line(&mut line)? == 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            "Terminal input closed",
-        ));
-    }
-    Ok(line.trim_end_matches(['\r', '\n']).to_owned())
 }
 
 #[cfg(test)]

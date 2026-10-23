@@ -4,6 +4,33 @@ use serde_json::json;
 use super::parse_input;
 
 #[test]
+fn login_completion_requires_connected_readiness() {
+    use bas::service::pb::{AgentCheckStatus, CheckAgentResponse};
+
+    let ready = CheckAgentResponse {
+        status: AgentCheckStatus::Connected.into(),
+        ..Default::default()
+    };
+    assert!(super::finish_login("test-agent", &ready).is_ok());
+
+    for status in [
+        AgentCheckStatus::AuthenticationRequired,
+        AgentCheckStatus::Unspecified,
+    ] {
+        let incomplete = CheckAgentResponse {
+            status: status.into(),
+            ..Default::default()
+        };
+        let error = super::finish_login("test-agent", &incomplete)
+            .expect_err("authentication must not succeed without readiness");
+        assert_eq!(
+            error.to_string(),
+            "Agent setup is incomplete; review its native configuration"
+        );
+    }
+}
+
+#[test]
 fn terminal_authentication_requires_same_machine_ipc() {
     for value in ["local", "unix:///tmp/bas.sock", "pipe://bas-test"] {
         let target = value.parse().expect("valid target");

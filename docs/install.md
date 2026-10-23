@@ -167,6 +167,13 @@ terminal 方法直接在当前终端运行登录；agent 方法通过 ACP `authe
 授权链接；非交互输入会取消表单，不自动打开网站。认证完成后重新检测会话可用性。
 检查只验证 initialize 与 session/new，不发送模型请求；实际对话仍可能遇到模型或网络错误。
 
+BasT 自己显示的表单和 URL 确认在 Windows 使用可中断的 Reedline/Emacs 行编辑，
+不保存输入历史。Enter 提交一行，Ctrl-C 取消；空行 Ctrl-D 或 Ctrl-Z 表示 EOF，
+Ctrl-Z 前已有文字时返回该行。服务取消输入或连接失败后，先等待读取退出并恢复
+控制台模式，再交接下一次输入；进度消息仍实时显示。若读取无法退出或模式恢复失败，
+本进程停止复用 stdin 并报错，不再启动另一个读取者。
+这些键绑定不作用于 Agent 自己启动的登录程序；Unix 仍使用原有终端输入行为。
+
 安装目录、版本记录和 Registry 缓存由 daemon 管理。优先选择当前平台 binary，
 其次使用 npm；npm 安装隔离在后端版本目录，Node 优先复用 daemon 环境中的可用版本，
 缺少时下载经过校验的私有 runtime。Pi 的 npm 安装包含它需要的 Pi 本体。
