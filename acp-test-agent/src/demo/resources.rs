@@ -2,7 +2,6 @@
 
 use std::sync::Mutex;
 
-
 #[derive(Default)]
 pub(crate) struct Resources {
     directory: Mutex<Option<tempfile::TempDir>>,

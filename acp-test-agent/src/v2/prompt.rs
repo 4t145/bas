@@ -604,7 +604,7 @@ fn run_config(
         let mut store = demo.store();
         match store
             .get_mut(session_id.0.as_ref())
-            .map(|session| demo::apply_config_setting(&mut session.config, setting))
+            .map(|session| session.config.apply_setting(setting))
         {
             Err(error) => Err(format!("Config demo failed: {error}")),
             Ok(Err(reason)) => Err(reason),

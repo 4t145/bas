@@ -8,6 +8,8 @@ pub mod commands;
 pub(crate) mod resources;
 pub mod sessions;
 
+#[cfg(test)]
+mod tests;
 
 /// Name advertised in `initialize` and used for `.name(...)` debugging.
 pub const AGENT_NAME: &str = "acp-test-agent";
@@ -200,33 +202,31 @@ pub fn help_text() -> String {
     text
 }
 
-/// Apply the `/config` argument to a session config.
-///
-/// # Errors
-/// Returns a human-readable reason when the setting name or value is not
-/// recognized.
-pub fn apply_config_setting(
-    config: &mut SessionConfig,
-    setting: Option<&str>,
-) -> Result<(), String> {
-    match setting {
-        None | Some("toggle") => {
-            config.thinking = !config.thinking;
-            Ok(())
-        }
-        Some(value @ ("on" | "off")) => {
-            config.thinking = value == "on";
-            Ok(())
-        }
-        Some(value) => {
-            let value = value.strip_prefix("model=").unwrap_or(value);
-            if matches!(value, MODEL_FAST | MODEL_DEEP) {
-                config.model = value.to_string();
+impl SessionConfig {
+    /// Apply the `/config` argument.
+    ///
+    /// # Errors
+    /// Returns a human-readable reason when the setting name or value is not recognized.
+    pub fn apply_setting(&mut self, setting: Option<&str>) -> Result<(), String> {
+        match setting {
+            None | Some("toggle") => {
+                self.thinking = !self.thinking;
                 Ok(())
-            } else {
-                Err(format!(
-                    "`{value}` is not a config value; use on, off, model=fast, or model=deep"
-                ))
+            }
+            Some(value @ ("on" | "off")) => {
+                self.thinking = value == "on";
+                Ok(())
+            }
+            Some(value) => {
+                let value = value.strip_prefix("model=").unwrap_or(value);
+                if matches!(value, MODEL_FAST | MODEL_DEEP) {
+                    self.model = value.to_string();
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "`{value}` is not a config value; use on, off, model=fast, or model=deep"
+                    ))
+                }
             }
         }
     }

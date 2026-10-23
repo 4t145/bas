@@ -1,4 +1,4 @@
-use super::{Command, DEFAULT_PLAN_MILLIS, DEFAULT_SLEEP_MILLIS, StopReason, parse};
+use super::{Command, parse};
 
 #[test]
 fn invalid_arguments_are_reported_instead_of_silently_defaulting() {

@@ -43,7 +43,7 @@ pub struct Page<'a, Update> {
 }
 
 /// Stored state for one session.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Session<Update> {
     /// Protocol-facing session id.
     pub id: String,
@@ -251,7 +251,8 @@ impl<Update> Store<Update> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnknownSession`] when the id is not registered.
+    /// Returns [`Error::UnknownSession`] when the id is not registered, or
+    /// [`Error::BusySession`] while a prompt is running.
     pub fn delete(&mut self, id: &str) -> Result<(), Error> {
         let index = self
             .sessions
@@ -269,8 +270,8 @@ impl<Update> Store<Update> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnknownSession`] or [`Error::CwdMismatch`] when the
-    /// session cannot be resumed as requested.
+    /// Returns [`Error::UnknownSession`], [`Error::BusySession`], or
+    /// [`Error::CwdMismatch`] when the session cannot be resumed as requested.
     pub fn resume(
         &mut self,
         id: &str,
@@ -298,7 +299,8 @@ impl<Update> Store<Update> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnknownSession`] when the source is not registered.
+    /// Returns [`Error::UnknownSession`] when the source is not registered, or
+    /// [`Error::BusySession`] while its prompt is running.
     pub fn fork(
         &mut self,
         source_id: &str,
@@ -309,12 +311,7 @@ impl<Update> Store<Update> {
     where
         Update: Clone,
     {
-        let source = self
-            .sessions
-            .iter()
-            .find(|session| session.id == source_id)
-            .cloned()
-            .ok_or_else(|| Error::UnknownSession(source_id.to_string()))?;
+        let source = self.get(source_id)?.clone();
         if source.busy {
             return Err(Error::BusySession(source_id.to_string()));
         }
@@ -335,28 +332,6 @@ impl<Update> Store<Update> {
             updated_at: now(),
         });
         Ok(id)
-    }
-}
-
-impl<Update> Clone for Session<Update>
-where
-    Update: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id.clone(),
-            title: self.title.clone(),
-            cwd: self.cwd.clone(),
-            additional_directories: self.additional_directories.clone(),
-            mcp_servers: self.mcp_servers,
-            mode: self.mode.clone(),
-            config: self.config.clone(),
-            active: self.active,
-            busy: self.busy,
-            cancelled: self.cancelled,
-            history: self.history.clone(),
-            updated_at: self.updated_at.clone(),
-        }
     }
 }
 

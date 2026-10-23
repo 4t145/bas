@@ -2,7 +2,7 @@
 
 mod support;
 
-use agent_client_protocol::schema::{ProtocolVersion, v1, v2};
+use agent_client_protocol::schema::{ProtocolVersion, v2};
 use agent_client_protocol::{Client, Error};
 
 use support::agent_with_args;
