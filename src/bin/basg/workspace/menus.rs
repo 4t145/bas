@@ -41,13 +41,13 @@ struct MenuTrigger {
 
 impl Render for MenuSurface {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        gds_uim::el! {
-            #div {
-                p: $px(SHADOW_PADDING);
+        el! {
+            .div {
+                p: SHADOW_PADDING.px;
                 on_action: $cx.listener(Self::on_settings);
                 on_action: $cx.listener(Self::on_quit);
-                on_prepaint: $Self::resize_to_content;
-            } [ $self.content.clone() ]
+                on_prepaint: Self::resize_to_content;
+            } [~$(self.content)]
         }
     }
 }
@@ -105,10 +105,10 @@ impl Workspace {
             .as_ref()
             .filter(|menu| !self.window.compact && menu.window.is_none())?;
         Some(
-            deferred(gds_uim::el! { #anchored {
+            deferred(el! { .anchored {
                 position: $menu.trigger.origin;
                 snap_to_window_with_margin: 8.0.px;
-            } [ $menu.content.clone() ] })
+            } [~$(menu.content)] })
             .with_priority(gpui_kit::base::POPUP_PRIORITY)
             .into_any_element(),
         )
@@ -123,8 +123,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if !self.window.compact {
-            return gds_uim::el! { $button {
-                dropdown_menu: $move |menu, window, cx| crate::ui::menu(build(menu, window, cx));
+            return el! { button {
+                dropdown_menu: move (menu, window, cx) => (menu, window, cx).build.ui::menu;
             } }
             .into_any_element();
         }
@@ -137,9 +137,9 @@ impl Workspace {
             build: Rc::new(build),
         };
         let keyboard_trigger = trigger.clone();
-        let trigger = gds_uim::el! {
-            $button {
-                on_mouse_down: $MouseButton::Left, $cx.listener(move |this, _, window, cx| {
+        let trigger = el! {
+            button {
+                on_mouse_down: MouseButton::Left, $cx.listener(move |this, _, window, cx| {
                     this.on_menu_trigger(&trigger, window, cx);
                 });
                 on_key_down: $cx.listener(move |this, event: &gpui_kit::KeyDownEvent, window, cx| {
@@ -147,10 +147,10 @@ impl Workspace {
                 });
             }
         };
-        gds_uim::el! {
-            #div { relative; flex; flex_shrink_0; } [
-                $trigger,
-                #canvas($move |bounds, _, _| measured.set(bounds), $|_, _, _, _| {}) {
+        el! {
+            .div { relative; flex; flex_shrink_0; } [
+                trigger,
+                (move (bounds, _, _) => $measured.set(bounds), $|_, _, _, _| {}).canvas {
                     absolute; size_full;
                 }
             ]
@@ -230,7 +230,7 @@ impl Workspace {
         );
         let previous_focus = window.focused(cx);
         let content = PopupMenu::build(window, cx, |menu, window, cx| {
-            gds_uim::el! { $crate::ui::menu(build(menu, window, cx)) {
+            el! { (menu, window, cx).build.ui::menu {
                 min_w: $menu_size.width; max_w: $menu_size.width; max_h: $menu_size.height;
             } }
         });
@@ -241,8 +241,8 @@ impl Workspace {
                 menu.focus_handle(cx).focus(window, cx);
                 let surface = cx.new(|_| MenuSurface { content: menu });
                 cx.new(|cx| {
-                    gds_uim::el! { #theme::window_root(surface, window, cx) {
-                        bg: $gpui_kit::transparent_black();
+                    el! { (surface, window, cx).theme::window_root {
+                        bg: .gpui_kit::transparent_black;
                         bordered: false; window_shadow_size: 0.0.px;
                     } }
                 })

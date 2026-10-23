@@ -257,12 +257,12 @@ impl Workspace {
 
     pub(super) fn immediate_send_button(&self, cx: &mut Context<Self>) -> Button {
         el! {
-            Button("send-immediately") {
+            "send-immediately".Button::new {
                 ghost; xsmall;
                 icon: IconName::ArrowUp;
-                tooltip: $crate::i18n::tr!("queue-send-now");
+                tooltip: tr!("queue-send-now");
                 disabled: $!self.can_send(cx);
-                on_click: $cx.listener(Self::on_queue_send_immediately);
+                on_click: (cx, Self::on_queue_send_immediately).Context::listener;
             }
         }
     }
@@ -297,21 +297,21 @@ impl Workspace {
         let editing_active = outbox.editing_active();
         let busy = self.sending(session) || self.sessions.pending.cancelling.contains(&session);
         let send_ready = self.queue_send_ready(session) && !editing_active;
-        let unknown = outbox.unknown().is_some().then(|| {
-            el! {
-                #div { flex; flex_wrap; items_center; gap_2; px_3; py_1; } [
-                    #caption($crate::i18n::tr!("submission-unknown"), cx),
-                    Button("query-submission") {
+        let unknown = el! {
+            @if (outbox.unknown().is_some())
+                .div { flex; flex_wrap; items_center; gap_2; px_3; py_1; } [
+                    (tr!("submission-unknown"), cx).caption,
+                    "query-submission".Button::new {
                         ghost; xsmall;
-                        label: $crate::i18n::tr!("submission-query");
+                        label: tr!("submission-query");
                         disabled: $outbox.resolving();
                         on_click: $cx.listener(move |this, _, _, cx| {
                             this.resolve_submission(session, false, cx)
                         });
                     },
-                    Button("retry-submission") {
+                    "retry-submission".Button::new {
                         ghost; xsmall;
-                        label: $crate::i18n::tr!("submission-retry");
+                        label: tr!("submission-retry");
                         disabled: $outbox.resolving()
                             || self.archive_blocked(session)
                             || !self.sessions.healthy(session);
@@ -319,38 +319,37 @@ impl Workspace {
                             this.resolve_submission(session, true, cx)
                         });
                     },
-                ]
-            }
-        });
-        let count = if outbox.paused() {
-            crate::i18n::tr!("queue-paused-count", count = outbox.len())
-        } else {
-            crate::i18n::tr!("queue-count", count = outbox.len())
+                ].Some
+            @else
+                None
+            @end
         };
-        let resume = (outbox.paused() && !editing_active).then(|| {
-            el! {
-                Button("resume-pending-messages") {
-                    ghost; xsmall;
-                    label: $crate::i18n::tr!("queue-resume");
-                    disabled: $!send_ready;
-                    on_click: $cx.listener(move |this, _, _, cx| this.resume_queue(session, cx));
-                }
-            }
-        });
+        let count = if outbox.paused() {
+            tr!("queue-paused-count", count = outbox.len())
+        } else {
+            tr!("queue-count", count = outbox.len())
+        };
         let header = el! {
-            #div { flex; items_center; gap_2; px_3; py_1; } [
-                #caption(count, cx),
-                #div { flex_1; },
-                ..resume,
+            .div { flex; items_center; gap_2; px_3; py_1; } [
+                (count, cx).caption,
+                .div { flex_1; },
+                @if (outbox.paused() && !editing_active)
+                    "resume-pending-messages".Button::new {
+                        ghost; xsmall;
+                        label: tr!("queue-resume");
+                        disabled: $!send_ready;
+                        on_click: $cx.listener(move |this, _, _, cx| this.resume_queue(session, cx));
+                    },
+                @end,
             ]
         };
         let rows = outbox.iter().enumerate().map(|(index, draft)| {
             let edit_hint = if editing == Some(index) {
-                crate::i18n::tr!("queue-editing")
+                tr!("queue-editing")
             } else {
-                crate::i18n::tr!("action-edit")
+                tr!("action-edit")
             };
-            let edit = crate::ui::icon_button(
+            let edit = ui::icon_button(
                 SharedString::from(format!("edit-pending-message-{index}")),
                 IconName::Pencil,
             )
@@ -360,8 +359,8 @@ impl Workspace {
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.edit_queue_draft(session, index, window, cx)
             }));
-            let withdraw_hint = crate::i18n::tr!("queue-withdraw");
-            let withdraw = crate::ui::icon_button(
+            let withdraw_hint = tr!("queue-withdraw");
+            let withdraw = ui::icon_button(
                 SharedString::from(format!("withdraw-pending-message-{index}")),
                 IconName::ArrowLeft,
             )
@@ -372,11 +371,11 @@ impl Workspace {
                 this.withdraw_queue_draft(session, index, window, cx)
             }));
             let send_hint = if self.working() {
-                crate::i18n::tr!("queue-interrupt")
+                tr!("queue-interrupt")
             } else {
-                crate::i18n::tr!("action-send")
+                tr!("action-send")
             };
-            let send = crate::ui::icon_button(
+            let send = ui::icon_button(
                 SharedString::from(format!("send-pending-message-{index}")),
                 IconName::Send,
             )
@@ -387,47 +386,47 @@ impl Workspace {
                 this.send_queue_draft_immediately(session, index, cx)
             }));
             el! {
-                #div {
-                    id: $SharedString::from(format!("pending-message-{index}"));
+                .div {
+                    # format!("pending-message-{index}").SharedString::from;
                     test_support;
                     flex; items_center; gap_2; px_3; py_1;
-                    @$editing == Some(index) => { bg: $cx.theme().accent; };
+                    @if (editing == Some(index)) bg: $cx.theme().accent; @end;
                 } [
-                    #div {
+                    .div {
                         flex_1; min_w_0;
-                        text_size: crate::ui::SMALL;
+                        text_size: ui::SMALL;
                         truncate;
-                    } [$queue_summary(draft, QUEUE_PREVIEW_CHARACTERS)],
-                    $edit,
-                    $withdraw,
-                    $send,
+                    } [(draft, QUEUE_PREVIEW_CHARACTERS).queue_summary],
+                    edit,
+                    withdraw,
+                    send,
                 ]
             }
         });
         let list = el! {
-            #div {
-                id: "pending-messages-list";
+            .div {
+                # "pending-messages-list";
                 max_h: QUEUE_PANEL_MAX_HEIGHT.px;
                 overflow_y_scroll;
             } [..rows]
         };
         Some(
             el! {
-                #div {
-                    id: "pending-messages-panel";
+                .div {
+                    # "pending-messages-panel";
                     test_support;
                     flex_shrink_0;
-                    @$self.window.compact => { px_3; };
+                    @if (self.window.compact) px_3; @end;
                     pb_2;
                 } [
-                    #chat::content_panel {
+                    .chat::content_panel {
                         rounded_md; border_1;
                         border_color: $cx.theme().border;
                         bg: $cx.theme().muted.opacity(0.35);
                     } [
                         ..unknown,
-                        $header,
-                        $list,
+                        header,
+                        list,
                     ],
                 ]
             }
@@ -439,9 +438,9 @@ impl Workspace {
         let session = self.selected.id?;
         let outbox = self.sessions.outboxes.get(&session)?;
         outbox.front()?;
-        let hint = crate::i18n::tr!("queue-hint");
+        let hint = tr!("queue-hint");
         let button = el! {
-            Button("pending-messages") {
+            "pending-messages".Button::new {
                 disabled: $self.sending(session) || outbox.editing().is_some();
                 ghost; xsmall;
                 icon: IconName::Clock;
@@ -451,7 +450,7 @@ impl Workspace {
                 });
             }
         };
-        Some(crate::ui::tooltip::bounded("pending-messages-hint", button, hint).into_any_element())
+        Some(ui::tooltip::bounded("pending-messages-hint", button, hint).into_any_element())
     }
 }
 

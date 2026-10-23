@@ -1,5 +1,4 @@
 use super::*;
-use gds_uim::el;
 
 impl Workspace {
     pub(super) fn archive_blocked(&self, session: SessionId) -> bool {
@@ -70,11 +69,11 @@ impl Workspace {
             crate::i18n::tr!("session-archive")
         };
         el! {
-            #layout::icon_button($SharedString::from(format!("{location}-{id}")), icon) {
+            (format!("{location}-{id}").SharedString::from, icon).icon_button {
                 accessibility_label: label;
                 hoverable_tooltip: $move |window, cx| {
                     let hint = shortcuts::hint(label, &shortcuts::ArchiveThread, window);
-                    crate::ui::tooltip::view(hint, window, cx)
+                    ui::tooltip::view(hint, window, cx)
                 };
                 disabled: $!self.backend.connected
                     || self.sessions.pending.archiving.contains(&id)

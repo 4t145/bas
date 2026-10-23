@@ -2,7 +2,10 @@
 
 use std::collections::HashSet;
 
-use crate::ui::Button;
+use crate::{
+    i18n::tr,
+    ui::{self, Button},
+};
 use gds_uim::el;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::{
@@ -48,19 +51,19 @@ fn navigation_button(
     let title = title.into();
     // Button's label container centers its contents independently of the root.
     el! {
-        Button($id.clone()) {
+        (~id).Button::new {
             ghost;
             small;
-            accessibility_label: $title.clone();
+            accessibility_label: ~title;
         } [
-            #div {
-                id: $format!("{id}-text");
+            .div {
+                # format!("{id}-text");
                 test_support;
                 flex_1;
                 min_w_0;
                 text_left;
                 truncate;
-            } [$title],
+            } [title],
         ]
     }
 }
@@ -447,41 +450,46 @@ impl Settings {
             }
         };
         el! {
-            #div {
-                id: "settings-header"; test_support;
+            .div {
+                # "settings-header"; test_support;
                 px_5; py_3; flex_shrink_0; flex; flex_col; gap_2;
                 border_b_1; border_color: $cx.theme().border;
             } [
-                #div { flex; items_center; justify_between; gap_3; } [
-                    #div {
-                        id: $context_id; test_support;
+                .div { flex; items_center; justify_between; gap_3; } [
+                    .div {
+                        # context_id; test_support;
                         role: gpui_kit::Role::Label;
-                        aria_label: $context.clone();
+                        aria_label: ~context;
                         flex_1; min_w_0; truncate;
-                    } [$context],
-                    ..$bool::then(self.category.scope() == Scope::Backend, || self.backend_selector(cx)),
-                    #div {
-                        id: "settings-actions"; test_support;
+                    } [context],
+                    @if (self.category.scope() == Scope::Backend)
+                        $self.backend_selector(cx),
+                    @end,
+                    .div {
+                        # "settings-actions"; test_support;
                         flex; items_center; gap_2; flex_shrink_0;
                     } [
-                        Button("settings-edit-file") {
+                        ("settings-edit-file").Button::new {
                             ghost; small; flex_shrink_0;
-                            label: $crate::i18n::tr!("settings-edit-file");
+                            label: tr!("settings-edit-file");
                             disabled: $!self.can_edit_file(cx);
-                            tooltip: $file_hint;
-                            on_click: $cx.listener(Self::on_edit_file);
+                            tooltip: file_hint;
+                            on_click: (cx, Self::on_edit_file).Context::listener;
                         },
                     ],
                 ],
-                #div {
-                    id: "settings-scope-description"; test_support;
-                    text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                .div {
+                    # "settings-scope-description"; test_support;
+                    text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
                 } [
-                    $(match self.category {
-                        Category::Appearance | Category::Sessions => crate::i18n::tr!("settings-frontend-description").to_owned(),
-                        Category::Connections => crate::i18n::tr!("connections-description").to_owned(),
-                        Category::Agents | Category::SessionManagement => crate::i18n::tr!("connections-switch-description").to_owned(),
-                    }),
+                    @match (self.category)
+                    @case (Category::Appearance | Category::Sessions)
+                        tr!("settings-frontend-description") { to_owned },
+                    @case (Category::Connections)
+                        tr!("connections-description") { to_owned },
+                    @case (Category::Agents | Category::SessionManagement)
+                        tr!("connections-switch-description") { to_owned },
+                    @end,
                 ],
             ]
         }
@@ -509,18 +517,20 @@ impl Settings {
             |options| format!("{label} · {}", presentation::tooltip(&options.target)),
         );
         let owner = cx.entity().downgrade();
-        let button = el! { Button("settings-backend-selector") {
-            small; ghost; min_w_0; max_w: $px(200.);
-            accessibility_label: $hint.clone();
+        let button = el! { ("settings-backend-selector").Button::new {
+            small; ghost; min_w_0; max_w: 200.0.px;
+            accessibility_label: ~hint;
             tooltip: hint;
         } [
-            ..$active.as_ref().map(|options| presentation::icon(&options.target).size(px(crate::ui::ICON))),
-            #div { min_w_0; truncate; } [$label],
-            Icon(IconName::ChevronDown) { xsmall; },
+            @if (let Some(options) = active.as_ref())
+                ($&options.target).presentation::icon { size: ui::ICON.px },
+            @end,
+            .div { min_w_0; truncate; } [label],
+            (IconName::ChevronDown).Icon::new { xsmall; },
         ] };
-        el! { $button {
+        el! { button {
             dropdown_menu: $move |menu, _, _| {
-                let mut menu = crate::ui::menu(menu).check_side(gpui_kit::component::Side::Right);
+                let mut menu = ui::menu(menu).check_side(gpui_kit::component::Side::Right);
                 for profile in &profiles {
                     let owner = owner.clone();
                     let id = profile.id.clone();
@@ -531,7 +541,7 @@ impl Settings {
                         }));
                 }
                 let owner = owner.clone();
-                menu.separator().item(PopupMenuItem::new(crate::i18n::tr!("connections-manage"))
+                menu.separator().item(PopupMenuItem::new(tr!("connections-manage"))
                     .on_click(move |_, window, cx| {
                         let _ = owner.update(cx, |this, cx| this.select_category(Category::Connections, window, cx));
                     }))
@@ -592,7 +602,7 @@ impl Settings {
                 .into_iter()
                 .map(|item| {
                     el! {
-                        #navigation_button($item.id(), $item.title()) {
+                        ($item.id(), $item.title()).navigation_button {
                             selected: $(selected && !searching && self.appearance_group == Some(item));
                             on_click: $cx.listener(move |this, _, window, cx| {
                                 this.select_appearance(Some(item), window, cx)
@@ -610,7 +620,7 @@ impl Settings {
                 .enumerate()
                 .map(|(index, section)| {
                     el! {
-                        #navigation_button($section.id, $section.title) {
+                        ($section.id, $section.title).navigation_button {
                             selected: $(selected && !searching && self.agent_section == Some(index));
                             on_click: $cx.listener(move |this, _, window, cx| {
                                 this.select_agents(Some(index), window, cx)
@@ -641,8 +651,8 @@ impl Settings {
             category,
             Category::Sessions | Category::Connections | Category::SessionManagement
         ) {
-            return el! { #div { pl: crate::ui::COMPACT_CONTROL.px; flex; } [
-                #navigation_button($category.id(), $category.title()) {
+            return el! { .div { pl: ui::COMPACT_CONTROL.px; flex; } [
+                ($category.id(), $category.title()).navigation_button {
                     flex_1; selected: selected;
                     on_click: $cx.listener(move |this, _, window, cx| {
                         this.select_category(category, window, cx)
@@ -652,32 +662,32 @@ impl Settings {
             .into_any_element();
         }
         el! {
-            #div {
+            .div {
                 flex;
                 flex_col;
                 gap_1;
             } [
-                #div {
+                .div {
                     flex;
                     items_center;
                 } [
-                    Button($format!("{}-expand", category.id())) {
+                    (format!("{}-expand", category.id())).Button::new {
                         ghost;
                         xsmall;
-                        w: crate::ui::COMPACT_CONTROL.px;
-                        h: crate::ui::COMPACT_CONTROL.px;
+                        w: ui::COMPACT_CONTROL.px;
+                        h: ui::COMPACT_CONTROL.px;
                         p_0;
-                        icon: $if expanded {
+                        icon: @if (expanded)
                             IconName::ChevronDown
-                        } else {
+                        @else
                             IconName::ChevronRight
-                        };
-                        accessibility_label: $format!(
+                        @end;
+                        accessibility_label: format!(
                             "{}{}",
                             if expanded {
-                                crate::i18n::tr!("action-collapse")
+                                tr!("action-collapse")
                             } else {
-                                crate::i18n::tr!("action-expand")
+                                tr!("action-expand")
                             },
                             category.title()
                         );
@@ -685,7 +695,7 @@ impl Settings {
                             this.toggle_category(category, cx)
                         });
                     },
-                    #navigation_button($category.id(), $category.title()) {
+                    ($category.id(), $category.title()).navigation_button {
                         flex_1;
                         selected: $(selected && (!expanded || !pointing_at_section || searching));
                         on_click: $cx.listener(move |this, _, window, cx| {
@@ -693,9 +703,8 @@ impl Settings {
                         });
                     },
                 ],
-            ].gds_uim::m! {
-                @expanded: $|navigation| navigation.child(el! {
-                    #div {
+                @if (expanded)
+                    .div {
                         ml_3;
                         pl_5;
                         border_l_1;
@@ -703,9 +712,9 @@ impl Settings {
                         flex;
                         flex_col;
                         gap_1;
-                    } [..sections]
-                });
-            }
+                    } [..sections],
+                @end,
+            ]
         }
         .into_any_element()
     }
@@ -731,15 +740,15 @@ impl Render for Settings {
             self.connection_message.clone()
         };
         el! {
-            #div {
-                id: "settings";
+            .div {
+                # "settings";
                 track_focus: $&self.focus;
                 size_full;
                 flex;
                 bg: $cx.theme().background;
                 text_color: $cx.theme().foreground;
             } [
-                #div {
+                .div {
                     w: 210.0.px;
                     flex_shrink_0;
                     p_3;
@@ -750,12 +759,12 @@ impl Render for Settings {
                     border_r_1;
                     border_color: $cx.theme().border;
                 } [
-                    #div {
-                        id: "settings-search";
+                    .div {
+                        # "settings-search";
                         test_support;
-                    } [$crate::ui::input::placeholder(&self.search, Input::new(&self.search).small())],
-                    #div {
-                        id: "settings-navigation";
+                    } [$ui::input::placeholder(&self.search, Input::new(&self.search).small())],
+                    .div {
+                        # "settings-navigation";
                         test_support;
                         flex_1;
                         min_h_0;
@@ -764,38 +773,43 @@ impl Render for Settings {
                         flex_col;
                         gap_2;
                     } [
-                        ..$Scope::ALL
-                            .into_iter()
-                            .map(|scope| el! {
-                                #div {
-                                    id: $(if scope == Scope::Frontend { "settings-frontend-group" } else { "settings-backend-group" });
+                        ..Scope::ALL {
+                            into_iter;
+                            map: scope =>
+                                .div {
+                                    # @if (scope == Scope::Frontend) "settings-frontend-group" @else "settings-backend-group" @end;
                                     test_support; flex; flex_col; gap_1;
                                 } [
-                                    #div {
-                                        mt_2; text_size: $crate::ui::SMALL;
+                                    .div {
+                                        mt_2; text_size: ui::SMALL;
                                         text_color: $cx.theme().muted_foreground;
                                     } [$scope.title()],
                                     ..$scope.categories().iter().map(|category| self.category_navigation(*category, cx)),
                                 ]
-                            }),
+                        },
                     ],
-                    $crate::settings::feedback("settings-save-status", feedback, cx.theme().muted_foreground).compact(),
+                    ("settings-save-status", feedback, $cx.theme().muted_foreground).self::feedback { compact },
                 ],
-                #div {
+                .div {
                     flex_1;
                     min_w_0;
                     h_full;
                     flex; flex_col;
                 } [
                     $self.header(cx),
-                    #div { flex_1; min_h_0; } [
-                        $(match self.category {
-                            Category::Appearance => self.appearance.clone().into_any_element(),
-                            Category::Sessions => self.appearance.update(cx, |page, cx| page.render_sessions(window, cx)),
-                            Category::Agents => self.agents.clone().into_any_element(),
-                            Category::SessionManagement => self.acp.clone().into_any_element(),
-                            Category::Connections => self.connections.clone().into_any_element(),
-                        }),
+                    .div { flex_1; min_h_0; } [
+                        @match (self.category)
+                        @case (Category::Appearance)
+                            ~$(self.appearance),
+                        @case (Category::Sessions)
+                            $self.appearance.update(cx, |page, cx| page.render_sessions(window, cx)),
+                        @case (Category::Agents)
+                            ~$(self.agents),
+                        @case (Category::SessionManagement)
+                            ~$(self.acp),
+                        @case (Category::Connections)
+                            ~$(self.connections),
+                        @end,
                     ],
                 ],
             ]

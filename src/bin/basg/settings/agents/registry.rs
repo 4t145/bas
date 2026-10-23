@@ -2,8 +2,13 @@
 
 use super::{Agents, item};
 use crate::agents::catalog::Updates;
-use crate::ui::Button;
+use crate::{
+    i18n::tr,
+    settings,
+    ui::{self, Button},
+};
 use bas::management::{Catalog, Entry, Source, Status};
+use gds_uim::el;
 use gpui_kit::{
     App, Context, Hsla, IntoElement, ParentElement, Styled, Task, TestSupportExt, div, prelude::*,
 };
@@ -374,8 +379,8 @@ impl Agents {
             .is_some_and(|version| !entry.version.is_empty() && version != &entry.version);
         let action = if busy {
             let id = entry.id.clone();
-            Some(gds_uim::el! {
-                #item::action($format!("agents-install-cancel-{}", entry.id), $IconName::X, $crate::i18n::tr!("agent-cancel-action")) {
+            Some(el! {
+                (format!("agents-install-cancel-{}", entry.id), IconName::X, tr!("agent-cancel-action")).item::action {
                     on_click: $cx.listener(move |this, _, _, cx| this.cancel_install(&id, cx));
                 }
             }.into_any_element())
@@ -385,32 +390,36 @@ impl Agents {
             let id = entry.id.clone();
             let disabled =
                 !self.managed_allowed(cx) || any_busy || entry.status == Status::Unsupported;
-            Some(gds_uim::el! {
-                #item::action($format!("agents-install-{}", entry.id), $(if update { IconName::CircleArrowUp } else { IconName::Download }), $(if update {
-                        crate::i18n::tr!("agent-update-action")
-                    } else {
-                        crate::i18n::tr!("agent-install-action")
-                    })) {
-                    disabled: $disabled;
+            Some(el! {
+                (format!("agents-install-{}", entry.id),
+                    @if (update) IconName::CircleArrowUp @else IconName::Download @end,
+                    @if (update) tr!("agent-update-action") @else tr!("agent-install-action") @end
+                ).item::action {
+                    disabled: disabled;
                     on_click: $cx.listener(move |this, _, _, cx| this.install(id.clone(), cx));
                 }
             }.into_any_element())
         } else if entry.spec.is_some() {
             None
         } else {
-            Some(gds_uim::el! {
-                #item::action($format!("agents-registry-unavailable-{}", entry.id), $IconName::CircleAlert, $status_label(entry)) {
+            Some(el! {
+                (format!("agents-registry-unavailable-{}", entry.id), IconName::CircleAlert, (entry).status_label).item::action {
                     disabled: true;
                 }
             }.into_any_element())
         };
-        gds_uim::el! {
-            #div { flex; items_center; gap_1; flex_shrink_0; } [
-                ..$entry.spec.as_ref().filter(|spec| !busy && spec.kind == bas::config::agent::Kind::Acp)
-                    .map(|spec| self.check_button(format!("agents-registry-check-{}", entry.id), spec, cx)),
+        el! {
+            .div { flex; items_center; gap_1; flex_shrink_0; } [
+                @if (let Some(spec) = entry.spec.as_ref().filter(|spec| !busy && spec.kind == bas::config::agent::Kind::Acp))
+                    $self.check_button(format!("agents-registry-check-{}", entry.id), spec, cx),
+                @end,
                 ..action,
-                ..$entry.spec.as_ref().filter(|_| !busy).map(|spec| self.account_actions(spec, cx)),
-                ..$bool::then(!busy && (entry.installed_version.is_some() || matches!(entry.status, Status::Installed | Status::Missing)), || self.remove_button(&entry.id, cx)),
+                @if (let Some(spec) = entry.spec.as_ref().filter(|_| !busy))
+                    $self.account_actions(spec, cx),
+                @end,
+                @if (!busy && (entry.installed_version.is_some() || matches!(entry.status, Status::Installed | Status::Missing)))
+                    $self.remove_button(&entry.id, cx),
+                @end,
             ]
         }.into_any_element()
     }
@@ -460,61 +469,61 @@ impl Agents {
             actions: self.registry_actions(entry, cx),
             content: None,
         };
-        gds_uim::el! {
-            #div {
-                id: $format!("agents-registry-{}", entry.id); test_support;
+        el! {
+            .div {
+                # format!("agents-registry-{}", entry.id); test_support;
                 w_full; min_w_0;
-            } [$card]
+            } [card]
         }
         .into_any_element()
     }
 
     pub(super) fn registry_header(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let palette = Palette::current(cx);
-        let title = gds_uim::el! {
-            #div { flex; items_center; justify_between; gap_2; } [
-                #div { flex; items_center; gap_3; } [
-                    #div { text_size: $crate::ui::TITLE; } [ $crate::i18n::tr!("catalog-title") ],
-                    Button("agents-registry-learn-more") {
-                        ghost; xsmall; label: $crate::i18n::tr!("agent-source-registry");
-                        text_color: $palette.accent; icon: $IconName::ExternalLink;
-                        on_click: $cx.listener(Self::on_registry_learn_more);
+        let title = el! {
+            .div { flex; items_center; justify_between; gap_2; } [
+                .div { flex; items_center; gap_3; } [
+                    .div { text_size: ui::TITLE; } [tr!("catalog-title")],
+                    ("agents-registry-learn-more").Button::new {
+                        ghost; xsmall; label: tr!("agent-source-registry");
+                        text_color: $palette.accent; icon: IconName::ExternalLink;
+                        on_click: (cx, Self::on_registry_learn_more).Context::listener;
                     },
                 ],
-                Button("agents-add-custom") {
-                    small; icon: IconName::Plus; label: $crate::i18n::tr!("agent-add-custom");
+                ("agents-add-custom").Button::new {
+                    small; icon: IconName::Plus; label: tr!("agent-add-custom");
                     disabled: $(self.document.is_none() || !self.registry.editable() || self.dirty(cx));
-                    on_click: $cx.listener(Self::on_add_custom);
+                    on_click: (cx, Self::on_add_custom).Context::listener;
                 },
             ]
         };
-        let toolbar = gds_uim::el! {
-            #div { flex; items_center; justify_end; gap_3; } [
-                Button("agents-registry-refresh") {
-                    ghost; xsmall; icon: $IconName::RefreshCw;
-                    label: $(if self.registry.loading() {
-                        crate::i18n::tr!("catalog-refreshing")
-                    } else {
-                        crate::i18n::tr!("catalog-refresh")
-                    });
+        let toolbar = el! {
+            .div { flex; items_center; justify_end; gap_3; } [
+                ("agents-registry-refresh").Button::new {
+                    ghost; xsmall; icon: IconName::RefreshCw;
+                    label: @if (self.registry.loading())
+                        tr!("catalog-refreshing")
+                    @else
+                        tr!("catalog-refresh")
+                    @end;
                     disabled: $self.registry.loading();
-                    on_click: $cx.listener(Self::on_refresh_registry);
+                    on_click: (cx, Self::on_refresh_registry).Context::listener;
                 },
             ]
         };
-        let search_icon = gds_uim::el! { Icon($IconName::Search) { small; } };
-        gds_uim::el! {
-            #div { flex; flex_col; gap_3; } [
-                $title,
-                #div {
-                    id: "agents-registry-search"; test_support; w_full; p_1; bg: $palette.card;
+        let search_icon = el! { (IconName::Search).Icon::new { small; } };
+        el! {
+            .div { flex; flex_col; gap_3; } [
+                title,
+                .div {
+                    # "agents-registry-search"; test_support; w_full; p_1; bg: $palette.card;
                     border_1; border_color: $palette.border; rounded_md;
                 } [
-                    $crate::ui::input::placeholder(&self.registry_search,
+                    $ui::input::placeholder(&self.registry_search,
                         Input::new(&self.registry_search).small().appearance(false).cleanable(true)
-                            .prefix(search_icon).aria_label(crate::i18n::tr!("agent-search"))),
+                            .prefix(search_icon).aria_label(tr!("agent-search"))),
                 ],
-                $toolbar,
+                toolbar,
             ]
         }
         .into_any_element()
@@ -566,22 +575,25 @@ impl Agents {
             .catalog
             .as_ref()
             .and_then(|catalog| catalog.warning.as_ref());
-        gds_uim::el! {
-            #div { id: "agents-registry"; test_support; w_full; min_w_0; flex; flex_col; gap_2; } [
-                ..$warning.map(|warning| crate::settings::feedback(
-                    "agents-registry-warning", warning.clone(), cx.theme().muted_foreground,
-                )),
-                ..$entries.is_empty().then(|| gds_uim::el! {
-                    #div { py_4; } [
-                        $crate::settings::feedback("agents-registry-status", if self.registry.loading() {
-                            crate::i18n::tr!("catalog-loading")
-                        } else if self.registry.catalog.is_none() {
-                            crate::i18n::tr!("catalog-connect")
-                        } else {
-                            crate::i18n::tr!("catalog-no-results")
-                        }, cx.theme().muted_foreground)
-                    ]
-                }),
+        el! {
+            .div { # "agents-registry"; test_support; w_full; min_w_0; flex; flex_col; gap_2; } [
+                @if (let Some(warning) = warning)
+                    ("agents-registry-warning", ~warning, $cx.theme().muted_foreground).settings::feedback,
+                @end,
+                @if (entries.is_empty())
+                    .div { py_4; } [
+                        ("agents-registry-status",
+                            @if (self.registry.loading())
+                                tr!("catalog-loading")
+                            @else if (self.registry.catalog.is_none())
+                                tr!("catalog-connect")
+                            @else
+                                tr!("catalog-no-results")
+                            @end,
+                            $cx.theme().muted_foreground
+                        ).settings::feedback,
+                    ],
+                @end,
                 ..$entries.into_iter().map(|entry| self.registry_card(entry, cx)),
             ]
         }

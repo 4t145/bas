@@ -1,6 +1,7 @@
 use gpui_kit::{Focusable, KeyDownEvent};
 
 use super::*;
+use crate::ui::input::placeholder;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum Target {
@@ -247,11 +248,11 @@ impl Workspace {
 
     pub(super) fn render_title_editor(&self, cx: &mut Context<Self>) -> AnyElement {
         let input = self.renaming.input.clone();
-        gds_uim::el! {
-            #div {
-                id: "title-editor"; flex_1; min_w_0; w_full;
-                on_click: $|_, _, cx| cx.stop_propagation();
-                on_mouse_down: gpui_kit::MouseButton::Right, $|_, _, cx| cx.stop_propagation();
+        el! {
+            .div {
+                # "title-editor"; flex_1; min_w_0; w_full;
+                on_click: (_, _, cx) => $cx.stop_propagation();
+                on_mouse_down: gpui_kit::MouseButton::Right, (_, _, cx) => $cx.stop_propagation();
                 on_mouse_down_out: $cx.listener(
                 move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
                     this.on_rename_mouse_down_out(&input, event, window, cx);
@@ -259,9 +260,10 @@ impl Workspace {
                 );
                 on_key_down: $cx.listener(Self::on_rename_key_down);
             } [
-                $crate::ui::input::placeholder(&self.renaming.input,
-                    Input::new(&self.renaming.input).id("rename-title-input").small().w_full()
-                        .min_h(px(layout::ICON_BUTTON_SIZE)).max_h(px(layout::ICON_BUTTON_SIZE)))
+                ($(&self.renaming.input), $(&self.renaming.input).Input::new {
+                    # "rename-title-input"; small; w_full;
+                    min_h: layout::ICON_BUTTON_SIZE.px; max_h: layout::ICON_BUTTON_SIZE.px;
+                }).placeholder,
             ]
         }
         .into_any_element()

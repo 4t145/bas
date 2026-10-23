@@ -1,6 +1,7 @@
 //! Installation is a native surface, not a settings section.
 use super::{Agents, Editor, Page};
-use crate::{theme, ui::window_controls::TitleBar};
+use crate::{i18n::tr, theme, ui::window_controls::TitleBar};
+use gds_uim::el;
 use gpui_kit::{
     App, AppContext, Bounds, Context, Entity, FocusHandle, Global, Render, Subscription, Window,
     WindowBounds, WindowHandle, WindowKind, WindowOptions, component::Root, div, prelude::*, px,
@@ -151,15 +152,15 @@ impl Render for Host {
         let content = self.agents.update(cx, |agents, cx| {
             agents.render_page(Page::Onboarding, window, cx)
         });
-        gds_uim::el! {
-            #div {
+        el! {
+            .div {
                 size_full; flex; flex_col;
                 key_context: "BasAgentInstallation";
                 track_focus: $&self.focus;
-                on_action: $cx.listener(Self::on_close_action);
+                on_action: (cx, Self::on_close_action).Context::listener;
             } [
-                TitleBar { on_close_window: $cx.listener(Self::on_close_click); } [$crate::i18n::tr!("agent-install-action")],
-                #div { flex_1; min_h_0; } [$content],
+                .TitleBar::new { on_close_window: (cx, Self::on_close_click).Context::listener; } [tr!("agent-install-action")],
+                .div { flex_1; min_h_0; } [content],
             ]
         }
     }

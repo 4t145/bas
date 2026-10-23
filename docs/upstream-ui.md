@@ -167,10 +167,90 @@ Page Up/Down 使用虚拟列表公开的 viewport/scroll_by API，Ctrl+Page Up/D
 
 ## 声明式渲染宏 gds-uim
 
-按作者要求，尚未发布的 `4t145/gds-uim` 以 `vendor/gds-uim` Git submodule
-接入，初始固定提交为 `0c01f64a6e1657dd4dc825ca16a5833b312f3753`。宏是 GUI
-可选依赖，没有运行时依赖；不启用其示例使用的另一版 GPUI。保留上游原文和归属，
-当前提交尚未声明许可证，详见 `vendor/README.md`。
+### Git 依赖与新语法升级
+
+升级基线为已核实的上游 `main` 提交
+[`94fe061888c45e137daff0d45c172c36bdb09882`](https://github.com/4t145/gds-uim/tree/94fe061888c45e137daff0d45c172c36bdb09882)。
+按该版本 [README](https://github.com/4t145/gds-uim/blob/94fe061888c45e137daff0d45c172c36bdb09882/README.md)
+推荐的 Git dependency 接入，Bas 额外使用完整 `rev` 固定构建输入，不在构建时追踪分支。
+移除旧的 `vendor/gds-uim` submodule/path dependency；Cargo.lock 与 Nix 的
+`cargoLock.outputHashes` 一起锁定同一份上游源码，不新增 vendor 或源码补丁。
+
+可复现兼容问题：只替换依赖后，旧的 `#div { ... }`、`@condition` 与旧式
+构造器调用不再遵循新解析器语法，GUI 需同步迁移。依据该提交的
+[语法文档](https://github.com/4t145/gds-uim/blob/94fe061888c45e137daff0d45c172c36bdb09882/docs/grammer.md)
+及 [clicker](https://github.com/4t145/gds-uim/blob/94fe061888c45e137daff0d45c172c36bdb09882/examples/clicker.rs)、
+[task_board](https://github.com/4t145/gds-uim/blob/94fe061888c45e137daff0d45c172c36bdb09882/examples/task_board.rs) 示例：
+
+- 裸标识符是已有值；零参数构造写 `.div`，单参数写 `"id".Button::new`，
+  多参数写 `(a, b).function`；`.` 是函数后缀，不是 Rust 字段访问。
+- 属性统一为 `method: args`，属性值的 `{ ... }` 是 builder 闭包，
+  例如 `hover: { bg: color }`、`when: condition, { border_1 }`。
+- 条件片段用 `@if (...) ... @else ... @end`，匹配用
+  `@match (...) @case (...) ... @end`；`@` 不再用于旧式 builder 回调。
+  可选子元素直接用 `@if (let Some(value) = option) ... @end`，
+  需要多个分支或实质性兜底行为时保留 `@match`。
+- Rust 字段、方法、计算用 `$` 转义；要继续接 UIM 后缀，使用 `$(...)`
+  明确边界。属性以 `;`、children 以 `,` 分隔；`# "id"` 在 Rust 2024 中须留空格。
+- `gds-uim` 重新导出 `gds-uim-macros` 过程宏；`syn`、`quote`、
+  `proc-macro2` 只服务于编译期解析。GPUI 仍只是上游测试／示例的开发依赖，
+  不会给 Bas 引入另一份 GPUI runtime。
+
+Bas 的渲染模块统一 `use gds_uim::el;` 后调用 `el!`，不使用限定路径宏调用。
+文案使用导入后的 `tr!`，常用控件和构建函数直接导入；需要区分来源时保留
+`ui::` 等短命名空间，避免界面树被 `crate::...` 路径淹没。
+回调保留普通 Rust 的业务边界，不为迁移语法改变事件路由、捕获或 UI 行为。
+
+初次迁移时，在 `b732df2` 复现：`@if (let Some(value) = option)` 可以通过
+宏解析，但展开后条件被圆括号包裹，rustc 报
+`let` expressions wrapped in parentheses are not supported。确认框、音频错误、
+历史错误行与可选图标均需要此类模式绑定，当时使用带空 None 分支的 `@match` 绕过。
+无 GPUI 的最小示例确认问题后提交了 [上游 issue #1](https://github.com/4t145/gds-uim/issues/1)。
+上游已在 `94fe061` 使用 `syn::ExprIf` 按条件上下文生成代码，并补充实际编译回归，
+覆盖模式绑定、借用、移动、let chains、短路和单次求值。Bas 跟进原版修复，
+将 25 个文件中仅用于可选子节点的 40 处空 None 匹配改回 `@if let`；
+3 处具有实质性 None 行为的匹配保持不变，不修改依赖源码或 Cargo cache。
+
+许可证核对：上述提交的两个 `Cargo.toml` 都未声明 `license` 或
+`license-file`，仓库文件树也没有许可证文件。Git 依赖推荐不是开源许可证，
+Bas 的 MIT 不覆盖它；重分发前仍需上游澄清授权，见 `vendor/README.md`。
+以下旧版验证记录不能当作此次升级已通过；升级后须重新验证 GUI、Nix 与安装边界。
+
+初次迁移到 `b732df2` 的依赖／打包验证：`cargo metadata --locked --features gui` 成功解析固定 revision，
+解析图中 `gds-uim` 仅引用过程宏包，后者仅引用 `proc-macro2`、`quote`、`syn`。
+真实 `nix flake prefetch` 和 Nix Cargo 依赖派生的构建确认源码 hash 为
+`sha256-dKdjyhhmx55ryzeTkH+mPZiwbJtX0GcWiF00G84vThY=`，两个宏包共享同一 checkout。
+`tests/nix_source.py` 的 3 项测试通过，覆盖 path URI round-trip、无 vendor 的
+CLI/GUI package 求值与快照过滤；`tests/install_bas.py` 的 4 项和
+`tests/install_basg_dev.py` 的 2 项模拟安装测试通过。未操作真实 profile；
+这些检查不代替完整 GUI 构建、测试和实际渲染验收。
+
+初次迁移到 `b732df2` 的整合验证（未削弱现有测试断言）：
+
+- `cargo test --all-targets --locked`：347 项通过，1 项手动性能测试按原配置忽略。
+- GUI shell 内 `cargo build --all-targets --features gui-tests --locked` 通过。
+- `cargo test --features gui-tests --bin basg --locked`：392 项通过，
+  2 项手动性能测试按原配置忽略；覆盖设置、工作区、表单、窗口、布局与事件交互。
+- `cargo test --features gui --bin basg --locked`：普通 GUI 配置的 173 项测试通过。
+- `cargo clippy --all-targets --features gui-tests --locked -- -D warnings`、
+  `cargo fmt --all -- --check` 和 `git diff --check` 通过。
+
+此次未启动真实桌面进行人工渲染检查，也未构建完整 Nix 发布包或执行真实安装。
+自动 GUI 测试使用 GPUI headless test support；Nix 验证覆盖源码与依赖获取边界。
+
+跟进 `94fe061` 的验证：最小 if-let 示例实际编译、执行成功，Some/None 两种
+输入都只求值一次；上述全目标 GUI 构建、392 项 `gui-tests`（2 项原有忽略）、
+173 项普通 `gui` 测试、严格 Clippy、格式和 diff 检查重新通过。
+`cargo metadata --locked --features gui` 确认两个宏包均固定新 revision，无无关升级。
+真实预取的新源码 hash 为 `sha256-yVojxpvvejy2NBKgcKsffBMqrPqe6YOJ94vtjCUz7dQ=`，
+Nix 两个宏包的 Cargo 依赖派生构建与 3 项 `tests/nix_source.py` 回归通过。
+本次未重跑默认非 GUI 测试、安装器测试或人工桌面验收。
+
+### 旧版接入与验证记录
+
+此前以 Git submodule 接入，初始固定提交为
+`0c01f64a6e1657dd4dc825ca16a5833b312f3753`，随后升级到下述 `e955e9b`。
+本节记录当时的迁移与验证，不是当前接入步骤。
 
 组件渲染统一采用这套写法，保留原有控件、ID、子节点顺序和交互状态。覆盖共享
 按钮、图标、提示和应用窗口；设置与 Agent 目录；工作区侧栏、线程行和配置控件；
@@ -209,11 +289,11 @@ Nix 沙箱中的 GUI 发布包构建及 168 项检查通过。
 锁定 URL，Nix 的 path fetcher 不支持该参数；参见
 [Nix issue #13571](https://github.com/NixOS/nix/issues/13571)。
 
-修复按 source 类型分界：移除全局 self 属性，只在 Git URL 显式请求
-`submodules=1`；安装脚本的 path 快照已包含 `vendor/gds-uim` 源码，无需 Git fetching。
-本地直接打包使用 `"git+file://$PWD?submodules=1#basg"`，远端输入使用
-`git+https://github.com/4t145/bas?submodules=1`，不使用不支持子模块的 `github:` fetcher。
-`nix develop .#gui` 加 Cargo 的工作流仍读取物理 checkout，需先初始化子模块。
+修复按 source 类型分界：移除全局 self 属性，不给 path 快照附加 Git fetching
+参数。升级宏为 Cargo Git dependency 后，Bas 自身不再需要子模块；
+本地直接打包使用 `nix build .#basg`，远端输入可使用 `github:4t145/bas`。
+安装脚本仍使用包含未跟踪第一方源码的 path 快照；第三方宏由 Cargo.lock 和
+Nix 固定输出 hash 获取，不依赖物理 checkout 中的 vendor 目录。
 真实 Nix metadata round-trip 与源码过滤回归见 [测试环境](testing.md#日常测试)。
 更正源码不会自动修复已写入 profile 的坏记录；恢复步骤需单独验证，不应删除用户
 profile 或数据来绕过此问题。

@@ -7,6 +7,7 @@ use bas::{
     config::AgentSpec,
 };
 use futures::StreamExt;
+use gds_uim::el;
 use gpui_kit::{
     AnyWindowHandle, Context, Entity, EventEmitter, FontWeight, Render, Subscription, Task,
     TestSupportExt, Window, div, prelude::*,
@@ -14,8 +15,8 @@ use gpui_kit::{
 use tokio::sync::mpsc;
 
 use crate::agents::{Status, check};
-use crate::elicitation;
-use crate::ui::Button;
+use crate::ui::{self, Button, feedback, tooltip::wrap_tokens};
+use crate::{elicitation, i18n::tr};
 
 mod service;
 pub(crate) mod terminal;
@@ -85,7 +86,7 @@ impl Authentication {
             return;
         }
         let Some(service) = self.service.clone() else {
-            self.message = crate::i18n::tr!("auth-unavailable").into();
+            self.message = tr!("auth-unavailable").into();
             self.status = Status::Failed(self.message.clone());
             cx.emit(Completed(self.status.clone()));
             cx.notify();
@@ -107,7 +108,7 @@ impl Authentication {
         self.input = Some(input);
         self.status = Status::Authenticating;
         cx.emit(Completed(self.status.clone()));
-        self.message = crate::i18n::tr!("auth-waiting").into();
+        self.message = tr!("auth-waiting").into();
         self.forms.clear();
         self._subscriptions.clear();
         let target = self.window;
@@ -162,12 +163,12 @@ impl Authentication {
                         self.methods = methods.clone();
                     }
                     if self.status.connected() {
-                        self.message = crate::i18n::tr!("auth-complete").into();
+                        self.message = tr!("auth-complete").into();
                         self.forms.clear();
                     } else {
                         self.message = match &self.status {
                             Status::Failed(message) | Status::Missing(message) => message.clone(),
-                            _ => crate::i18n::tr!("auth-unconfirmed").into(),
+                            _ => tr!("auth-unconfirmed").into(),
                         };
                     }
                     cx.emit(Completed(self.status.clone()));
@@ -198,7 +199,7 @@ impl Authentication {
                                     .as_ref()
                                     .is_none_or(|send| send.send(input).is_err())
                                 {
-                                    this.message = crate::i18n::tr!("auth-request-ended").into();
+                                    this.message = tr!("auth-request-ended").into();
                                 }
                                 cx.notify();
                             },
@@ -206,17 +207,15 @@ impl Authentication {
                         self.forms.insert(request_id, panel);
                     }
                     Err(error) => {
-                        self.message = crate::i18n::tr!(
-                            "elicitation-display-error",
-                            error = error.presentation()
-                        );
+                        self.message =
+                            tr!("elicitation-display-error", error = error.presentation());
                     }
                 },
                 Event::ElicitationComplete(value) => {
                     if let Some(value) = value {
                         self.forms
                             .retain(|_, panel| !panel.read(cx).completed_by(&value));
-                        self.message = crate::i18n::tr!("auth-verifying").into();
+                        self.message = tr!("auth-verifying").into();
                     }
                 }
                 Event::ElicitationCancelled(request_id) => {
@@ -228,7 +227,7 @@ impl Authentication {
                     };
                     match result {
                         Ok(plan) if service.address().is_local() => {
-                            self.message = crate::i18n::tr!("auth-terminal-open").into();
+                            self.message = tr!("auth-terminal-open").into();
                             let request = service::terminal(&service.runtime(), plan);
                             let generation = self.generation;
                             self._terminal = Some(cx.spawn(async move |view, cx| {
@@ -240,12 +239,12 @@ impl Authentication {
                             }));
                         }
                         _ => {
-                            self.message = crate::i18n::tr!("auth-remote-terminal").into();
+                            self.message = tr!("auth-remote-terminal").into();
                             self.cancel(cx);
                         }
                     }
                 }
-                Event::Unknown => self.message = crate::i18n::tr!("auth-invalid-event").into(),
+                Event::Unknown => self.message = tr!("auth-invalid-event").into(),
             },
         }
         cx.notify();
@@ -263,7 +262,7 @@ impl Authentication {
         let exit_code = match result {
             Ok(code) => {
                 if code != 0 {
-                    self.message = crate::i18n::tr!("auth-exit-failed", code = (code).to_string());
+                    self.message = tr!("auth-exit-failed", code = (code).to_string());
                 }
                 code
             }
@@ -289,7 +288,7 @@ impl Authentication {
             program: String::new(),
             methods: self.methods.clone(),
         };
-        self.message = crate::i18n::tr!("auth-cancelled").into();
+        self.message = tr!("auth-cancelled").into();
         cx.emit(Completed(self.status.clone()));
         cx.notify();
     }
@@ -312,32 +311,32 @@ impl Authentication {
             _ => None,
         };
         let description = method.description.as_ref().map(|description| {
-            gds_uim::el! {
-                #div {
-                    id: $format!("authentication-description-{index}");
-                    test_support; text_size: $crate::ui::SMALL;
+            el! {
+                .div {
+                    # format!("authentication-description-{index}");
+                    test_support; text_size: ui::SMALL;
                     text_color: $cx.theme().muted_foreground;
                     pl_2; min_w_0; whitespace_normal;
-                } [ $crate::ui::tooltip::wrap_tokens(description) ]
+                } [description.wrap_tokens]
             }
         });
         let reason = unsupported.as_ref().map(|reason| {
-            gds_uim::el! {
-                #div {
-                    text_size: $crate::ui::SMALL;
+            el! {
+                .div {
+                    text_size: ui::SMALL;
                     text_color: $cx.theme().muted_foreground; pl_2;
-                } [ $crate::ui::tooltip::wrap_tokens(reason) ]
+                } [reason.wrap_tokens]
             }
         });
-        gds_uim::el! {
-            #div {
-                id: $format!("authentication-choice-{index}");
+        el! {
+            .div {
+                # format!("authentication-choice-{index}");
                 test_support; flex; flex_col; gap_2; min_w_0; max_w_full;
-                @$(method.description.is_some() || unsupported.is_some()) => { w_full; };
+                @if (method.description.is_some() || unsupported.is_some()) w_full; @end;
             } [
-                #div { flex; items_start; } [
-                    Button($format!("authentication-method-{index}")) {
-                        small; label: $method.name.clone(); disabled: $unsupported.is_some();
+                .div { flex; items_start; } [
+                    format!("authentication-method-{index}").Button::new {
+                        small; label: ~$(method.name); disabled: $unsupported.is_some();
                         on_click: $cx.listener(move |this, _, _, cx| this.begin(selected.clone(), cx));
                     }
                 ],
@@ -349,12 +348,12 @@ impl Authentication {
 
     fn status_label(&self) -> &'static str {
         match &self.status {
-            Status::Authenticating => crate::i18n::tr!("auth-active"),
-            Status::Connected(_) => crate::i18n::tr!("auth-done"),
-            Status::Failed(_) | Status::Missing(_) => crate::i18n::tr!("auth-incomplete"),
-            Status::AuthenticationRequired { .. } => crate::i18n::tr!("auth-required"),
-            Status::Checking | Status::Connecting => crate::i18n::tr!("auth-loading-methods"),
-            Status::Installed(_) => crate::i18n::tr!("auth-choose-method"),
+            Status::Authenticating => tr!("auth-active"),
+            Status::Connected(_) => tr!("auth-done"),
+            Status::Failed(_) | Status::Missing(_) => tr!("auth-incomplete"),
+            Status::AuthenticationRequired { .. } => tr!("auth-required"),
+            Status::Checking | Status::Connecting => tr!("auth-loading-methods"),
+            Status::Installed(_) => tr!("auth-choose-method"),
         }
     }
 }
@@ -371,7 +370,7 @@ impl Render for Authentication {
             cx.theme().foreground
         };
         let message = (!self.message.is_empty()).then(|| {
-            crate::ui::feedback(
+            feedback(
                 if failed {
                     "authentication-error"
                 } else {
@@ -387,7 +386,7 @@ impl Render for Authentication {
         });
         let methods = (!busy && !self.status.connected()).then(|| {
             let empty = self.methods.is_empty().then(|| {
-                crate::ui::feedback("authentication-no-methods", crate::i18n::tr!("auth-no-methods"), cx.theme().muted_foreground)
+                feedback("authentication-no-methods", tr!("auth-no-methods"), cx.theme().muted_foreground)
             });
             let choices = self
                 .methods
@@ -395,41 +394,38 @@ impl Render for Authentication {
                 .enumerate()
                 .map(|(index, method)| self.render_method(index, method, cx))
                 .collect::<Vec<_>>();
-            gds_uim::el! {
-                #div {
-                    id: "authentication-methods"; test_support; flex; flex_wrap; items_start; gap_3; pt_1;
+            el! {
+                .div {
+                    # "authentication-methods"; test_support; flex; flex_wrap; items_start; gap_3; pt_1;
                 } [ ..empty, ..choices ]
             }
         });
-        let cancel = busy.then(|| {
-            gds_uim::el! {
-                #div { flex; } [
-                    Button("authentication-cancel") {
-                        small; label: $crate::i18n::tr!("auth-cancel");
-                        on_click: $cx.listener(Self::on_cancel);
-                    }
-                ]
-            }
-        });
-        gds_uim::el! {
-            #div {
-                id: "authentication-panel"; test_support; flex; flex_col; gap_3;
-                min_w_0; text_size: $crate::ui::SMALL;
+        el! {
+            .div {
+                # "authentication-panel"; test_support; flex; flex_col; gap_3;
+                min_w_0; text_size: ui::SMALL;
             } [
-                #div { flex; items_center; gap_2; } [
-                    #div {
-                        text_size: $crate::ui::SMALL; font_weight: $FontWeight::SEMIBOLD;
-                    } [ $crate::i18n::tr!("auth-agent-title", agent = (self.spec.id).to_string()) ],
-                    #div {
-                        id: "authentication-state"; test_support; flex_shrink_0;
-                        text_size: $crate::ui::SMALL; text_color: $status_color;
+                .div { flex; items_center; gap_2; } [
+                    .div {
+                        text_size: ui::SMALL; font_weight: FontWeight::SEMIBOLD;
+                    } [tr!("auth-agent-title", agent = (self.spec.id).to_string())],
+                    .div {
+                        # "authentication-state"; test_support; flex_shrink_0;
+                        text_size: ui::SMALL; text_color: status_color;
                         bg: $cx.theme().muted; rounded_sm; px_2; py_1;
                     } [ $self.status_label() ]
                 ],
                 ..message,
                 ..methods,
                 ..$self.forms.values().cloned(),
-                ..cancel
+                @if (busy)
+                    .div { flex; } [
+                        "authentication-cancel".Button::new {
+                            small; label: tr!("auth-cancel");
+                            on_click: (cx, Self::on_cancel).Context::listener;
+                        },
+                    ],
+                @end,
             ]
         }
     }

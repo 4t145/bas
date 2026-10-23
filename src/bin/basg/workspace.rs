@@ -48,6 +48,7 @@ use std::{
 
 use bas::model::{SessionId, SessionMeta, SessionStatus};
 use bas::service::tls::ConnectionOptions as Target;
+use gds_uim::el;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::InputEvent;
 use gpui_kit::{
@@ -62,11 +63,13 @@ use gpui_kit::{
 };
 
 use crate::{
+    agents::icon::AgentIcon,
     attachment::{Attachment, Draft},
     connection::{self, Command, Connection, Failure, StreamState, Update},
     conversation::{Conversation, Item},
+    i18n::tr,
     theme,
-    ui::Button,
+    ui::{self, Button, action_button, feedback},
 };
 
 mod shortcuts;
@@ -78,6 +81,7 @@ const AGENT_ICON_SIZE: f32 = 16.;
 const SIDEBAR_TIME_REFRESH: std::time::Duration = crate::ui::time::REFRESH_INTERVAL;
 
 use crate::application::OpenSettings;
+use layout::icon_button;
 pub(super) use layout::initial_size;
 
 actions!(
@@ -624,20 +628,15 @@ impl Workspace {
             })
     }
 
-    fn agent_icon(
-        &self,
-        element_id: impl Into<SharedString>,
-        agent: &str,
-        cx: &App,
-    ) -> crate::agents::icon::AgentIcon {
+    fn agent_icon(&self, element_id: impl Into<SharedString>, agent: &str, cx: &App) -> AgentIcon {
         let uri = self
             .backend
             .metadata
             .as_ref()
             .and_then(|metadata| metadata.read(cx).icon(&self.backend.server, agent))
             .unwrap_or_default();
-        gds_uim::el! {
-            crate::agents::icon::AgentIcon(element_id, uri) {
+        el! {
+            (element_id, uri).AgentIcon::new {
                 size: AGENT_ICON_SIZE.px;
             }
         }
@@ -844,9 +843,9 @@ fn matches_query(session: &SessionMeta, query: &str) -> bool {
 }
 
 fn caption(text: impl Into<SharedString>, cx: &App) -> Div {
-    gds_uim::el! {
-        #div {
-            text_size: crate::ui::SMALL;
+    el! {
+        .div {
+            text_size: ui::SMALL;
             text_color: $cx.theme().muted_foreground;
         } [$text.into()]
     }

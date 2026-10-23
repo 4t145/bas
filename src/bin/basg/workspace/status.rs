@@ -1,5 +1,4 @@
 use super::*;
-use gds_uim::el;
 use gpui_kit::component::spinner::Spinner;
 
 const ACTIVITY_ICON_SIZE: f32 = crate::ui::ICON;
@@ -11,31 +10,26 @@ pub(super) fn activity_icon(
     color: gpui_kit::Hsla,
     running: bool,
 ) -> AnyElement {
-    let artwork = if running {
-        el! {
-            Spinner {
-                icon: IconName::LoaderCircle;
-                with_size: ACTIVITY_ICON_SIZE.px;
-                color: color;
-            }
-        }
-        .into_any_element()
-    } else {
-        el! {
-            Icon(icon) {
-                with_size: ACTIVITY_ICON_SIZE.px;
-                text_color: color;
-            }
-        }
-        .into_any_element()
-    };
     el! {
-        #div {
-            id: id;
+        .div {
+            # id;
             test_support;
             size: ACTIVITY_ICON_SIZE.px;
             flex_shrink_0; flex; items_center; justify_center;
-        } [$artwork]
+        } [
+            @if (running)
+                .Spinner::new {
+                    icon: IconName::LoaderCircle;
+                    with_size: ACTIVITY_ICON_SIZE.px;
+                    color: color;
+                },
+            @else
+                icon.Icon::new {
+                    with_size: ACTIVITY_ICON_SIZE.px;
+                    text_color: color;
+                },
+            @end,
+        ]
     }
     .into_any_element()
 }
@@ -74,25 +68,28 @@ impl Workspace {
             .map(|profile| profile.name.clone())
             .unwrap_or_else(|| endpoint.clone());
         let label = self.server_status_label();
-        el! { #chat::content_panel() {
-            id: "server-connection-transition"; test_support;
+        el! { .chat::content_panel {
+            # "server-connection-transition"; test_support;
             role: gpui_kit::Role::Status; aria_label: label;
             flex_1; min_h_0; flex; flex_col; items_center; justify_center; gap_3; p_5;
-            text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+            text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
         } [
-            #div { flex; items_center; gap_2; } [
-                $activity_icon("server-connection-loading", IconName::LoaderCircle, cx.theme().warning, true),
-                $label,
+            .div { flex; items_center; gap_2; } [
+                ("server-connection-loading", IconName::LoaderCircle, $cx.theme().warning, true).activity_icon,
+                label,
             ],
-            #div {
-                id: "server-connection-target"; test_support;
-                role: gpui_kit::Role::Label; aria_label: $name.clone();
+            .div {
+                # "server-connection-target"; test_support;
+                role: gpui_kit::Role::Label; aria_label: ~name;
                 max_w_full; truncate;
-            } [$name.clone()],
-            ..$((name != endpoint).then(|| el! { #div { max_w_full; truncate; } [$endpoint] })),
-            ..$self.backend.error.as_ref().map(|error| crate::ui::feedback(
-                "server-connection-error", error.presentation(), cx.theme().danger
-            ).compact()),
+            } [~name],
+            @if (name != endpoint)
+                .div { max_w_full; truncate; } [endpoint],
+            @end,
+            @if (let Some(error) = self.backend.error.as_ref())
+                ("server-connection-error", $error.presentation(), $cx.theme().danger)
+                    .feedback { compact; },
+            @end,
         ] }.into_any_element()
     }
 
@@ -173,26 +170,28 @@ impl Workspace {
         let entries = profiles.read(cx).entries().to_vec();
         let owner = cx.entity().downgrade();
         let workspace_window = self.window.handle;
-        let button = el! { Button("server-status") {
+        let button = el! { "server-status".Button::new {
             small; ghost; w_full; min_w_0;
-            accessibility_label: $hint.clone();
+            accessibility_label: ~hint;
             tooltip: hint;
         } [
-            #div {
-                id: "server-status-indicator"; test_support; role: gpui_kit::Role::Status;
+            .div {
+                # "server-status-indicator"; test_support; role: gpui_kit::Role::Status;
                 aria_label: label; size: 6.0.px; rounded_full; flex_shrink_0; bg: color;
-                @pending => { size: ACTIVITY_ICON_SIZE.px; bg: $gpui_kit::transparent_black(); };
+                @if (pending)
+                    size: ACTIVITY_ICON_SIZE.px; bg: .gpui_kit::transparent_black;
+                @end;
             } [
-                ..$pending.then(|| activity_icon(
-                    "server-status-loading", IconName::LoaderCircle, color, true
-                )),
+                @if (pending)
+                    ("server-status-loading", IconName::LoaderCircle, color, true).activity_icon,
+                @end,
             ],
-            $presentation::icon(target) { size: crate::ui::ICON.px; flex_shrink_0; },
-            #div {
-                id: "server-status-name"; test_support; role: gpui_kit::Role::Label;
-                aria_label: $name.clone(); flex_1; min_w_0; truncate; text_left;
-            } [$name],
-            Icon(IconName::ChevronDown) { size: crate::ui::SMALL_ICON.px; flex_shrink_0; },
+            target.presentation::icon { size: ui::ICON.px; flex_shrink_0; },
+            .div {
+                # "server-status-name"; test_support; role: gpui_kit::Role::Label;
+                aria_label: ~name; flex_1; min_w_0; truncate; text_left;
+            } [name],
+            IconName::ChevronDown.Icon::new { size: ui::SMALL_ICON.px; flex_shrink_0; },
         ] };
         let menu = self.menu_button(
             button,
@@ -240,10 +239,10 @@ impl Workspace {
             },
             cx,
         );
-        el! { #div {
+        el! { .div {
             h: composer::COMPOSER_TOOLBAR_HEIGHT.px; mb: composer::COMPOSER_SIDE_PADDING.px;
             flex_shrink_0; flex; items_center; px_3; min_w_0;
-        } [$menu] }
+        } [menu] }
         .into_any_element()
     }
 

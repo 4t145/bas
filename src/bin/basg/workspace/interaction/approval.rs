@@ -2,7 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::{i18n::tr, ui};
 use bas::{acp, model::PendingPermission};
+use gds_uim::el;
 use gpui_kit::{
     AnyElement, Context, SharedString, Window,
     component::{ActiveTheme, Disableable, button::*},
@@ -101,71 +103,64 @@ impl Panel {
                     option.kind,
                     acp::PermissionOptionKind::AllowOnce | acp::PermissionOptionKind::AllowAlways
                 );
-                choices.push(
-                    gds_uim::el! { $crate::ui::action_button(SharedString::from(format!(
-                        "permission-{id}-{}",
-                        option.option_id
-                    )))
-                    {
-                        label: $option.name.clone();
-                        @allow => { primary; };
-                        disabled: $disabled;
-                        on_click: $cx.listener(move |owner, _, window, cx| {
-                            handler(owner, id.clone(), outcome.clone(), window, cx);
-                        });
-                    } },
-                );
+                choices.push(el! { format!(
+                    "permission-{id}-{}",
+                    option.option_id
+                ).SharedString::from.ui::action_button
+                {
+                    label: ~$(option.name);
+                    @if (allow) primary; @end;
+                    disabled: disabled;
+                    on_click: $cx.listener(move |owner, _, window, cx| {
+                        handler(owner, id.clone(), outcome.clone(), window, cx);
+                    });
+                } });
             }
             let id = request_id.clone();
             let handler = decide.clone();
             choices.push(
-                gds_uim::el! { $crate::ui::action_button(SharedString::from(format!("permission-cancel-{id}")))
+                el! { format!("permission-cancel-{id}").SharedString::from.ui::action_button
                     {
-                        ghost; label: $crate::i18n::tr!("approval-cancel");
-                        disabled: $disabled;
+                        ghost; label: tr!("approval-cancel");
+                        disabled: disabled;
                         on_click: $cx.listener(move |owner, _, window, cx| {
                             handler(owner, id.clone(), acp::RequestPermissionOutcome::Cancelled, window, cx);
                         });
                     } },
             );
             let details = details(&permission.request);
-            let details = (!details.is_empty()).then(|| {
-                gds_uim::el! {
-                    #div {
-                        id: $SharedString::from(format!("permission-details-{request_id}"));
-                        max_h: $px(DETAILS_HEIGHT); overflow_y_scroll; text_size: $crate::ui::SMALL;
-                    } [ $details ]
-                }
-            });
-            let submitting = disabled.then(|| {
-                crate::ui::feedback(
-                    format!("approval-{request_id}-submitting"),
-                    crate::i18n::tr!("approval-submitting"),
-                    cx.theme().muted_foreground,
-                )
-            });
-            let error = self.errors.get(request_id).map(|error| {
-                crate::ui::feedback(
-                    format!("approval-{request_id}-error"),
-                    error.clone(),
-                    cx.theme().danger,
-                )
-            });
-            cards.push(gds_uim::el! {
-                #div {
+            cards.push(el! {
+                .div {
                     w_full; min_w_0; flex; flex_col; gap_2; p_3;
                     rounded_lg; border_1; border_color: $cx.theme().warning;
                 } [
-                    $crate::ui::feedback(format!("approval-{request_id}-waiting"), crate::i18n::tr!("approval-waiting"), cx.theme().warning),
-                    #div { text_size: $crate::ui::SMALL; } [ $title ],
-                    ..details,
-                    #div { flex; flex_wrap; gap_2; } [ ..choices ],
-                    ..submitting,
-                    ..error
+                    (format!("approval-{request_id}-waiting"), tr!("approval-waiting"), $cx.theme().warning).ui::feedback,
+                    .div { text_size: ui::SMALL; } [title],
+                    @if (!details.is_empty())
+                        .div {
+                            # format!("permission-details-{request_id}").SharedString::from;
+                            max_h: DETAILS_HEIGHT.px; overflow_y_scroll; text_size: ui::SMALL;
+                        } [details],
+                    @end,
+                    .div { flex; flex_wrap; gap_2; } [..choices],
+                    @if (disabled)
+                        (
+                            format!("approval-{request_id}-submitting"),
+                            tr!("approval-submitting"),
+                            $cx.theme().muted_foreground,
+                        ).ui::feedback,
+                    @end,
+                    @if (let Some(error) = self.errors.get(request_id))
+                        (
+                            format!("approval-{request_id}-error"),
+                            ~error,
+                            $cx.theme().danger,
+                        ).ui::feedback,
+                    @end,
                 ]
             });
         }
-        gds_uim::el! { #div { flex; flex_col; gap_2; w_full; } [ ..cards ] }.into_any_element()
+        el! { .div { flex; flex_col; gap_2; w_full; } [..cards] }.into_any_element()
     }
 }
 

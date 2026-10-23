@@ -20,13 +20,13 @@ Bas 的目的是为linux系统（或者可能更多）在各种各样的环境�
 开发环境由 Nix flake 提供，Rust 工具链版本固定在 `rust-toolchain.toml`，`flake.lock` 锁定 nixpkgs 与 rust-overlay 的版本。
 
 ```sh
-git submodule update --init --recursive  # 初始化固定版本的 gds-uim 宏
 nix develop        # 进入开发 shell
 cargo check        # 在 shell 内构建
 ```
 
-首次克隆也可使用 `git clone --recurse-submodules`。`vendor/gds-uim` 是尚未发布的
-声明式 UI 宏；Cargo、Nix 打包与 CI 均使用同一份 submodule 源码，不在构建时更新版本。
+无需初始化子模块。声明式 UI 宏 `gds-uim` 按上游推荐使用 Git dependency，
+固定提交 `94fe061888c45e137daff0d45c172c36bdb09882`；Cargo.lock 和 Nix 固定输出 hash
+锁定同一份原版源码，不在构建时追踪 `main`。
 来源、许可证状态和更新规则见 [源码依赖说明](vendor/README.md)。
 
 安装了 direnv 的用户，首次进入仓库执行一次 `direnv allow`，之后 `cd` 进目录会自动加载并缓存环境（需要 [nix-direnv](https://github.com/nix-community/nix-direnv)，`.envrc` 会自动引导）。
@@ -184,11 +184,10 @@ basg
 
 安装包包含图形运行库与桌面入口，bas 服务单独运行。`make install` 同时安装 daemon、CLI 和 GUI；
 启用用户服务使用 `make install-bas-service`。优先使用 `make install-bas` / `make install-basg`：
-源码快照包含未跟踪源码和已初始化的子模块，排除 `.git`、`.delta`、`.env` 等元数据。
+源码快照包含未跟踪的第一方源码，排除 `.git`、`.delta`、`.env` 等元数据。
 `make help` 列出安装目标与传递 Nix 参数的方式。源码均加入 Git 后也可使用
-`nix profile add "git+file://$PWD?submodules=1#basg"`；开发运行使用
-`nix develop .#gui -c cargo run --features gui --bin basg`，此前需在物理 checkout
-执行 `git submodule update --init --recursive`。
+`nix profile add .#basg`；开发运行使用
+`nix develop .#gui -c cargo run --features gui --bin basg --locked`。
 支持会话创建、搜索、切换、重命名、可恢复归档、流式对话与停止回合。默认构建不启用图形依赖。
 默认打开最小输入弹窗，Ctrl+Shift+M 展开 workspace / thread 窗口，并自动跟随 DMS 的 Zed 主题。
 应用自己的字体、字号、行高、透明度和主题偏好保存在统一 JSON 的 `appearance` section；
@@ -199,8 +198,8 @@ Agent 服务页提供官方 ACP Registry 目录，可搜索、安装、更新、
 使用方式和测试命令见 [GUI 说明](docs/gui.md)。
 
 第一方代码保持 MIT；UI 使用许可兼容的 GPUI 组件，不复制或链接 Zed 的 GPL 上层面板。
-GPUI 组件使用正式发布包，不维护本地源码覆盖；未发布的 `gds-uim` 宏以独立
-submodule 固定版本，其许可证状态见上述源码依赖说明。版本基线、验证结果和待处理问题见
+GPUI 组件使用正式发布包，不维护本地源码覆盖；`gds-uim` 宏以 Git revision 固定版本，
+该提交尚未声明许可证，重分发前需澄清授权，见上述源码依赖说明。版本基线、验证结果和待处理问题见
 [原版 UI 依赖基线](docs/upstream-ui.md)。
 
 ## BasT

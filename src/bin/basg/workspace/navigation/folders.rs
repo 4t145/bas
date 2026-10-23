@@ -15,20 +15,21 @@ impl Workspace {
         let hint = crate::i18n::tr!("workspace-choose");
         let view = cx.entity().downgrade();
         let parent = self.window.handle;
-        let label = (!self.window.compact).then(|| {
-            gds_uim::el! { #div {
-                id: "workspace-picker-label"; test_support; role: gpui_kit::Role::Label;
-                aria_label: $name.clone(); min_w_0; whitespace_nowrap; text_ellipsis;
-                text_size: $crate::ui::SMALL;
-            } [$name.clone()] }
-        });
-        let button = gds_uim::el! { Button("workspace-picker") {
+        let button = el! { "workspace-picker".Button::new {
             ghost; xsmall; h: layout::ICON_BUTTON_SIZE.px; icon: IconName::Folder;
-            accessibility_label: $name.clone();
-            @$self.window.compact => {
+            accessibility_label: ~name;
+            @if (self.window.compact)
                 w: layout::ICON_BUTTON_SIZE.px; h: layout::ICON_BUTTON_SIZE.px; p_0;
-            };
-        } [..label] };
+            @end;
+        } [
+            @if (!self.window.compact)
+                .div {
+                    # "workspace-picker-label"; test_support; role: gpui_kit::Role::Label;
+                    aria_label: ~name; min_w_0; whitespace_nowrap; text_ellipsis;
+                    text_size: ui::SMALL;
+                } [~name],
+            @end,
+        ] };
         let menu = self.menu_button(
             button,
             directories.len() + 2,

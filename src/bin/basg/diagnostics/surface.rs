@@ -1,3 +1,4 @@
+use gds_uim::el;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Entity, IntoElement, Render, Window,
     component::{ActiveTheme, Root},
@@ -29,20 +30,17 @@ impl Render for Surface {
             // Compact windows have no title bar. Cancel the library's title-bar
             // inset without changing notification placement in other windows.
             window.root::<Root>().flatten().map(|root| {
-                div()
-                    .absolute()
-                    .inset_0()
-                    .top(px(4.) - cx.theme().notification.margins.top)
-                    .child(root.read(cx).notification.clone())
-                    .into_any_element()
+                el! {
+                    .div {
+                        absolute; inset_0; top: $px(4.) - cx.theme().notification.margins.top;
+                    } [~$(root.read(cx).notification)] { into_any_element; }
+                }
             })
         } else {
             Root::render_notification_layer(window, cx).map(IntoElement::into_any_element)
         };
-        div()
-            .relative()
-            .size_full()
-            .child(self.view.clone())
-            .children(notifications)
+        el! {
+            .div { relative; size_full; } [~$(self.view), ..notifications]
+        }
     }
 }

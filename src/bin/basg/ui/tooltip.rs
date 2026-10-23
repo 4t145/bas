@@ -1,5 +1,6 @@
 //! Window-bound hints for text supplied by agents, paths, and errors.
 
+use crate::ui;
 use gds_uim::el;
 use gpui_kit::base::StyledExt;
 use gpui_kit::{
@@ -42,10 +43,10 @@ pub(crate) fn bounded(
 ) -> Stateful<Div> {
     let text = text.into();
     el! {
-        #div {
-            id: id;
-            hoverable_tooltip: $move |window, cx| view(text.clone(), window, cx);
-        } [$child]
+        .div {
+            # id;
+            hoverable_tooltip: move (window, cx) => (~text, window, cx).view;
+        } [child]
     }
 }
 
@@ -64,7 +65,7 @@ pub(crate) fn view_with_id(
     element(
         id,
         text,
-        move |_, _| el! { #div { whitespace_normal; } [$content.clone()] }.into_any_element(),
+        move |_, _| el! { .div { whitespace_normal; } [~content] }.into_any_element(),
         window,
         cx,
     )
@@ -85,23 +86,23 @@ pub(crate) fn element(
     let style = crate::theme::font_style(cx);
     Tooltip::element(move |window, cx| {
         el! {
-            #div {
-                id: id;
+            .div {
+                # id;
                 test_support;
                 role: gpui_kit::Role::Label;
-                aria_label: $label.clone();
+                aria_label: ~label;
                 max_w: $px((width - 16.).max(1.));
                 max_h: $px((height - 12.).max(1.));
                 overflow_y_scroll;
-                text_size: crate::ui::SMALL;
+                text_size: ui::SMALL;
                 whitespace_normal;
-            } [$content(window, cx)]
+            } [(window, cx).content]
         }
     })
     .refine_style(&style)
     .font_family(cx.theme().font_family.clone())
     .font_weight(FontWeight::NORMAL)
-    .text_size(crate::ui::SMALL)
+    .text_size(ui::SMALL)
     .line_height(gpui_kit::TextStyle::default().line_height)
     .max_w(px(width))
     .max_h(px(height))

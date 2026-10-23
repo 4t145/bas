@@ -188,45 +188,51 @@ impl Render for Panel {
         } else {
             crate::i18n::tr!("agent-activity-disconnected").into()
         };
-        gds_uim::el! { #div {
-            id: "agent-activity-panel"; test_support; size_full; flex; flex_col;
+        el! { .div {
+            # "agent-activity-panel"; test_support; size_full; flex; flex_col;
             p_3; gap_2; border_1; rounded_md; overflow_hidden;
             border_color: $cx.theme().border; bg: $cx.theme().popover;
-            text_color: $cx.theme().popover_foreground; text_size: crate::ui::SMALL;
+            text_color: $cx.theme().popover_foreground; text_size: ui::SMALL;
             on_hover: $cx.listener(|this, hovered: &bool, window, cx| {
                 menus::in_parent(this.parent, window, cx, |window, cx| {
                     let _ = this.owner.update(cx, |view, cx| view.hover_activity(*hovered, Bounds::default(), window, cx));
                 });
             });
         } [
-            #div {
-                id: "agent-activity-heading"; test_support; role: gpui_kit::Role::Status;
-                aria_label: $heading.clone();
+            .div {
+                # "agent-activity-heading"; test_support; role: gpui_kit::Role::Status;
+                aria_label: ~heading;
                 font_weight: FontWeight::SEMIBOLD; flex_shrink_0;
-            } [$heading],
-            #div {
-                id: "agent-activity-scroll"; test_support; flex_1; min_h_0; overflow_y_scroll;
+            } [heading],
+            .div {
+                # "agent-activity-scroll"; test_support; flex_1; min_h_0; overflow_y_scroll;
                 flex; flex_col; gap_2;
             } [
-                ..$bool::then(self.snapshot.connected && count == 0, || caption(crate::i18n::tr!("agent-activity-empty"), cx)),
-                ..$self.snapshot.sessions.iter().map(|row| gds_uim::el! { #div {
-                    id: $format!("agent-activity-{}", row.id); test_support; flex; flex_col; flex_shrink_0;
-                    gap_1; pb_2; border_b_1; border_color: $cx.theme().border;
-                } [
-                    #div { flex; items_center; gap_2; min_w_0; } [
-                        #div { flex_1; min_w_0; truncate; } [$row.agent.clone()],
-                        #div { text_color: $cx.theme().muted_foreground; } [$row.status.clone()],
-                    ],
-                    #div {
-                        id: $format!("agent-activity-title-{}", row.id); test_support;
-                        role: gpui_kit::Role::Label; aria_label: $row.title.clone();
-                        whitespace_normal; min_w_0;
-                    } [$crate::ui::tooltip::wrap_tokens(&row.title)],
-                    ..$row.description.as_ref().map(|description| gds_uim::el! {
-                        #div { text_color: $cx.theme().muted_foreground; whitespace_normal; } [$crate::ui::tooltip::wrap_tokens(description)]
-                    }),
-                    #div { text_color: $cx.theme().muted_foreground; truncate; } [$row.directory.clone()],
-                ] }),
+                @if (self.snapshot.connected && count == 0)
+                    (tr!("agent-activity-empty"), cx).caption,
+                @end,
+                ..$(self.snapshot.sessions.iter()) { map: row =>
+                    .div {
+                        # format!("agent-activity-{}", row.id); test_support; flex; flex_col; flex_shrink_0;
+                        gap_1; pb_2; border_b_1; border_color: $cx.theme().border;
+                    } [
+                        .div { flex; items_center; gap_2; min_w_0; } [
+                            .div { flex_1; min_w_0; truncate; } [~$(row.agent)],
+                            .div { text_color: $cx.theme().muted_foreground; } [~$(row.status)],
+                        ],
+                        .div {
+                            # format!("agent-activity-title-{}", row.id); test_support;
+                            role: gpui_kit::Role::Label; aria_label: ~$(row.title);
+                            whitespace_normal; min_w_0;
+                        } [$ui::tooltip::wrap_tokens(&row.title)],
+                        @if (let Some(description) = row.description.as_ref())
+                            .div { text_color: $cx.theme().muted_foreground; whitespace_normal; } [
+                                description.ui::tooltip::wrap_tokens,
+                            ],
+                        @end,
+                        .div { text_color: $cx.theme().muted_foreground; truncate; } [~$(row.directory)],
+                    ];
+                },
             ],
         ] }
     }

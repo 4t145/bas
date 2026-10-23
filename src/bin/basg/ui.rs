@@ -46,11 +46,11 @@ pub(crate) fn checkbox(
 
 pub(crate) fn icon_button(id: impl Into<gpui_kit::ElementId>, icon: IconName) -> Button {
     el! {
-        Button(id) {
+        id.Button::new {
             ghost;
             xsmall;
             icon: icon;
-            destructive: $(matches!(icon, IconName::Trash));
+            destructive: matches!(icon, IconName::Trash);
             w: COMPACT_CONTROL.px;
             h: COMPACT_CONTROL.px;
             p_0;
@@ -65,7 +65,7 @@ pub(crate) fn delete_icon(cx: &App) -> Icon {
 
 pub(crate) fn action_button(id: impl Into<gpui_kit::ElementId>) -> Button {
     el! {
-        Button(id) {
+        id.Button::new {
             with_variant: ButtonVariant::Default;
             small;
             h: CONTROL.px;
@@ -95,9 +95,9 @@ pub(crate) fn subtle_icon_button(
         .hover(cx.theme().muted.opacity(SUBTLE_HOVER_OPACITY))
         .active(cx.theme().muted.opacity(SUBTLE_ACTIVE_OPACITY));
     el! {
-        #icon_button(id, icon) {
+        (id, icon).icon_button {
             custom: variant;
-            text_color: $secondary_foreground(cx);
+            text_color: cx.secondary_foreground;
         }
     }
 }

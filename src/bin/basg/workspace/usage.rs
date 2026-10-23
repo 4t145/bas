@@ -36,9 +36,9 @@ fn summary(usage: &acp::UsageUpdate) -> String {
 }
 
 fn label(id: &'static str, text: String) -> impl IntoElement {
-    gds_uim::el! { #div {
-        id: $id; test_support; role: $gpui_kit::Role::Label; aria_label: $text.clone();
-    } [ $text ] }
+    el! { .div {
+        # id; test_support; role: gpui_kit::Role::Label; aria_label: ~text;
+    } [text] }
 }
 
 fn on_details_mouse_down(_: &gpui_kit::MouseDownEvent, window: &mut Window, cx: &mut App) {
@@ -84,46 +84,47 @@ fn details(usage: &acp::UsageUpdate, cx: &App) -> AnyElement {
             )),
         )
     });
-    gds_uim::el! {
-        #div {
-            id: "usage-details"; test_support;
-            on_mouse_down: $gpui_kit::MouseButton::Left, $on_details_mouse_down;
+    el! {
+        .div {
+            # "usage-details"; test_support;
+            on_mouse_down: gpui_kit::MouseButton::Left, on_details_mouse_down;
             text_color: $cx.theme().popover_foreground;
-            w: $px(DETAILS_WIDTH); max_w_full; min_w_0; flex; flex_col; gap_2; py_1;
+            w: DETAILS_WIDTH.px; max_w_full; min_w_0; flex; flex_col; gap_2; py_1;
         } [
-            #div {
-                text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-            } [ $crate::i18n::tr!("usage-title") ],
-            #div {
-                id: "usage-summary"; test_support; role: gpui_kit::Role::Label;
-                aria_label: $summary(usage); flex; flex_col; gap_2;
+            .div {
+                text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+            } [tr!("usage-title")],
+            .div {
+                # "usage-summary"; test_support; role: gpui_kit::Role::Label;
+                aria_label: usage.summary; flex; flex_col; gap_2;
             } [
-                #div { flex; items_center; justify_between; gap_2; } [
-                    #div { font_weight: FontWeight::SEMIBOLD; } [$used],
-                    ..$fraction.map(|ratio| gds_uim::el! {
-                        #div { text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground; } [
-                            $label("usage-percentage", format!("{:.0}%", (ratio * 100.).round()))
-                        ]
-                    }),
+                .div { flex; items_center; justify_between; gap_2; } [
+                    .div { font_weight: FontWeight::SEMIBOLD; } [used],
+                    @if (let Some(ratio) = fraction)
+                        .div { text_size: ui::SMALL; text_color: $cx.theme().muted_foreground; } [
+                            ("usage-percentage", format!("{:.0}%", (ratio * 100.).round())).label,
+                        ],
+                    @end,
                 ],
-                ..$fraction.map(|ratio| gds_uim::el! {
-                    #div { id: "usage-progress"; test_support; w_full; } [
-                    Progress("usage-progress-indicator") {
-                        small; value: $((ratio * 100.) as f32);
-                        color: $(if ratio >= WARNING_RATIO { cx.theme().warning } else { cx.theme().primary });
-                        accessibility_label: $summary(usage);
-                    }]
-                }),
+                @if (let Some(ratio) = fraction)
+                    .div { # "usage-progress"; test_support; w_full; } [
+                        "usage-progress-indicator".Progress::new {
+                            small; value: $((ratio * 100.) as f32);
+                            color: @if (ratio >= WARNING_RATIO) $cx.theme().warning @else $cx.theme().primary @end;
+                            accessibility_label: usage.summary;
+                        },
+                    ],
+                @end,
             ],
-            #div {
-                id: "usage-secondary"; test_support; flex; flex_col; gap_1;
-                text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-            } [$capacity, ..remaining],
-            ..$cost.map(|cost| gds_uim::el! {
-                #div { pt_2; border_t_1; border_color: $cx.theme().border;
-                    text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                } [$cost]
-            }),
+            .div {
+                # "usage-secondary"; test_support; flex; flex_col; gap_1;
+                text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+            } [capacity, ..remaining],
+            @if (let Some(cost) = cost)
+                .div { pt_2; border_t_1; border_color: $cx.theme().border;
+                    text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                } [cost],
+            @end,
         ]
     }
     .into_any_element()
@@ -155,11 +156,14 @@ impl DetailsSnapshot {
     }
 
     fn render(&self, cx: &App) -> AnyElement {
-        self.usage
-            .borrow()
-            .as_ref()
-            .map(|usage| details(usage, cx))
-            .unwrap_or_else(|| gds_uim::el! { #div }.into_any_element())
+        el! {
+            @match (self.usage.borrow().as_ref())
+            @case (Some(usage))
+                (usage, cx).details
+            @case (None)
+                .div { into_any_element; }
+            @end
+        }
     }
 
     fn build(self: &Rc<Self>, menu: PopupMenu, cx: &mut Context<PopupMenu>) -> PopupMenu {
@@ -169,11 +173,9 @@ impl DetailsSnapshot {
                 .detach();
         }
         let snapshot = self.clone();
-        gds_uim::el! {
-            $menu {
-                item: $gds_uim::el! {
-                    $PopupMenuItem::element(move |_, cx| snapshot.render(cx)) { disabled: true; }
-                };
+        el! {
+            menu {
+                item: (move (_, cx) => $snapshot.render(cx)).PopupMenuItem::element { disabled: true; };
             }
         }
     }
@@ -194,15 +196,15 @@ impl Workspace {
             "usage-accessibility",
             summary = (summary(usage)).to_string()
         );
-        let button = gds_uim::el! {
-            Button($SharedString::from(format!("context-usage-{session}"))) {
-                ghost; xsmall; w: $px(layout::ICON_BUTTON_SIZE); h: $px(layout::ICON_BUTTON_SIZE);
-                p_0; flex_shrink_0; accessibility_label: $name.clone();
+        let button = el! {
+            format!("context-usage-{session}").SharedString::from.Button::new {
+                ghost; xsmall; w: layout::ICON_BUTTON_SIZE.px; h: layout::ICON_BUTTON_SIZE.px;
+                p_0; flex_shrink_0; accessibility_label: ~name;
             } [
-                #div { id: "usage-ring"; test_support; size: $px(RING_SIZE); } [
-                    ProgressCircle($SharedString::from(format!("context-ring-{session}"))) {
+                .div { # "usage-ring"; test_support; size: RING_SIZE.px; } [
+                    format!("context-ring-{session}").SharedString::from.ProgressCircle::new {
                         value: $((fraction.unwrap_or(0.) * 100.) as f32);
-                        color: $color; accessibility_label: $name; size: $px(RING_SIZE);
+                        color: color; accessibility_label: name; size: RING_SIZE.px;
                     }
                 ]
             ]
@@ -222,9 +224,9 @@ impl Workspace {
         let menu = if self.window.compact {
             self.menu_button(button, DETAILS_ROWS, false, build, cx)
         } else {
-            gds_uim::el! { $button {
-                dropdown_menu: $move |menu, window, cx| crate::ui::menu(build(menu, window, cx));
-                anchor: $gpui_kit::Anchor::BottomLeft;
+            el! { button {
+                dropdown_menu: move (menu, window, cx) => (menu, window, cx).build.ui::menu;
+                anchor: gpui_kit::Anchor::BottomLeft;
                 on_open_change: $move |open, _, cx| {
                     let _ = owner.update(cx, |this, cx| {
                         this.on_usage_open_change(session, *open, cx);
@@ -237,15 +239,13 @@ impl Workspace {
         let details_open = self.window.usage_details == Some(session)
             || (self.window.compact && self.window.menu.is_some());
         Some(
-            gds_uim::el! {
-                #div {
-                    id: "session-usage"; test_support; flex_shrink_0;
-                    @$(!details_open) => {
-                        hoverable_tooltip: $move |window, cx| {
-                            crate::ui::tooltip::view_with_id("usage-hint", hint.clone(), window, cx)
-                        };
-                    };
-                } [ $menu ]
+            el! {
+                .div {
+                    # "session-usage"; test_support; flex_shrink_0;
+                    @if (!details_open)
+                        hoverable_tooltip: move (window, cx) => ("usage-hint", ~hint, window, cx).ui::tooltip::view_with_id;
+                    @end;
+                } [menu]
             }
             .into_any_element(),
         )

@@ -1,8 +1,10 @@
 //! The settings page hosts the same Agent-owned authentication panel as threads.
 use super::Agents;
 use crate::agents::Status;
+use crate::i18n::tr;
 use crate::ui::Button;
 use bas::config::AgentSpec;
+use gds_uim::el;
 use gpui_kit::{Context, IntoElement, ParentElement, TestSupportExt, Window, div, prelude::*};
 
 pub(super) struct Owner {
@@ -107,15 +109,15 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let Some(panel) = self.authentications.get(&spec.id) else {
-            return gds_uim::el! { #div {} }.into_any_element();
+            return el! { .div }.into_any_element();
         };
         if let Some(owner) = self.authentication_owners.get(&spec.id)
             && self.rendering_window != Some(owner.window)
         {
             let target = owner.window;
-            return gds_uim::el! {
-                Button($format!("agents-authentication-open-{index}")) {
-                    label: $crate::i18n::tr!("agent-auth-other-window");
+            return el! {
+                (format!("agents-authentication-open-{index}")).Button::new {
+                    label: tr!("agent-auth-other-window");
                     on_click: $cx.listener(move |_, _, _, cx| {
                         let _ = target.update(cx, |_, window, _| window.activate_window());
                     });
@@ -124,13 +126,16 @@ impl Agents {
             .into_any_element();
         }
         let editable = !self.dirty(cx) && self.catalog_service.is_some();
-        gds_uim::el! {
-            #div {
-                id: $format!("agents-authentication-{index}");
+        el! {
+            .div {
+                # format!("agents-authentication-{index}");
                 test_support; flex; flex_col; gap_2;
             } [
-                ..$bool::then(!editable, || crate::i18n::tr!("auth-finish-edit")),
-                ..$editable.then(|| panel.clone()),
+                @if (editable)
+                    ~panel,
+                @else
+                    tr!("auth-finish-edit"),
+                @end,
             ]
         }
         .into_any_element()

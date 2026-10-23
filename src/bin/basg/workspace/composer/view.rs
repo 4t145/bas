@@ -10,21 +10,21 @@ const EDITOR_WRAP_INSET: f32 = 20.;
 
 impl Workspace {
     pub(in crate::workspace) fn composer_expansion_button(&self, cx: &mut Context<Self>) -> Button {
-        gds_uim::el! { #message_actions::action_button(
+        el! { (
             "expand-message-editor",
-            $(if self.composer.expanded {
+            @if (self.composer.expanded)
                 IconName::Minimize2
-            } else {
+            @else
                 IconName::Maximize2
-            }),
+            @end,
             cx,
-        ) {
+        ).message_actions::action_button {
             hoverable_tooltip: $shortcuts::tooltip(if self.composer.expanded {
-                crate::i18n::tr!("composer-collapse")
+                tr!("composer-collapse")
             } else {
-                crate::i18n::tr!("composer-expand")
+                tr!("composer-expand")
             }, ExpandMessageEditor);
-            on_click: $cx.listener(Self::on_composer_toggle_expansion);
+            on_click: (cx, Self::on_composer_toggle_expansion).Context::listener;
         } }
     }
 
@@ -90,7 +90,7 @@ impl Workspace {
 
     pub(in crate::workspace) fn feedback_height(&self, cx: &App) -> f32 {
         if self.composer_error(cx).is_some() {
-            crate::ui::CONTROL
+            ui::CONTROL
         } else {
             0.
         }
@@ -101,22 +101,22 @@ impl Workspace {
         let retry = self.selected.timeline.conversation.is_some()
             && matches!(self.selected.stream, StreamState::Unavailable(_));
         Some(
-            gds_uim::el! {
-                #div {
+            el! {
+                .div {
                     flex; items_center; min_w_0; px_2;
-                    h: $px(crate::ui::CONTROL);
+                    h: ui::CONTROL.px;
                     flex_shrink_0;
                 } [
-                    #div { flex_1; min_w_0; } [
-                        $crate::ui::feedback("composer-feedback", message, cx.theme().danger).compact(),
+                    .div { flex_1; min_w_0; } [
+                        ("composer-feedback", message, $cx.theme().danger).ui::feedback { compact; },
                     ],
-                    ..$retry.then(|| gds_uim::el! {
-                        #crate::ui::icon_action("history-resync-retry", IconName::RefreshCw, $self.history_retry_label()) {
+                    @if (retry)
+                        ("history-resync-retry", IconName::RefreshCw, $self.history_retry_label()).ui::icon_action {
                             flex_shrink_0;
                             disabled: $self.history_retry_disabled();
                             on_click: $cx.listener(|this, _, _, cx| this.retry_history(cx));
-                        }
-                    }),
+                        },
+                    @end,
                 ]
             }
             .into_any_element(),
@@ -139,65 +139,64 @@ impl Workspace {
             .is_some_and(|id| self.sessions.pending.cancelling.contains(&id));
         let can_send = self.can_send(cx);
         let submit_hint = if self.working() || cancelling {
-            crate::i18n::tr!("action-stop").into()
+            tr!("action-stop").into()
         } else {
             self.send_hint(cx)
         };
-        let submit = if self.working() || cancelling {
-            gds_uim::el! {
-                Button("stop-turn") {
+        let submit = el! {
+            @if (self.working() || cancelling)
+                "stop-turn".Button::new {
                     ghost;
                     small;
-                    icon: $IconName::Square;
+                    icon: IconName::Square;
                     text_color: $cx.theme().danger;
-                    @$self.composer_error(cx).is_some() => {
+                    @if (self.composer_error(cx).is_some())
                         text_color: $cx.theme().danger;
-                    };
+                    @end;
                     disabled: $(
                     cancelling || self.connection_status() != status::ConnectionStatus::Connected
                     );
-                    on_click: $cx.listener(Self::on_composer_stop);
+                    on_click: (cx, Self::on_composer_stop).Context::listener;
                 }
-            }
-        } else {
-            gds_uim::el! {
-                Button("send-message") {
+            @else
+                "send-message".Button::new {
                     primary;
-                    @$(!can_send) => { ghost; };
+                    @if (!can_send) ghost; @end;
                     small;
-                    icon: $IconName::Send;
-                    @$self.composer_error(cx).is_some() => { text_color: $cx.theme().danger; };
+                    icon: IconName::Send;
+                    @if (self.composer_error(cx).is_some()) text_color: $cx.theme().danger; @end;
                     disabled: $(!can_send);
-                    on_click: $cx.listener(Self::on_composer_send);
+                    on_click: (cx, Self::on_composer_send).Context::listener;
                 }
-            }
+            @end
         };
-        let panel = gds_uim::el! {
-            #div {
-                id: "composer-panel";
+        let panel = el! {
+            .div {
+                # "composer-panel";
                 test_support;
                 flex;
                 flex_col;
-                @fills_thread => { flex_1; min_h_0; };
+                @if (fills_thread) flex_1; min_h_0; @end;
             }
         }
         .drag_over::<gpui_kit::ExternalPaths>(|style, _, _, cx| {
             style.bg(cx.theme().primary.opacity(0.12))
         })
         .on_drop(cx.listener(Self::on_composer_drop));
-        gds_uim::el! {
-            #div {
+        el! {
+            .div {
                 flex_shrink_0;
                 w_full;
-                @fills_thread => { flex_1; min_h_0; flex; flex_col; };
-                @$self.window.compact => {
-                    px: $px(COMPOSER_SIDE_PADDING);
-                    pb: $px(COMPOSER_BOTTOM_PADDING);
-                };
-                @$(!self.window.compact) => { pb: $px(COMPOSER_SIDE_PADDING); };
+                @if (fills_thread) flex_1; min_h_0; flex; flex_col; @end;
+                @if (self.window.compact)
+                    px: COMPOSER_SIDE_PADDING.px;
+                    pb: COMPOSER_BOTTOM_PADDING.px;
+                @else
+                    pb: COMPOSER_SIDE_PADDING.px;
+                @end;
             } [
-                $panel {
-                    @$(!self.window.compact) => { border_t_1; border_color: $cx.theme().border; };
+                panel {
+                    @if (!self.window.compact) border_t_1; border_color: $cx.theme().border; @end;
                 } [
                     $self.render_commands(cx),
                     ..$self.render_composer_feedback(cx),
@@ -220,56 +219,59 @@ impl Workspace {
         let inset = -(self.composer.content_left.get() - px(COMPOSER_TEXT_INSET)).max(px(0.));
         let copyable = self.composer.input.read(cx).is_copyable();
         let editable = !(composition_locked || self.composer.paste_pending);
-        let editor = gds_uim::el! {
-            Editor($&self.composer.input) {
+        let editor = el! {
+            ($&self.composer.input).Editor::new {
                 w_auto; flex_1; min_w_0;
-                ml: $inset;
-                font_family: $cx.theme().font_family.clone();
+                ml: inset;
+                font_family: ~$(cx.theme().font_family);
                 text_size: $theme::content_font_size(cx);
                 line_height: $gpui_kit::relative(theme::content_line_height(cx));
                 appearance: false;
                 bordered: false;
                 readonly: $(composition_locked || self.composer.paste_pending);
-                context_menu: $move |menu, _, cx| super::text_menu(menu, editable, copyable, cx);
-                aria_label: $crate::i18n::tr!("composer-message");
-                @fills_thread => { h_full; };
-                @$(!fills_thread) => { h: $px(self.composer_height(cx)); };
+                context_menu: move (menu, _, cx) => (menu, editable, copyable, cx).super::text_menu;
+                aria_label: tr!("composer-message");
+                @if (fills_thread)
+                    h_full;
+                @else
+                    h: $(self.composer_height(cx)).px;
+                @end;
             }
         };
-        let editor = crate::ui::input::placeholder(&self.composer.input, editor);
-        gds_uim::el! {
-            #div {
-                id: "composer-editor";
+        let editor = ui::input::placeholder(&self.composer.input, editor);
+        el! {
+            .div {
+                # "composer-editor";
                 relative;
                 key_context: "BasComposer";
                 test_support;
-                capture_action: $cx.listener(Self::on_composer_expand_action);
-                capture_action: $cx.listener(Self::on_composer_send_action);
-                capture_action: $cx.listener(Self::capture_composer_enter);
-                capture_action: $cx.listener(Self::on_composer_paste_action);
-                capture_action: $cx.listener(Self::on_composer_backspace_action);
-                capture_action: $cx.listener(Self::on_composer_delete_action);
-                capture_action: $cx.listener(Self::on_composer_previous_word_action);
-                capture_action: $cx.listener(Self::on_composer_next_word_action);
-                capture_action: $cx.listener(Self::on_composer_left_action);
-                capture_action: $cx.listener(Self::on_composer_right_action);
-                capture_action: $cx.listener(Self::on_composer_up_action);
-                capture_action: $cx.listener(Self::on_composer_down_action);
-                capture_action: $cx.listener(Self::on_composer_tab_action);
-                capture_action: $cx.listener(Self::on_composer_escape_action);
+                capture_action: (cx, Self::on_composer_expand_action).Context::listener;
+                capture_action: (cx, Self::on_composer_send_action).Context::listener;
+                capture_action: (cx, Self::capture_composer_enter).Context::listener;
+                capture_action: (cx, Self::on_composer_paste_action).Context::listener;
+                capture_action: (cx, Self::on_composer_backspace_action).Context::listener;
+                capture_action: (cx, Self::on_composer_delete_action).Context::listener;
+                capture_action: (cx, Self::on_composer_previous_word_action).Context::listener;
+                capture_action: (cx, Self::on_composer_next_word_action).Context::listener;
+                capture_action: (cx, Self::on_composer_left_action).Context::listener;
+                capture_action: (cx, Self::on_composer_right_action).Context::listener;
+                capture_action: (cx, Self::on_composer_up_action).Context::listener;
+                capture_action: (cx, Self::on_composer_down_action).Context::listener;
+                capture_action: (cx, Self::on_composer_tab_action).Context::listener;
+                capture_action: (cx, Self::on_composer_escape_action).Context::listener;
                 flex;
                 items_start;
-                pr: $px(COMPOSER_CONTROL_INSET + layout::ICON_BUTTON_SIZE + COMPOSER_CONTROL_GAP);
-                @fills_thread => { flex_1; min_h_0; };
+                pr: $(COMPOSER_CONTROL_INSET + layout::ICON_BUTTON_SIZE + COMPOSER_CONTROL_GAP).px;
+                @if (fills_thread) flex_1; min_h_0; @end;
             } [
-                #div {
+                .div {
                     relative; flex; flex_1; min_w_0; overflow_x_hidden;
-                    @fills_thread => { h_full; };
-                } [$editor, $self.render_attachment_chips(cx)],
-                #div {
+                    @if (fills_thread) h_full; @end;
+                } [editor, $self.render_attachment_chips(cx)],
+                .div {
                     absolute;
                     top: $expand_top.max(px(0.));
-                    right: $px(COMPOSER_CONTROL_INSET);
+                    right: COMPOSER_CONTROL_INSET.px;
                 } [$self.composer_expansion_button(cx)],
             ]
         }
@@ -282,51 +284,52 @@ impl Workspace {
         submit_hint: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        gds_uim::el! {
-            #div {
-                id: "composer-toolbar";
+        el! {
+            .div {
+                # "composer-toolbar";
                 test_support; w_full; flex; items_center; gap_1;
-                pl: $px(COMPOSER_CONTROL_INSET);
-                pr: $px(COMPOSER_CONTROL_INSET);
-                h: $px(COMPOSER_TOOLBAR_HEIGHT);
+                pl: COMPOSER_CONTROL_INSET.px;
+                pr: COMPOSER_CONTROL_INSET.px;
+                h: COMPOSER_TOOLBAR_HEIGHT.px;
                 flex_shrink_0;
             } [
                 ..$self.render_usage(cx),
-                $self.attachment_button(cx) {
-                    w: $px(layout::ICON_BUTTON_SIZE); h: $px(layout::ICON_BUTTON_SIZE); p_0;
+                $(self.attachment_button(cx)) {
+                    w: layout::ICON_BUTTON_SIZE.px; h: layout::ICON_BUTTON_SIZE.px; p_0;
                 },
-                ..$self.supports_directories().then(|| self.directories_button(cx)),
-                #div { flex_1; min_w_0; } [$self.render_config_options(cx)],
+                @if (self.supports_directories())
+                    $self.directories_button(cx),
+                @end,
+                .div { flex_1; min_w_0; } [$self.render_config_options(cx)],
                 ..$self.render_queue(cx),
-                ..$((self.working() && !self.composer.input.read(cx).value().trim().is_empty())
-                    .then(|| self.immediate_send_button(cx))),
-                ..$((!self.window.compact && self.selected.authentication.required.is_some())
-                    .then(|| self.authentication_button(cx))),
-                ..$((self.working() && !self.composer.input.read(cx).value().trim().is_empty())
-                    .then(|| crate::ui::tooltip::bounded(
+                @if (self.working() && !self.composer.input.read(cx).value().trim().is_empty())
+                    $self.immediate_send_button(cx),
+                @end,
+                @if (!self.window.compact && self.selected.authentication.required.is_some())
+                    $self.authentication_button(cx),
+                @end,
+                @if (self.working() && !self.composer.input.read(cx).value().trim().is_empty())
+                    (
                         "queue-message-hint",
-                        gds_uim::el! {
-                            Button("queue-message") {
-                                ghost; xsmall; icon: $IconName::Send;
-                                disabled: $(!self.can_send(cx));
-                                on_click: $cx.listener(Self::on_composer_send);
-                            }
+                        "queue-message".Button::new {
+                            ghost; xsmall; icon: IconName::Send;
+                            disabled: $(!self.can_send(cx));
+                            on_click: (cx, Self::on_composer_send).Context::listener;
                         },
-                        self.send_hint(cx),
-                    ))),
-                $crate::ui::tooltip::bounded(
+                        $self.send_hint(cx),
+                    ).ui::tooltip::bounded,
+                @end,
+                (
                     "submit-hint",
-                    gds_uim::el! {
-                        $submit {
-                            xsmall;
-                            w: $px(layout::ICON_BUTTON_SIZE);
-                            h: $px(layout::ICON_BUTTON_SIZE);
-                            p_0;
-                            flex_shrink_0;
-                        }
+                    submit {
+                        xsmall;
+                        w: layout::ICON_BUTTON_SIZE.px;
+                        h: layout::ICON_BUTTON_SIZE.px;
+                        p_0;
+                        flex_shrink_0;
                     },
                     submit_hint,
-                ),
+                ).ui::tooltip::bounded,
             ]
         }
         .into_any_element()

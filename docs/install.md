@@ -69,17 +69,16 @@ inputs.bas.packages.${pkgs.stdenv.hostPlatform.system}.acp-test-agent
 ```
 
 Home Manager 则放入 `home.packages`。Flake 同时提供 `#acp-test-agent` package、app 和 check，
-支持 `x86_64-linux`、`aarch64-linux`；测试工具包不依赖主项目的 GUI 或子模块。
+支持 `x86_64-linux`、`aarch64-linux`；测试工具包不依赖主项目的 GUI。
 
 `make install-bas` 只安装 release 版 `bas` 和 `bast`，不安装、更新或卸载任何外部
 ACP 适配器及其 CLI，也不创建或修改用户配置。外部后端可通过运行中的 daemon 按需从 ACP Registry 安装，或由用户按官方文档独立管理。
 未配置后端时只提供 `embedded` echo 后端。
 `make install-bas-service` 还会链接并启用 systemd **用户服务**，立即启动；无需 root，服务使用当前用户的目录与登录状态。
 优先使用 Makefile 的快照安装路径。它复用 `scripts/install-bas` 与 `scripts/install-basg`，
-包含尚未加入 Git 的源码和已初始化子模块的源码，排除 `.git`、`.delta`、`.env` 等
-元数据、测试输出和构建目录。普通 Git checkout 首次使用前执行
-`git submodule update --init --recursive`；path 快照已有 `vendor/gds-uim` 源码，
-不需要 Git fetching 参数 `submodules=1`。
+包含尚未加入 Git 的第一方源码，排除 `.git`、`.delta`、`.env` 等
+元数据、测试输出和构建目录。不需要初始化子模块；`gds-uim` 宏由 Cargo.lock 与
+Nix 固定输出 hash 获取。path 快照不附加 Git fetching 参数。
 
 `make install` 同时安装 daemon、CLI 和 GUI，不启用用户服务；即使使用 `make -j`，
 安装目标也会顺序执行，避免同时修改同一个 Nix profile。`make help` 列出所有目标。
@@ -100,24 +99,23 @@ bas
 TCP 仍可显式开启，连接格式和旧版迁移见 [服务连接类型](connections.md)。
 无需 GUI 时，只安装 bas 即可，守护进程包不引入图形运行库。
 
-源码均已加入 Git 后，也可显式使用包含子模块的本地 Git source：
+源码均已加入 Git 后，也可直接使用本地 flake：
 
 ```sh
-nix profile add "git+file://$PWD?submodules=1#bas"
-nix run "git+file://$PWD?submodules=1#bas"
-nix run "git+file://$PWD?submodules=1#bast" -- agents
+nix profile add .#bas
+nix run .#bas
+nix run .#bast -- agents
 ```
 
 `bas` 包同时包含 daemon 和 CLI。
 NixOS / Home Manager 可将 `inputs.bas.packages.${pkgs.stdenv.hostPlatform.system}.bas`
 加入 `environment.systemPackages` / `home.packages`，服务另行声明。
-输入必须使用支持子模块的 Git URL：
+远端输入可使用标准 GitHub fetcher：
 
 ```nix
-inputs.bas.url = "git+https://github.com/4t145/bas?submodules=1";
+inputs.bas.url = "github:4t145/bas";
 ```
 
-不要用 `github:` tarball fetcher 代替，它不支持子模块。
 若旧版已将带 `submodules=1` 的 path URL 写入 profile，更正源码不会自动修复已有坏记录；
 问题背景见 [Nix source 类型边界](upstream-ui.md#nix-source-类型边界)。
 Bas flake 本身不捆绑外部适配器。Nix 安装的 daemon 为托管 ELF 程序提供安装时的解释器和运行库修补；

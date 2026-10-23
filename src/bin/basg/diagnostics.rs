@@ -10,12 +10,15 @@ mod tests;
 pub(crate) use surface::{content, wrap};
 pub(crate) use window::OpenLogs;
 
+use crate::ui::{copy_button, tooltip};
+use gds_uim::el;
 use gpui_kit::{
-    Anchor, AnyWindowHandle, App, Global, IntoElement, TestSupportExt,
+    Anchor, AnyWindowHandle, App, FontWeight, Global, IntoElement, Role, TestSupportExt,
     component::{
         ActiveTheme, Root,
         notification::{Notification, NotificationDelivery, NotificationType},
     },
+    div,
     prelude::*,
     px,
 };
@@ -117,48 +120,28 @@ pub(crate) fn notify(
                     let body_id = id.clone();
                     let copy_id = format!("{id}-copy");
                     let hint = copy.clone();
-                    gpui_kit::div()
-                        .id(id.clone())
-                        .test_support()
-                        .role(gpui_kit::Role::Status)
-                        .aria_label(copy.clone())
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .min_w_0()
-                        .when(!compact_window, |view| {
-                            view.child(
-                                gpui_kit::div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .child(title.clone()),
-                            )
-                        })
-                        .child(
-                            gpui_kit::div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .min_w_0()
-                                .child(
-                                    gpui_kit::div()
-                                        .id(format!("{body_id}-message"))
-                                        .test_support()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(cx.theme().foreground)
-                                        .hoverable_tooltip(move |window, cx| {
-                                            crate::ui::tooltip::view(hint.clone(), window, cx)
-                                        })
-                                        .child(body.replace('\n', " ")),
-                                )
-                                .child(
-                                    crate::ui::copy_button(copy_id, copy.clone()).flex_shrink_0(),
-                                ),
-                        )
-                        .into_any_element()
+                    el! {
+                        .div {
+                            # ~id; test_support; role: Role::Status;
+                            aria_label: ~copy; flex; flex_col; gap_1; min_w_0;
+                        } [
+                            @if (!compact_window)
+                                .div {
+                                    min_w_0; truncate; font_weight: FontWeight::SEMIBOLD;
+                                } [~title],
+                            @end,
+                            .div { flex; items_center; gap_2; min_w_0; } [
+                                .div {
+                                    # format!("{body_id}-message"); test_support;
+                                    flex_1; min_w_0; truncate; text_color: $cx.theme().foreground;
+                                    hoverable_tooltip: $move |window, cx| {
+                                        tooltip::view(hint.clone(), window, cx)
+                                    };
+                                } [$body.replace('\n', " ")],
+                                (copy_id, ~copy).copy_button { flex_shrink_0; },
+                            ],
+                        ] { into_any_element; }
+                    }
                 });
             let pending = root.notification.read(cx).notifications();
             let limit = if compact_window { 1 } else { MAX_NOTICES };

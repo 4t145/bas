@@ -13,36 +13,36 @@ pub(super) fn render(
 ) -> AnyElement {
     let target = links.target(&resource.uri).ok();
     let hint = if target.is_some() {
-        crate::i18n::tr!("resource-open")
+        tr!("resource-open")
     } else {
-        crate::i18n::tr!("resource-open-unavailable")
+        tr!("resource-open-unavailable")
     };
     let uri = resource.uri.clone();
     let group = SharedString::from(format!("resource-{id}"));
-    let description = gds_uim::el! {
-        #div { flex; flex_col; min_w_0; } [
-            #div { id: $format!("resource-name-{id}"); test_support; truncate; } [$resource.name.clone()],
-            $caption(uri.clone(), cx) { id: $format!("resource-uri-{id}"); test_support; truncate; },
+    let description = el! {
+        .div { flex; flex_col; min_w_0; } [
+            .div { # format!("resource-name-{id}"); test_support; truncate; } [~$(resource.name)],
+            (~uri, cx).caption { # format!("resource-uri-{id}"); test_support; truncate; },
         ]
     };
-    gds_uim::el! {
-        #div {
-            id: $group.clone(); test_support; group: $group.clone();
+    el! {
+        .div {
+            # ~group; test_support; group: ~group;
             rounded_md; border_1; border_color: $cx.theme().border;
             p_3; min_w_0;
         } [
-            #crate::ui::ContentRow::new($format!("resource-row-{id}"), $description) { icon: IconName::File; } [
-            #crate::ui::subtle_icon_button($format!("open-resource-{id}"), IconName::ExternalLink, cx) {
-                disabled: $target.is_none(); tooltip: hint;
-                accessibility_label: $crate::i18n::tr!("resource-open-name", name = resource.name.clone());
-                on_click: $move |_, _, cx| { if let Some(target) = &target { target.open(cx); } };
-            },
-            $message_actions::action_button(SharedString::from(id.to_owned()), IconName::Copy, cx) {
-                tooltip: $crate::i18n::tr!("action-copy-resource");
-                accessibility_label: $crate::i18n::tr!("action-copy-resource");
-                invisible; group_hover: group, $gds_uim::m! { visible; };
-                on_click: $move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(uri.clone()));
-            },
+            (format!("resource-row-{id}"), description).ui::ContentRow::new { icon: IconName::File; } [
+                (format!("open-resource-{id}"), IconName::ExternalLink, cx).ui::subtle_icon_button {
+                    disabled: $target.is_none(); tooltip: hint;
+                    accessibility_label: tr!("resource-open-name", name = resource.name.clone());
+                    on_click: $move |_, _, cx| { if let Some(target) = &target { target.open(cx); } };
+                },
+                ($(SharedString::from(id.to_owned())), IconName::Copy, cx).message_actions::action_button {
+                    tooltip: tr!("action-copy-resource");
+                    accessibility_label: tr!("action-copy-resource");
+                    invisible; group_hover: group, { visible; };
+                    on_click: move (_, _, cx) => $cx.write_to_clipboard(ClipboardItem::new_string(uri.clone()));
+                },
             ],
         ]
     }.into_any_element()

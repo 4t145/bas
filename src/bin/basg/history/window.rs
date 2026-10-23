@@ -1,7 +1,12 @@
 //! One independent history window per daemon, with its own connection lifetime.
 
 use super::*;
-use crate::{theme, ui::window_controls::TitleBar};
+use crate::{
+    i18n::tr,
+    theme,
+    ui::{self, window_controls::TitleBar},
+};
+use gds_uim::el;
 use gpui_kit::{
     AppContext, Bounds, ClickEvent, Global, Render, TestSupportExt, WeakEntity, WindowBounds,
     WindowDecorations, WindowHandle, WindowKind, WindowOptions, actions,
@@ -48,7 +53,7 @@ pub(crate) fn open(request: OpenRequest, cx: &mut App) -> anyhow::Result<WindowH
     }
     let service = cx
         .try_global::<crate::agents::catalog::Service>()
-        .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("agent-history-unavailable")))?;
+        .ok_or_else(|| anyhow::anyhow!(tr!("agent-history-unavailable")))?;
     let (connection, events) = Connection::new(request.server.clone(), service.runtime());
     open_connected(request, connection, events, cx)
 }
@@ -81,7 +86,7 @@ pub(crate) fn open_connected(
     let server = request.server.clone();
     let mut browser = None;
     let handle = cx.open_window(window_options(cx), |window, cx| {
-        window.set_window_title(crate::i18n::tr!("agent-history-title"));
+        window.set_window_title(tr!("agent-history-title"));
         let history = cx.new(|cx| Browser::new(request, connection, events, window, cx));
         browser = Some(history.downgrade());
         history.update(cx, |history, cx| {
@@ -147,19 +152,19 @@ impl Host {
 
 impl Render for Host {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        window.set_window_title(crate::i18n::tr!("agent-history-title"));
-        gds_uim::el! { #div {
-            id: "agent-history-window"; test_support; key_context: "BasAgentHistory";
+        window.set_window_title(tr!("agent-history-title"));
+        el! { .div {
+            # "agent-history-window"; test_support; key_context: "BasAgentHistory";
             size_full; flex; flex_col; bg: $cx.theme().background; text_color: $cx.theme().foreground;
-            on_action: $cx.listener(Self::close_action);
+            on_action: (cx, Self::close_action).Context::listener;
         } [
-            TitleBar { on_close_window: $cx.listener(Self::close); } [
-                #div { flex; items_center; gap_2; } [
-                    Icon(ICON) { size: crate::ui::ICON.px; },
-                    $crate::i18n::tr!("agent-history-title"),
+            .TitleBar::new { on_close_window: (cx, Self::close).Context::listener; } [
+                .div { flex; items_center; gap_2; } [
+                    ICON.Icon::new { size: ui::ICON.px; },
+                    tr!("agent-history-title"),
                 ],
             ],
-            #div { flex_1; min_h_0; } [$self.browser.clone()],
+            .div { flex_1; min_h_0; } [~$(self.browser)],
         ] }
     }
 }

@@ -218,33 +218,33 @@ basg --server local --cwd /path/to/project
 basg --window
 ```
 
-优先使用此快照安装目标构建 release 版本，包含尚未加入 Git 的源码和已初始化子模块，
+优先使用此快照安装目标构建 release 版本，包含尚未加入 Git 的第一方源码，
 排除 `.git`、`.delta`、`.env` 等元数据、测试输出和构建输出。
-path 快照已有宏源码，不传 Git 专用的 `submodules=1` 参数。
+宏源码由 Cargo.lock 和 Nix 固定输出 hash 获取；path 快照不传 Git fetching 参数。
 安装包包含运行时图形库的启动包装与 `BasG` 桌面菜单入口，
 日常启动不需要 `nix develop`。桌面标识为 `org.bas.Gui`，窗口规则需使用此标识。
 安装不启动 bas；服务可用 `make install-bas-service` 安装，见 [安装与后端配置](install.md)。
 卸载使用 `nix profile remove basg`；安装新的本地版本直接重跑 `make install-basg`，
 脚本会替换同名的旧 profile 条目。
 
-源码均已加入 Git 后，也可以显式使用包含子模块的 Git flake 输出：
+源码均已加入 Git 后，也可以直接使用本地 flake 输出：
 
 ```sh
-nix profile add "git+file://$PWD?submodules=1#basg"
+nix profile add .#basg
 # 或只构建 / 临时运行
-nix build "git+file://$PWD?submodules=1#basg"
-nix run "git+file://$PWD?submodules=1#basg" -- --window
+nix build .#basg
+nix run .#basg -- --window
 ```
 
 NixOS / Home Manager 的 flake 配置中，设置
-`inputs.bas.url = "git+https://github.com/4t145/bas?submodules=1";`，再将
+`inputs.bas.url = "github:4t145/bas";`，再将
 `inputs.bas.packages.${pkgs.stdenv.hostPlatform.system}.basg` 加入
 `environment.systemPackages` / `home.packages`。
 
 ## 本机启动
 
-首次克隆或更新后，在物理 checkout 执行 `git submodule update --init --recursive`。
-以下 Cargo 和 `nix develop .#gui` 工作流直接读取本地子模块源码。
+无需子模块初始化。以下 Cargo 工作流按 Cargo.lock 获取固定的上游 Git 宏依赖，
+不读取本地 vendor 源码；首次构建需要网络或已填充的 Cargo cache。
 
 macOS / Windows 可使用仓库固定的 Rust 工具链原生构建：
 

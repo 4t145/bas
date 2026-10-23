@@ -2715,6 +2715,20 @@ dependencies = [
 [[package]]
 name = "gds-uim"
 version = "0.1.0"
+source = "git+https://github.com/4t145/gds-uim.git?rev=94fe061888c45e137daff0d45c172c36bdb09882#94fe061888c45e137daff0d45c172c36bdb09882"
+dependencies = [
+ "gds-uim-macros",
+]
+
+[[package]]
+name = "gds-uim-macros"
+version = "0.1.0"
+source = "git+https://github.com/4t145/gds-uim.git?rev=94fe061888c45e137daff0d45c172c36bdb09882#94fe061888c45e137daff0d45c172c36bdb09882"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "generic-array"

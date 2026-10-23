@@ -148,19 +148,19 @@ impl Workspace {
         let unread = self.reply_is_unread(reply.cursor);
         let bounds = Rc::new(Cell::new(Bounds::default()));
         let measured = bounds.clone();
-        Some(gds_uim::el! {
-            #div {
-                id: "completed-reply"; test_support; relative; flex; flex_1;
+        Some(el! {
+            .div {
+                # "completed-reply"; test_support; relative; flex; flex_1;
                 min_w_0; items_center; gap_1p5; cursor_pointer;
-                text_color: $(if unread { cx.theme().foreground } else { cx.theme().muted_foreground });
-                on_mouse_down: $gpui_kit::MouseButton::Left, $Self::on_reply_mouse_down;
-                on_click: $cx.listener(Self::on_reply_open);
+                text_color: @if (unread) $cx.theme().foreground @else $cx.theme().muted_foreground @end;
+                on_mouse_down: gpui_kit::MouseButton::Left, Self::on_reply_mouse_down;
+                on_click: (cx, Self::on_reply_open).Context::listener;
                 on_hover: $cx.listener(move |this, hovered, window, cx| {
                     this.hover_reply(*hovered, bounds.get(), window, cx);
                 });
             } [
-                #div { flex_1; min_w_0; truncate; } [ $summary ],
-                #canvas($move |bounds, _, _| measured.set(bounds), $|_, _, _, _| {}) {
+                .div { flex_1; min_w_0; truncate; } [summary],
+                (move (bounds, _, _) => $measured.set(bounds), $|_, _, _, _| {}).canvas {
                     absolute; size_full;
                 }
             ]
@@ -374,7 +374,7 @@ impl Workspace {
             popup_options(parent, trigger, preview_size),
             |window, cx| {
                 cx.new(|cx| {
-                    gds_uim::el! { #theme::window_root(preview, window, cx) {
+                    el! { (preview, window, cx).theme::window_root {
                         bordered: false; window_shadow_size: 0.0.px;
                     } }
                 })
@@ -422,14 +422,18 @@ impl Workspace {
             .reply_preview
             .as_ref()
             .filter(|preview| preview.window.is_none() && !self.window.compact)?;
-        Some(gpui_kit::deferred(gds_uim::el! {
-            #gpui_kit::anchored {
-                position: $preview.trigger.bottom_left();
-                snap_to_window_with_margin: 8.0.px;
-            } [
-                #div { w: $preview.size.width; h: $preview.size.height; } [$preview.content.clone()],
-            ]
-        }).with_priority(gpui_kit::base::POPUP_PRIORITY).into_any_element())
+        Some(
+            gpui_kit::deferred(el! {
+                .gpui_kit::anchored {
+                    position: $preview.trigger.bottom_left();
+                    snap_to_window_with_margin: 8.0.px;
+                } [
+                    .div { w: $preview.size.width; h: $preview.size.height; } [~$(preview.content)],
+                ]
+            })
+            .with_priority(gpui_kit::base::POPUP_PRIORITY)
+            .into_any_element(),
+        )
     }
 
     pub(super) fn close_reply_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -495,8 +499,8 @@ impl Render for ReplyPreview {
                 if matches!(self.key, PreviewKey::Attachment(_))
                     && let bas::acp::ContentBlock::Image(image) = block
                 {
-                    return gds_uim::el! { #div {
-                        w_full; h: $px(IMAGE_PREVIEW_HEIGHT - 26.);
+                    return el! { .div {
+                        w_full; h: $(IMAGE_PREVIEW_HEIGHT - 26.).px;
                         flex; items_center; justify_center;
                     } [ $images::acp_image(&id, image, images, true, cx) ] }
                     .into_any_element();
@@ -523,20 +527,20 @@ impl Render for ReplyPreview {
             })
             .collect::<Vec<_>>();
         let blocks = blocks.into_iter().map(|block| {
-            gds_uim::el! {
-                #div { flex_shrink_0; } [ $block ]
+            el! {
+                .div { flex_shrink_0; } [block]
             }
         });
-        gds_uim::el! {
-            #div {
-                id: "reply-preview"; test_support; size_full; rounded_md; border_1;
+        el! {
+            .div {
+                # "reply-preview"; test_support; size_full; rounded_md; border_1;
                 border_color: $cx.theme().border; bg: $theme::content_background(cx);
                 text_color: $cx.theme().foreground; refine_style: $&theme::font_style(cx);
                 text_size: $theme::content_font_size(cx); overflow_hidden;
-                on_hover: $cx.listener(Self::on_hover);
+                on_hover: (cx, Self::on_hover).Context::listener;
             } [
-                #div {
-                    id: "reply-preview-scroll"; size_full; overflow_y_scroll;
+                .div {
+                    # "reply-preview-scroll"; size_full; overflow_y_scroll;
                     p_3; flex; flex_col; gap_2;
                 } [ ..blocks ]
             ]

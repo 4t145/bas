@@ -79,73 +79,73 @@ impl Workspace {
             .map_or(now, |draft| draft.updated_at);
         let disabled = self.selected.creating || self.composer.paste_pending;
         let directory = self.navigation.selected_directory.clone();
-        let title = if editing {
-            self.render_title_editor(cx)
-        } else {
-            let directory = directory.clone();
-            let generation = self.composer.generation;
-            gds_uim::el! {
-                #div {
-                    id: $format!("draft-thread-title-text-{index}"); test_support;
-                    min_w_0; truncate; text_size: $crate::ui::SMALL;
-                    on_click: $cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
-                        if event.click_count() == 2 {
-                            cx.stop_propagation();
-                            if !this.selected.creating && !this.composer.paste_pending {
-                                this.on_draft_row_rename(&directory, generation, window, cx);
-                            }
-                        }
-                    });
-                } [$self.draft_title()]
-            }
-            .into_any_element()
-        };
-        let title_row = gds_uim::el! {
-            #div {
-                id: $SharedString::from(format!("draft-thread-title-{index}"));
+        let rename_directory = directory.clone();
+        let generation = self.composer.generation;
+        let title_row = el! {
+            .div {
+                # format!("draft-thread-title-{index}").SharedString::from;
                 test_support; h: layout::ICON_BUTTON_SIZE.px; flex; items_center; min_w_0;
-                @$!editing => {
-                    group_hover: $group.clone(), $gds_uim::m! {
-                        pr: $px(thread_row::ACTIONS_WIDTH + thread_row::ACTIONS_GAP);
+                @if (!editing)
+                    group_hover: ~group, {
+                        pr: $(thread_row::ACTIONS_WIDTH + thread_row::ACTIONS_GAP).px;
                     };
-                };
-            } [$title]
-        };
-        let actions = gds_uim::el! {
-            #div {
-                id: $SharedString::from(format!("draft-thread-actions-{index}"));
-                test_support; absolute; top_0; right_0; flex; invisible;
-                @$!editing => { group_hover: $group.clone(), $gds_uim::m! { visible; }; };
+                @end;
             } [
-                #layout::icon_button($SharedString::from(format!("discard-draft-{index}")), IconName::Trash) {
-                    accessibility_label: $crate::i18n::tr!("draft-discard");
-                    tooltip: $crate::i18n::tr!("draft-discard"); disabled: disabled;
+                @if (editing)
+                    $self.render_title_editor(cx),
+                @else
+                    .div {
+                        # format!("draft-thread-title-text-{index}"); test_support;
+                        min_w_0; truncate; text_size: ui::SMALL;
+                        on_click: $cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                            if event.click_count() == 2 {
+                                cx.stop_propagation();
+                                if !this.selected.creating && !this.composer.paste_pending {
+                                    this.on_draft_row_rename(&rename_directory, generation, window, cx);
+                                }
+                            }
+                        });
+                    } [$self.draft_title()],
+                @end,
+            ]
+        };
+        let actions = el! {
+            .div {
+                # format!("draft-thread-actions-{index}").SharedString::from;
+                test_support; absolute; top_0; right_0; flex; invisible;
+                @if (!editing)
+                    group_hover: ~group, { visible; };
+                @end;
+            } [
+                (format!("discard-draft-{index}").SharedString::from, IconName::Trash).icon_button {
+                    accessibility_label: tr!("draft-discard");
+                    tooltip: tr!("draft-discard"); disabled: disabled;
                     on_click: $cx.listener(Self::on_draft_row_discard);
                 },
             ]
         };
-        gds_uim::el! {
-            #div {
-                id: $group.clone(); test_support; group: group;
+        el! {
+            .div {
+                # ~group; test_support; group: group;
                 w_full; px_3; py_2; bg: $cx.theme().sidebar_accent;
-                hover => { bg: $cx.theme().sidebar_accent; };
+                hover: { bg: $cx.theme().sidebar_accent; };
                 flex; items_start; gap_2;
                 on_mouse_down: gpui_kit::MouseButton::Right,
                     $cx.listener(move |this, event, window, cx| {
                         this.on_draft_row_context_menu(directory.clone(), disabled, event, window, cx);
                     });
             } [
-                #div { h: layout::ICON_BUTTON_SIZE.px; flex; items_center; flex_shrink_0; } [
+                .div { h: layout::ICON_BUTTON_SIZE.px; flex; items_center; flex_shrink_0; } [
                     $self.agent_icon(format!("draft-thread-agent-{index}"), &self.selected.agent, cx),
                 ],
-                #div { relative; flex_1; min_w_0; flex; flex_col; } [
-                    $title_row,
-                    #div {
-                        id: $SharedString::from(format!("draft-thread-time-{index}"));
+                .div { relative; flex_1; min_w_0; flex; flex_col; } [
+                    title_row,
+                    .div {
+                        # format!("draft-thread-time-{index}").SharedString::from;
                         test_support; h: layout::ICON_BUTTON_SIZE.px; flex; items_center;
-                        text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                    } [$crate::ui::time::recent_time(updated_at, now)],
-                    $actions,
+                        text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                    } [(updated_at, now).ui::time::recent_time],
+                    actions,
                 ],
             ]
         }.into_any_element()

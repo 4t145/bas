@@ -1,4 +1,5 @@
 use super::{View, groups, history};
+use crate::ui::input::placeholder;
 use crate::workspace::*;
 use gpui_kit::component::menu::PopupMenuItem;
 
@@ -17,18 +18,20 @@ impl Workspace {
         } else {
             self.grouped_threads(&sessions, &query)
         };
-        let header = gds_uim::el! {
-            #div {
-                id: "sidebar-header"; test_support; flex; flex_shrink_0;
+        let header = el! {
+            .div {
+                # "sidebar-header"; test_support; flex; flex_shrink_0;
                 h: layout::HEADER_HEIGHT.px; items_center; gap_1; px_3;
-                @$cfg!(target_os = "macos") => { pl: layout::MACOS_WINDOW_CONTROLS_WIDTH.px; };
+                @if (cfg!(target_os = "macos"))
+                    pl: layout::MACOS_WINDOW_CONTROLS_WIDTH.px;
+                @end;
             } [
-                #div {
-                    id: "application-menu-slot"; test_support; flex_1; min_w_0; flex; items_center;
+                .div {
+                    # "application-menu-slot"; test_support; flex_1; min_w_0; flex; items_center;
                 } [$self.application_button(cx)],
-                #layout::icon_button("agent-history-open", $crate::history::ICON) {
-                    accessibility_label: $crate::i18n::tr!("agent-history-title");
-                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("agent-history-title"), shortcuts::OpenSessionManager);
+                ("agent-history-open", crate::history::ICON).icon_button {
+                    accessibility_label: tr!("agent-history-title");
+                    hoverable_tooltip: $shortcuts::tooltip(tr!("agent-history-title"), shortcuts::OpenSessionManager);
                     disabled: $!self.backend.connected;
                     on_click: $cx.listener(|this, _, window, cx| {
                         let agent = this.current().map(|meta| meta.agent.to_string())
@@ -36,14 +39,14 @@ impl Workspace {
                         this.open_agent_history(agent, window, cx);
                     });
                 },
-                #layout::icon_button("add-workspace-button", IconName::FolderPlus) {
-                    accessibility_label: $crate::i18n::tr!("workspace-add");
-                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("workspace-add"), shortcuts::AddWorkspace);
+                ("add-workspace-button", IconName::FolderPlus).icon_button {
+                    accessibility_label: tr!("workspace-add");
+                    hoverable_tooltip: $shortcuts::tooltip(tr!("workspace-add"), shortcuts::AddWorkspace);
                     on_click: $cx.listener(Self::on_sidebar_add_workspace);
                 },
-                #layout::icon_button("new-session", IconName::Plus) {
-                    accessibility_label: $crate::i18n::tr!("session-new");
-                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("session-new"), NewSession);
+                ("new-session", IconName::Plus).icon_button {
+                    accessibility_label: tr!("session-new");
+                    hoverable_tooltip: $shortcuts::tooltip(tr!("session-new"), NewSession);
                     on_click: $cx.listener(Self::on_sidebar_new_session);
                 },
             ]
@@ -53,24 +56,26 @@ impl Workspace {
         } else {
             crate::i18n::tr!("session-show-archived")
         };
-        let search_icon = gds_uim::el! { Icon(IconName::Search) { small; } };
-        let search = gds_uim::el! {
-            #div { id: "thread-search-row"; test_support; px_3; pt_2; pb_3; flex; items_center; gap_2; } [
-                #div { id: "thread-search"; test_support; flex_1; min_w_0; } [
-                    $crate::ui::input::placeholder(&self.navigation.search, Input::new(&self.navigation.search).small().prefix(search_icon).cleanable(true))
+        let search_icon = el! { IconName::Search.Icon::new { small; } };
+        let search = el! {
+            .div { # "thread-search-row"; test_support; px_3; pt_2; pb_3; flex; items_center; gap_2; } [
+                .div { # "thread-search"; test_support; flex_1; min_w_0; } [
+                    ($(&self.navigation.search), $(&self.navigation.search).Input::new {
+                        small; prefix: search_icon; cleanable: true;
+                    }).placeholder,
                 ],
-                #div { flex; items_center; gap_1; flex_shrink_0; } [
-                    #layout::icon_button("bookmarked-list", IconName::Bookmark) {
+                .div { flex; items_center; gap_1; flex_shrink_0; } [
+                    ("bookmarked-list", IconName::Bookmark).icon_button {
                         selected: $(self.navigation.view == View::Bookmarks);
-                        accessibility_label: $crate::i18n::tr!("sidebar-bookmarks"); tooltip: $crate::i18n::tr!("sidebar-bookmarks");
+                        accessibility_label: tr!("sidebar-bookmarks"); tooltip: tr!("sidebar-bookmarks");
                         on_click: $cx.listener(|this, _, _, cx| this.toggle_sidebar_view(View::Bookmarks, cx));
                     },
-                    #layout::icon_button("history-list", IconName::Clock) {
+                    ("history-list", IconName::Clock).icon_button {
                         selected: $(self.navigation.view == View::History);
-                        accessibility_label: $crate::i18n::tr!("sidebar-history"); tooltip: $crate::i18n::tr!("sidebar-history");
+                        accessibility_label: tr!("sidebar-history"); tooltip: tr!("sidebar-history");
                         on_click: $cx.listener(|this, _, _, cx| this.toggle_sidebar_view(View::History, cx));
                     },
-                    #layout::icon_button("archived-list", IconName::Archive) {
+                    ("archived-list", IconName::Archive).icon_button {
                         selected: $(self.navigation.view == View::Archived);
                         accessibility_label: archived_hint; tooltip: archived_hint;
                         on_click: $cx.listener(|this, _, _, cx| this.toggle_sidebar_view(View::Archived, cx));
@@ -78,29 +83,26 @@ impl Workspace {
                 ],
             ]
         };
-        let empty = (if self.navigation.view.flat() {
+        let empty = if self.navigation.view.flat() {
             !sessions
                 .iter()
                 .any(|session| matches_query(session, &query))
         } else {
             groups.is_empty()
-        })
-        .then(|| {
-            gds_uim::el! { #div { p_3; } [#caption($crate::i18n::tr!("session-no-results"), cx)] }
-        });
+        };
         let columns = if self.navigation.view == View::History {
             let now = jiff::Zoned::now();
             history::groups(&sessions, &query, &now)
                 .into_iter()
                 .map(|group| {
                     let label = group.period.label(now.date());
-                    gds_uim::el! { #div { flex; flex_col; } [
-                        #div {
-                            id: $group.period.id(); test_support; role: gpui_kit::Role::Label;
-                            aria_label: $label.clone(); px_3; pt_3; pb_1;
-                            text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                        } [$label],
-                        ..$group.sessions.into_iter().map(|session| self.thread_row(session, cx)),
+                    el! { .div { flex; flex_col; } [
+                        .div {
+                            # $group.period.id(); test_support; role: gpui_kit::Role::Label;
+                            aria_label: ~label; px_3; pt_3; pb_1;
+                            text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                        } [label],
+                        ..$(group.sessions) { into_iter; map: session => $self.thread_row(session, cx); },
                     ] }
                     .into_any_element()
                 })
@@ -112,13 +114,13 @@ impl Workspace {
                 .collect();
             let label = crate::i18n::tr!("sidebar-bookmarks-count", count = threads.len());
             vec![
-                gds_uim::el! { #div { flex; flex_col; } [
-                    #div {
-                        id: "thread-bookmarks-title"; test_support; role: gpui_kit::Role::Label;
-                        aria_label: $label.clone(); px_3; pt_2; pb_1;
-                        text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                    } [$label],
-                    ..$threads.into_iter().map(|session| self.thread_row(session, cx)),
+                el! { .div { flex; flex_col; } [
+                    .div {
+                        # "thread-bookmarks-title"; test_support; role: gpui_kit::Role::Label;
+                        aria_label: ~label; px_3; pt_2; pb_1;
+                        text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                    } [label],
+                    ..threads { into_iter; map: session => $self.thread_row(session, cx); },
                 ] }
                 .into_any_element(),
             ]
@@ -129,21 +131,31 @@ impl Workspace {
             let draft_selected = self.navigation.view == View::Workspaces && self.selected.id.is_none()
                 && self.navigation.selected_directory == directory;
             let header = self.workspace_header(index, directory, collapsed, cx);
-            let draft = (!collapsed && draft_selected).then(|| self.draft_thread_row(index, cx));
-            let empty = (!collapsed && group.threads.is_empty() && !draft_selected).then(|| {
-                gds_uim::el! { #caption($crate::i18n::tr!("session-empty"), cx) { ml_5; px_3; py_2; } }
-            });
-            let threads = group.threads.into_iter().filter(|_| !collapsed)
-                .map(|session| self.thread_row(session, cx));
-            gds_uim::el! { #div [$header, ..draft, ..empty, ..threads] }.into_any_element()
+            el! { .div [
+                header,
+                @if (!collapsed && draft_selected)
+                    $self.draft_thread_row(index, cx),
+                @end,
+                @if (!collapsed && group.threads.is_empty() && !draft_selected)
+                    (tr!("session-empty"), cx).caption { ml_5; px_3; py_2; },
+                @end,
+                @if (!collapsed)
+                    ..$(group.threads) { into_iter; map: session => $self.thread_row(session, cx); },
+                @end,
+            ] }.into_any_element()
         }).collect::<Vec<_>>()
         };
-        gds_uim::el! { #div {
+        el! { .div {
             flex; flex_col; w: SIDEBAR_WIDTH.px; flex_shrink_0; h_full;
             bg: $cx.theme().sidebar; border_r_1; border_color: $cx.theme().border;
         } [
-            $header, $search,
-            #div { id: "session-list"; test_support; flex_1; min_h_0; overflow_y_scroll; } [..columns, ..empty],
+            header, search,
+            .div { # "session-list"; test_support; flex_1; min_h_0; overflow_y_scroll; } [
+                ..columns,
+                @if (empty)
+                    .div { p_3; } [(tr!("session-no-results"), cx).caption],
+                @end,
+            ],
             $self.server_status_footer(cx),
         ] }
     }
@@ -189,11 +201,11 @@ impl Workspace {
         let new_directory = directory.clone();
         let menu = self.workspace_menu(directory.clone(), collapsed, cx);
         let button_menu = menu.clone();
-        let more_button = gds_uim::el! {
-            #layout::icon_button($SharedString::from(format!("workspace-menu-{index}")), IconName::Ellipsis) {
-                accessibility_label: $crate::i18n::tr!("workspace-more");
-                tooltip: $crate::i18n::tr!("workspace-more");
-                on_click: $|_, _, cx| cx.stop_propagation();
+        let more_button = el! {
+            (format!("workspace-menu-{index}").SharedString::from, IconName::Ellipsis).icon_button {
+                accessibility_label: tr!("workspace-more");
+                tooltip: tr!("workspace-more");
+                on_click: (_, _, cx) => $cx.stop_propagation();
             }
         };
         let more = self.menu_button(
@@ -203,28 +215,28 @@ impl Workspace {
             move |menu, window, cx| button_menu(menu, window, cx),
             cx,
         );
-        let actions = gds_uim::el! {
-            #div {
-                id: $SharedString::from(format!("workspace-actions-{index}"));
+        let actions = el! {
+            .div {
+                # format!("workspace-actions-{index}").SharedString::from;
                 test_support; flex; items_center; flex_shrink_0; invisible;
-                group_hover: $group.clone(), $gds_uim::m! { visible; };
+                group_hover: ~group, { visible; };
             } [
-                #layout::icon_button($SharedString::from(format!("new-thread-{index}")), IconName::Plus) {
-                    accessibility_label: $crate::i18n::tr!("workspace-new-session");
-                    tooltip: $crate::i18n::tr!("workspace-new-session");
+                (format!("new-thread-{index}").SharedString::from, IconName::Plus).icon_button {
+                    accessibility_label: tr!("workspace-new-session");
+                    tooltip: tr!("workspace-new-session");
                     on_click: $cx.listener(move |this, _, window, cx| {
                         this.on_sidebar_new_thread(new_directory.clone(), window, cx);
                     });
                 },
-                $more,
+                more,
             ]
         };
-        gds_uim::el! {
-            #div {
-                id: $group.clone(); test_support; group: group;
-                role: gpui_kit::Role::Button; aria_label: $name.clone(); aria_expanded: $!collapsed;
+        el! {
+            .div {
+                # ~group; test_support; group: group;
+                role: gpui_kit::Role::Button; aria_label: ~name; aria_expanded: $!collapsed;
                 w_full; flex; items_center; gap_2; px_3; py_1; cursor_pointer;
-                hover => { bg: $cx.theme().sidebar_accent; };
+                hover: { bg: $cx.theme().sidebar_accent; };
                 on_click: $cx.listener(move |this, _, _, cx| {
                 this.toggle_workspace_collapsed(directory.clone(), cx)
                 });
@@ -233,27 +245,20 @@ impl Workspace {
                         this.on_sidebar_context_menu(menu.clone(), event, window, cx);
                     });
             } [
-                #div {
-                    id: $SharedString::from(format!("workspace-{index}"));
+                .div {
+                    # format!("workspace-{index}").SharedString::from;
                     test_support; flex_1; min_w_0; flex; items_center; gap_2;
-                    hoverable_tooltip: $move |window, cx| {
-                        crate::ui::tooltip::view(
-                            if collapsed {
-                                crate::i18n::tr!("workspace-expand")
-                            } else {
-                                crate::i18n::tr!("workspace-collapse")
-                            },
-                            window,
-                            cx,
-                        )
-                    };
+                    hoverable_tooltip: move (window, cx) => (
+                        @if (collapsed) tr!("workspace-expand") @else tr!("workspace-collapse") @end,
+                        window, cx,
+                    ).ui::tooltip::view;
                 } [
-                    Icon($(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown })) {
+                    (@if (collapsed) IconName::ChevronRight @else IconName::ChevronDown @end).Icon::new {
                         xsmall; flex_shrink_0;
                     },
-                    #div { text_size: $crate::ui::SMALL; truncate; } [$name],
+                    .div { text_size: ui::SMALL; truncate; } [name],
                 ],
-                $actions,
+                actions,
             ]
         }.into_any_element()
     }

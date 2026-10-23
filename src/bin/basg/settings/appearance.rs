@@ -3,8 +3,13 @@
 mod controls;
 mod form;
 mod sessions;
-use crate::theme::{self, preferences::Preferences};
+use crate::{
+    i18n::tr,
+    theme::{self, preferences::Preferences},
+    ui,
+};
 use form::{DraftError, Form};
+use gds_uim::el;
 use gpui_kit::{
     App, Context, Render, ScrollHandle, Subscription, Task, TestSupportExt, Window,
     component::{input::*, select::*, *},
@@ -378,43 +383,43 @@ impl AppearancePage {
 
     fn control(&self, field: Field) -> gpui_kit::AnyElement {
         match field {
-            Field::Language => gds_uim::el! {
-                #div { id: $field.id(); test_support; w_full; } [
-                    Select($&self.form.language) { small; w_full; cursor_pointer; }
+            Field::Language => el! {
+                .div { # $field.id(); test_support; w_full; } [
+                    ($&self.form.language).Select::new { small; w_full; cursor_pointer; }
                 ]
             }
             .into_any_element(),
-            Field::Source => gds_uim::el! {
-                Select($&self.form.source) { small; cursor_pointer; }
+            Field::Source => el! {
+                ($&self.form.source).Select::new { small; cursor_pointer; }
             }
             .into_any_element(),
-            Field::Mode => gds_uim::el! {
-                Select($&self.form.mode) { small; cursor_pointer; }
+            Field::Mode => el! {
+                ($&self.form.mode).Select::new { small; cursor_pointer; }
             }
             .into_any_element(),
-            Field::Background => gds_uim::el! {
-                Select($&self.form.background) { small; cursor_pointer; }
+            Field::Background => el! {
+                ($&self.form.background).Select::new { small; cursor_pointer; }
             }
             .into_any_element(),
-            Field::ComposerEnter => gds_uim::el! {
-                #div { id: $field.id(); test_support; w_full; } [
-                    Select($&self.form.composer_enter) { small; w_full; cursor_pointer; }
+            Field::ComposerEnter => el! {
+                .div { # $field.id(); test_support; w_full; } [
+                    ($&self.form.composer_enter).Select::new { small; w_full; cursor_pointer; }
                 ]
             }
             .into_any_element(),
-            Field::UiFont => gds_uim::el! {
-                Select($&self.form.ui_font) {
+            Field::UiFont => el! {
+                ($&self.form.ui_font).Select::new {
                     small;
                     cursor_pointer;
-                    search_placeholder: $crate::i18n::tr!("appearance-search-font");
+                    search_placeholder: tr!("appearance-search-font");
                 }
             }
             .into_any_element(),
-            Field::MonoFont => gds_uim::el! {
-                Select($&self.form.mono_font) {
+            Field::MonoFont => el! {
+                ($&self.form.mono_font).Select::new {
                     small;
                     cursor_pointer;
-                    search_placeholder: $crate::i18n::tr!("appearance-search-font");
+                    search_placeholder: tr!("appearance-search-font");
                 }
             }
             .into_any_element(),
@@ -429,9 +434,9 @@ impl AppearancePage {
                     _ => unreachable!("select fields handled above"),
                 }
                 .clone();
-                gds_uim::el! {
-                    #div { id: $field.id(); test_support; w_full; min_w_0; } [
-                        $crate::ui::input::placeholder(&input, Input::new(&input).small().disabled(self.document.is_none())),
+                el! {
+                    .div { # $field.id(); test_support; w_full; min_w_0; } [
+                        $ui::input::placeholder(&input, Input::new(&input).small().disabled(self.document.is_none())),
                     ]
                 }
                 .into_any_element()
@@ -445,22 +450,22 @@ impl AppearancePage {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let last = fields.len().saturating_sub(1);
-        let title = gds_uim::el! {
-            #div { flex; flex_col; gap_1; } [
-                #div {
-                    text_size: $crate::ui::HEADING; text_color: $cx.theme().foreground;
+        let title = el! {
+            .div { flex; flex_col; gap_1; } [
+                .div {
+                    text_size: ui::HEADING; text_color: $cx.theme().foreground;
                 } [ $group.title() ],
-                #div {
-                    text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                .div {
+                    text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
                 } [ $group.help() ],
             ]
         };
-        gds_uim::el! {
-            #div {
-                id: $group.card_id(); test_support; flex; flex_col; gap_2;
+        el! {
+            .div {
+                # $group.card_id(); test_support; flex; flex_col; gap_2;
             } [
-                $title,
-                #div { border_t_1; border_color: $cx.theme().border; flex; flex_col; } [
+                title,
+                .div { border_t_1; border_color: $cx.theme().border; flex; flex_col; } [
                     ..$fields.iter().enumerate().map(|(index, field)| self.row(*field, index == last, cx)),
                 ],
             ]
@@ -527,52 +532,52 @@ impl Render for AppearancePage {
             self.scroll
                 .scroll_to_top_of_item(index.min(sections.len().saturating_sub(1)));
         }
-        let header = gds_uim::el! {
-            #div { px_5; py_3; flex_shrink_0; flex; flex_col; gap_2; } [
-                #div { flex; items_center; justify_between; gap_3; } [
-                    #div { text_size: $crate::ui::HEADING; } [
-                        $crate::i18n::tr!("settings-appearance")
+        let header = el! {
+            .div { px_5; py_3; flex_shrink_0; flex; flex_col; gap_2; } [
+                .div { flex; items_center; justify_between; gap_3; } [
+                    .div { text_size: ui::HEADING; } [
+                        tr!("settings-appearance")
                     ],
-                    $super::action_button("settings-reset") {
-                        label: $crate::i18n::tr!("appearance-reset-all");
+                    ("settings-reset").super::action_button {
+                        label: tr!("appearance-reset-all");
                         disabled: $self.document.is_none();
-                        on_click: $cx.listener(Self::on_reset_all);
+                        on_click: (cx, Self::on_reset_all).Context::listener;
                     },
                 ],
-                #div {
-                    text_size: $crate::ui::SMALL;
+                .div {
+                    text_size: ui::SMALL;
                     text_color: $cx.theme().muted_foreground;
                 } [
-                    $crate::i18n::tr!(
+                    tr!(
                         "appearance-current-theme",
                         theme = (cx.global::<theme::Appearance>().name).to_string()
                     )
                 ],
-                ..$self.editor.theme_override().map(|path| gds_uim::el! {
-                    #div {
-                        text_size: $crate::ui::SMALL;
+                @if (let Some(path) = self.editor.theme_override())
+                    .div {
+                        text_size: ui::SMALL;
                         text_color: $cx.theme().muted_foreground;
                     } [
-                        $crate::i18n::tr!("appearance-theme-override", path = (path.display()).to_string())
-                    ]
-                }),
+                        tr!("appearance-theme-override", path = (path.display()).to_string())
+                    ],
+                @end,
             ]
         };
-        let body = gds_uim::el! {
-            #div {
-                id: "appearance-sections"; flex_1; min_h_0; overflow_y_scroll;
+        let body = el! {
+            .div {
+                # "appearance-sections"; flex_1; min_h_0; overflow_y_scroll;
                 track_scroll: $&self.scroll; p_5; flex; flex_col; gap_5;
             } [
-                ..$sections.is_empty().then(|| gds_uim::el! {
-                    #div { id: "settings-no-results"; test_support; } [
-                        $crate::i18n::tr!("settings-no-results")
-                    ]
-                }),
+                @if (sections.is_empty())
+                    .div { # "settings-no-results"; test_support; } [
+                        tr!("settings-no-results")
+                    ],
+                @end,
                 ..$sections.iter().map(|(group, fields)| self.group_card(*group, fields, cx)),
             ]
         };
-        gds_uim::el! {
-            #div { size_full; flex; flex_col; } [ $header, $body ]
+        el! {
+            .div { size_full; flex; flex_col; } [header, body]
         }
     }
 }

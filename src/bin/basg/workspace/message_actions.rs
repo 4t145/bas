@@ -8,7 +8,7 @@ pub(super) fn action_button(
     icon: IconName,
     cx: &App,
 ) -> Button {
-    crate::ui::subtle_icon_button(id, icon, cx)
+    ui::subtle_icon_button(id, icon, cx)
 }
 
 impl Workspace {
@@ -61,54 +61,51 @@ impl Workspace {
                 })
             });
         let group = SharedString::from(format!("content-actions-{id}"));
-        gds_uim::el! {
-            #div {
-                id: $group.clone();
+        el! {
+            .div {
+                # ~group;
                 test_support;
-                group: $group.clone();
+                group: ~group;
                 flex;
                 items_center;
                 justify_end;
                 gap_1;
                 pt_1;
             } [
-                ..$copy.map(|copy| {
-                    gds_uim::el! {
-                        $action_button(SharedString::from(format!("copy-{id}")), IconName::Copy, cx) {
-                            accessibility_label: $crate::i18n::tr!("action-copy-thought");
-                            tooltip: $crate::i18n::tr!("action-copy-thought");
-                            invisible;
-                            group_hover: $group, $gds_uim::m! { visible; };
-                            on_click: $move |_, _, cx| {
-                                Self::on_content_copy(&copy, cx);
-                            };
-                        }
-                    }
-                }),
-                $action_button(
-                    SharedString::from(format!("scroll-to-content-{id}")),
+                @if (let Some(copy) = copy)
+                    (format!("copy-{id}").SharedString::from, IconName::Copy, cx).action_button {
+                        accessibility_label: tr!("action-copy-thought");
+                        tooltip: tr!("action-copy-thought");
+                        invisible;
+                        group_hover: group, { visible; };
+                        on_click: move (_, _, cx) => ($&copy, cx).Self::on_content_copy;
+                    },
+                @end,
+                (
+                    format!("scroll-to-content-{id}").SharedString::from,
                     IconName::CornerLeftUp,
                     cx,
-                ) {
-                    accessibility_label: $crate::i18n::tr!("action-content-top");
-                    tooltip: $crate::i18n::tr!("action-content-top");
+                ).action_button {
+                    accessibility_label: tr!("action-content-top");
+                    tooltip: tr!("action-content-top");
                     on_click: $cx.listener(move |this, _, _, cx| {
                         this.on_content_top(&top_id, index, cx);
                     });
                 },
-                $action_button(
-                    SharedString::from(format!("collapse-content-{id}")),
+                (
+                    format!("collapse-content-{id}").SharedString::from,
                     IconName::ChevronUp,
                     cx,
-                ) {
-                    accessibility_label: $crate::i18n::tr!("action-collapse-content");
-                    tooltip: $crate::i18n::tr!("action-collapse-content");
+                ).action_button {
+                    accessibility_label: tr!("action-collapse-content");
+                    tooltip: tr!("action-collapse-content");
                     on_click: $cx.listener(move |this, _, _, cx| {
                         this.on_content_collapse(&collapse_id, &collapse_key, index, cx);
                     });
                 },
             ]
-        }.into_any_element()
+        }
+        .into_any_element()
     }
 
     fn on_content_copy(copy: &str, cx: &mut App) {
@@ -178,47 +175,43 @@ impl Workspace {
         }
         let group = SharedString::from(format!("message-actions-{id}"));
         Some(
-            gds_uim::el! {
-                #div {
-                    id: $group.clone();
+            el! {
+                .div {
+                    # ~group;
                     test_support;
-                    group: $group.clone();
+                    group: ~group;
                     flex;
                     items_center;
                     justify_end;
                     gap_1;
                     pt_1;
                 } [
-                    ..$((!context.text.is_empty()).then(|| {
-                        gds_uim::el! {
-                        $action_button(
-                            SharedString::from(format!("copy-response-{id}")),
+                    @if (!context.text.is_empty())
+                        (
+                            format!("copy-response-{id}").SharedString::from,
                             IconName::Copy,
                             cx,
-                        ) {
-                            accessibility_label: $crate::i18n::tr!("action-copy-response");
-                            tooltip: $crate::i18n::tr!("action-copy-response");
+                        ).action_button {
+                            accessibility_label: tr!("action-copy-response");
+                            tooltip: tr!("action-copy-response");
                             invisible;
-                            group_hover: $group, $gds_uim::m! { visible; };
-                            on_click: $move |_, _, cx| {
-                                Self::on_response_copy(&context.text, cx);
-                            };
-                        }}
-                    })),
-                    ..$navigation.then(|| {
-                        gds_uim::el! {
-                        $action_button(
-                            SharedString::from(format!("scroll-to-user-{id}")),
+                            group_hover: group, { visible; };
+                            on_click: move (_, _, cx) => ($&context.text, cx).Self::on_response_copy;
+                        },
+                    @end,
+                    @if (navigation)
+                        (
+                            format!("scroll-to-user-{id}").SharedString::from,
                             IconName::CornerLeftUp,
                             cx,
-                        ) {
-                            accessibility_label: $crate::i18n::tr!("action-user-message");
-                            tooltip: $crate::i18n::tr!("action-user-message");
+                        ).action_button {
+                            accessibility_label: tr!("action-user-message");
+                            tooltip: tr!("action-user-message");
                             on_click: $cx.listener(move |this, _, _, cx| {
                                 this.scroll_to_response_user(user_item, cx);
                             });
-                        }}
-                    }),
+                        },
+                    @end,
                 ]
             }
             .into_any_element(),

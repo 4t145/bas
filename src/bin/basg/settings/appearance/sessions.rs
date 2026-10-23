@@ -55,8 +55,8 @@ impl AppearancePage {
             id: "settings-default-agent".into(),
             label: crate::i18n::tr!("settings-default-agent"),
             help: crate::i18n::tr!("settings-default-agent-help"),
-            control: gds_uim::el! { #div { id: "settings-default-agent"; test_support; flex_1; min_w_0; } [
-                Select($&self.form.default_agent) { small; w_full; cursor_pointer; disabled: $self.document.is_none(); },
+            control: el! { .div { # "settings-default-agent"; test_support; flex_1; min_w_0; } [
+                ($&self.form.default_agent).Select::new { small; w_full; cursor_pointer; disabled: $self.document.is_none(); },
             ] }.into_any_element(),
             reset: None,
             last: false,
@@ -65,9 +65,9 @@ impl AppearancePage {
             id: "settings-auto-collapse-activity".into(),
             label: crate::i18n::tr!("settings-auto-collapse-activity"),
             help: crate::i18n::tr!("settings-auto-collapse-activity-help"),
-            control: gds_uim::el! {
-                #crate::ui::checkbox("settings-auto-collapse-activity") {
-                    accessibility_label: $crate::i18n::tr!("settings-auto-collapse-activity");
+            control: el! {
+                ("settings-auto-collapse-activity").ui::checkbox {
+                    accessibility_label: tr!("settings-auto-collapse-activity");
                     checked: $self.form.auto_collapse_activity.unwrap_or(true);
                     disabled: $self.document.is_none();
                     on_click: $cx.listener(|this, checked: &bool, window, cx| {
@@ -84,9 +84,9 @@ impl AppearancePage {
             id: "settings-confirm-delete".into(),
             label: crate::i18n::tr!("settings-confirm-delete"),
             help: crate::i18n::tr!("settings-confirm-delete-help"),
-            control: gds_uim::el! {
-                #crate::ui::checkbox("settings-confirm-delete") {
-                    accessibility_label: $crate::i18n::tr!("settings-confirm-delete");
+            control: el! {
+                ("settings-confirm-delete").ui::checkbox {
+                    accessibility_label: tr!("settings-confirm-delete");
                     checked: $!self.form.confirm_delete.unwrap_or(true);
                     disabled: $self.document.is_none();
                     on_click: $cx.listener(|this, checked: &bool, window, cx| {
@@ -99,27 +99,27 @@ impl AppearancePage {
             reset: None,
             last: true,
         };
-        gds_uim::el! { #div {
-            id: "session-settings"; test_support;
+        el! { .div {
+            # "session-settings"; test_support;
             size_full; overflow_y_scroll; p_5; flex; flex_col; gap_2;
         } [
-            #div { flex; flex_col; gap_2; } [
-                #div { text_size: crate::ui::HEADING; } [$crate::i18n::tr!("settings-sessions")],
-                #div { text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground; } [
-                    $crate::i18n::tr!("settings-sessions-help"),
+            .div { flex; flex_col; gap_2; } [
+                .div { text_size: ui::HEADING; } [tr!("settings-sessions")],
+                .div { text_size: ui::SMALL; text_color: $cx.theme().muted_foreground; } [
+                    tr!("settings-sessions-help"),
                 ],
             ],
-            ..$bool::then(Self::matches_session_query(&self.query), || gds_uim::el! {
-                #div { border_t_1; border_color: $cx.theme().border; flex; flex_col; } [
-                    $default_agent,
+            @if (Self::matches_session_query(&self.query))
+                .div { border_t_1; border_color: $cx.theme().border; flex; flex_col; } [
+                    default_agent,
                     $self.row(Field::ComposerEnter, false, cx),
-                    $auto_collapse_activity,
-                    $confirm_delete,
-                ]
-            }),
-            ..$bool::then(!Self::matches_session_query(&self.query), || gds_uim::el! {
-                #div { id: "settings-no-results"; test_support; } [$crate::i18n::tr!("settings-no-results")]
-            }),
-        ] }.into_any_element()
+                    auto_collapse_activity,
+                    confirm_delete,
+                ],
+            @else
+                .div { # "settings-no-results"; test_support; } [tr!("settings-no-results")],
+            @end,
+        ] }
+        .into_any_element()
     }
 }

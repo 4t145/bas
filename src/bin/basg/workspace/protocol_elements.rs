@@ -15,7 +15,7 @@ fn plan_progress(entries: &[acp2::PlanEntry]) -> String {
         .iter()
         .filter(|entry| entry.status == acp2::PlanEntryStatus::Completed)
         .count();
-    crate::i18n::tr!(
+    tr!(
         "plan-progress",
         completed = completed,
         total = entries.len()
@@ -91,29 +91,25 @@ fn plan_hint_rows(plans: &[acp2::PlanUpdate]) -> Vec<PlanHintRow> {
                 );
             }
             acp2::PlanUpdateContent::Markdown(plan) => {
-                rows.push(PlanHintRow::Heading(
-                    crate::i18n::tr!("plan-title").to_string(),
-                ));
+                rows.push(PlanHintRow::Heading(tr!("plan-title").to_string()));
                 rows.push(PlanHintRow::Preview(truncated(
                     &plan.content,
                     PLAN_PREVIEW_CHARACTERS,
                 )));
             }
             acp2::PlanUpdateContent::File(plan) => {
-                rows.push(PlanHintRow::Heading(
-                    crate::i18n::tr!("plan-file").to_string(),
-                ));
+                rows.push(PlanHintRow::Heading(tr!("plan-file").to_string()));
                 rows.push(PlanHintRow::Preview(plan.uri.clone()));
             }
             acp2::PlanUpdateContent::Other(plan) => {
-                rows.push(PlanHintRow::Heading(crate::i18n::tr!(
+                rows.push(PlanHintRow::Heading(tr!(
                     "plan-type",
                     type = (plan.type_).to_string()
                 )));
             }
             _ => {
                 rows.push(PlanHintRow::Heading(
-                    crate::i18n::tr!("plan-preview-unavailable").to_string(),
+                    tr!("plan-preview-unavailable").to_string(),
                 ));
             }
         }
@@ -128,15 +124,15 @@ struct PlanHint {
 
 fn plan_hint_content(rows: &[PlanHintRow], cx: &App) -> AnyElement {
     el! {
-        #div { flex; flex_col; gap_1; min_w_0; } [..$rows.iter().enumerate().map(|(index, row)| {
+        .div { flex; flex_col; gap_1; min_w_0; } [..$rows.iter().enumerate().map(|(index, row)| {
             let PlanHint { label, content } = plan_hint_row(index, row, cx);
             el! {
-                #div {
-                    id: $SharedString::from(format!("plan-hint-row-{index}"));
+                .div {
+                    # format!("plan-hint-row-{index}").SharedString::from;
                     test_support; role: gpui_kit::Role::Label;
-                    aria_label: $label;
+                    aria_label: label;
                     flex; items_start; gap_1p5; min_w_0;
-                } [$content]
+                } [content]
             }
         })]
     }
@@ -144,7 +140,7 @@ fn plan_hint_content(rows: &[PlanHintRow], cx: &App) -> AnyElement {
 }
 
 fn plan_hint_row(index: usize, row: &PlanHintRow, cx: &App) -> PlanHint {
-    let line_height = crate::ui::SMALL * 1.4;
+    let line_height = ui::SMALL * 1.4;
     let (marker, text, heading) = match row {
         PlanHintRow::Heading(text) => (None, text.as_str(), true),
         PlanHintRow::Preview(text) => (None, text.as_str(), false),
@@ -165,34 +161,35 @@ fn plan_hint_row(index: usize, row: &PlanHintRow, cx: &App) -> PlanHint {
         ),
     };
     let content = el! {
-        #div {
+        .div {
             flex_1; min_w_0; whitespace_normal;
             line_height: line_height;
-            @$heading => {
+            @if (heading)
                 font_weight: FontWeight::SEMIBOLD;
                 text_color: $cx.theme().muted_foreground;
-            };
-        } [$crate::ui::tooltip::wrap_tokens(text)]
+            @end;
+        } [text.ui::tooltip::wrap_tokens]
     }
     .into_any_element();
-    let content = match marker {
-        Some((icon, color)) => el! {
-            #div { flex; items_start; gap_1p5; min_w_0; } [
-                #div {
-                    id: $SharedString::from(format!("plan-hint-marker-{index}")); test_support;
-                    w: crate::ui::ICON.px; h: line_height;
+    let content = el! {
+        @match (marker)
+        @case (Some((icon, color)))
+            .div { flex; items_start; gap_1p5; min_w_0; } [
+                .div {
+                    # format!("plan-hint-marker-{index}").SharedString::from; test_support;
+                    w: ui::ICON.px; h: line_height;
                     flex_shrink_0; flex; items_center; justify_center;
                 } [
-                    $status::activity_icon(
-                        SharedString::from(format!("plan-hint-status-{index}")),
+                    (
+                        format!("plan-hint-status-{index}").SharedString::from,
                         icon, color, matches!(row, PlanHintRow::InProgress(_)),
-                    ),
+                    ).status::activity_icon,
                 ],
-                $content,
-            ]
-        }
-        .into_any_element(),
-        None => content,
+                content,
+            ] { into_any_element; }
+        @case (None)
+            content
+        @end
     };
     PlanHint {
         label: text.to_owned(),
@@ -224,25 +221,25 @@ impl Workspace {
         }
         let remaining = plan_remaining(plans);
         let hint = if remaining > 0 {
-            crate::i18n::tr!("plan-indicator", count = remaining).to_string()
+            tr!("plan-indicator", count = remaining).to_string()
         } else if plan_has_entries(plans) {
-            crate::i18n::tr!("plan-complete").to_string()
+            tr!("plan-complete").to_string()
         } else {
-            crate::i18n::tr!("plan-title").to_string()
+            tr!("plan-title").to_string()
         };
         let rows = plan_hint_rows(plans);
         Some(
             el! {
-                #div {
-                    id: "session-plan-indicator";
+                .div {
+                    # "session-plan-indicator";
                     test_support;
                     relative; flex; flex_shrink_0;
                     role: gpui_kit::Role::Status;
-                    aria_label: $hint.clone();
-                    @$remaining > 0 => { pr_3; };
+                    aria_label: ~hint;
+                    @if (remaining > 0) pr_3; @end;
                     hoverable_tooltip: $move |window, cx| {
                         let rows = rows.clone();
-                        crate::ui::tooltip::element(
+                        ui::tooltip::element(
                             "plan-hint",
                             hint.clone(),
                             move |_, cx| plan_hint_content(&rows, cx),
@@ -251,17 +248,17 @@ impl Workspace {
                         )
                     };
                 } [
-                    Badge {
+                    .Badge::new {
                         count: remaining; small; max: 99;
                         color: $cx.theme().primary;
                     } [
-                        #div {
-                            id: "session-plan-icon"; test_support;
+                        .div {
+                            # "session-plan-icon"; test_support;
                             size: layout::ICON_BUTTON_SIZE.px;
                             flex; items_center; justify_center;
                             text_color: $cx.theme().muted_foreground;
                         } [
-                            Icon(IconName::ListTodo) { size: crate::ui::ICON.px; },
+                            IconName::ListTodo.Icon::new { size: ui::ICON.px; },
                         ],
                     ],
                 ]
@@ -280,8 +277,8 @@ impl Workspace {
             .map(|notice| self.render_protocol_notice(notice, cx));
         Some(
             el! {
-                #chat::content_panel {
-                    id: "protocol-notices";
+                .chat::content_panel {
+                    # "protocol-notices";
                     test_support;
                     flex_shrink_0;
                     max_h: NOTICE_PANEL_HEIGHT.px;
@@ -300,17 +297,17 @@ impl Workspace {
         let id = notice.id;
         let (label, icon, color) = match &notice.notice.severity {
             acp2::NoticeSeverity::Info => (
-                crate::i18n::tr!("notice-info").to_owned(),
+                tr!("notice-info").to_owned(),
                 IconName::Info,
                 cx.theme().primary,
             ),
             acp2::NoticeSeverity::Warning => (
-                crate::i18n::tr!("notice-warning").to_owned(),
+                tr!("notice-warning").to_owned(),
                 IconName::TriangleAlert,
                 cx.theme().warning,
             ),
             acp2::NoticeSeverity::Error => (
-                crate::i18n::tr!("notice-error").to_owned(),
+                tr!("notice-error").to_owned(),
                 IconName::CircleX,
                 cx.theme().danger,
             ),
@@ -320,7 +317,7 @@ impl Workspace {
                 cx.theme().muted_foreground,
             ),
             _ => (
-                crate::i18n::tr!("notice-title").to_owned(),
+                tr!("notice-title").to_owned(),
                 IconName::Info,
                 cx.theme().muted_foreground,
             ),
@@ -330,27 +327,27 @@ impl Workspace {
             None => notice.notice.title.clone(),
         };
         el! {
-            #div {
+            .div {
                 rounded_md; border_1;
                 border_color: $color.opacity(0.35);
                 bg: $color.opacity(0.05);
                 p_2; flex; items_start; gap_2;
             } [
-                Icon(icon) { small; text_color: color; },
-                #div {
+                icon.Icon::new { small; text_color: color; },
+                .div {
                     flex_1; min_w_0;
-                    text_size: crate::ui::SMALL;
+                    text_size: ui::SMALL;
                 } [
-                    #div { text_color: color; } [
-                        $label,
+                    .div { text_color: color; } [
+                        label,
                     ],
-                    $crate::ui::feedback(format!("protocol-notice-{id}"), message, color),
+                    (format!("protocol-notice-{id}"), message, color).ui::feedback,
                 ],
-                Button($SharedString::from(format!("dismiss-protocol-notice-{id}"))) {
+                format!("dismiss-protocol-notice-{id}").SharedString::from.Button::new {
                     ghost; xsmall;
                     icon: IconName::X;
-                    accessibility_label: $crate::i18n::tr!("notice-dismiss");
-                    tooltip: $crate::i18n::tr!("notice-dismiss");
+                    accessibility_label: tr!("notice-dismiss");
+                    tooltip: tr!("notice-dismiss");
                     on_click: $cx.listener(move |this, _, _, cx| {
                         this.dismiss_protocol_notice(id, cx);
                     });
@@ -376,50 +373,50 @@ impl Workspace {
     ) -> AnyElement {
         let (label, icon, color) = match &compaction.status {
             acp2::CompactionStatus::InProgress => (
-                crate::i18n::tr!("compaction-running").to_owned(),
+                tr!("compaction-running").to_owned(),
                 IconName::Loader,
                 cx.theme().primary,
             ),
             acp2::CompactionStatus::Completed => (
-                crate::i18n::tr!("compaction-completed").to_owned(),
+                tr!("compaction-completed").to_owned(),
                 IconName::Check,
                 cx.theme().success,
             ),
             acp2::CompactionStatus::Failed => (
-                crate::i18n::tr!("compaction-failed").to_owned(),
+                tr!("compaction-failed").to_owned(),
                 IconName::CircleX,
                 cx.theme().danger,
             ),
             acp2::CompactionStatus::Cancelled => (
-                crate::i18n::tr!("compaction-cancelled").to_owned(),
+                tr!("compaction-cancelled").to_owned(),
                 IconName::X,
                 cx.theme().muted_foreground,
             ),
             acp2::CompactionStatus::Other(status) => (
-                crate::i18n::tr!("compaction-status", status = (status).to_string()),
+                tr!("compaction-status", status = (status).to_string()),
                 IconName::CircleAlert,
                 cx.theme().muted_foreground,
             ),
             _ => (
-                crate::i18n::tr!("compaction-title").to_owned(),
+                tr!("compaction-title").to_owned(),
                 IconName::CircleAlert,
                 cx.theme().muted_foreground,
             ),
         };
         let expanded = self.selected.timeline.expanded.contains(id);
         let status = el! {
-                Button($SharedString::from(format!("status-{id}"))) {
-                    ghost; xsmall; cursor_default;
-                    w: crate::ui::COMPACT_CONTROL.px; h: crate::ui::COMPACT_CONTROL.px;
-                    p_0; flex_none; tooltip: $label;
-                } [
-                    $status::activity_icon(
-                        format!("compaction-status-{id}"),
-                        icon,
-                        color,
-                        matches!(compaction.status, acp2::CompactionStatus::InProgress),
-                    ),
-                ],
+            format!("status-{id}").SharedString::from.Button::new {
+                ghost; xsmall; cursor_default;
+                w: ui::COMPACT_CONTROL.px; h: ui::COMPACT_CONTROL.px;
+                p_0; flex_none; tooltip: label;
+            } [
+                (
+                    format!("compaction-status-{id}"),
+                    icon,
+                    color,
+                    matches!(compaction.status, acp2::CompactionStatus::InProgress),
+                ).status::activity_icon,
+            ]
         }
         .into_any_element();
         let leading = status::activity_icon(
@@ -430,7 +427,7 @@ impl Workspace {
         );
         let disclosure = self.disclosure(
             id,
-            crate::i18n::tr!("compaction-title"),
+            tr!("compaction-title"),
             expanded,
             index,
             Some(leading),
@@ -438,38 +435,33 @@ impl Workspace {
         );
         let header = self.content_header(id, disclosure, Some(status));
         el! {
-            #content_header::frame(true, cx) [
-                $header,
-                ..$compaction.error.as_ref().map(|error| el! {
-                    #div {
+            (true, cx).content_header::frame [
+                header,
+                @if (let Some(error) = compaction.error.as_ref())
+                    .div {
                         px_3; pb_3;
-                    } [$crate::ui::feedback(format!("compaction-error-{id}"), error.clone(), cx.theme().danger)]
-                }),
-            ].gds_uim::m! {
-                @expanded: $|panel| panel.child(el! {
-                    #div { flex; flex_col; gap_3; px_3; pt_1; pb_3; } [..$
-                    compaction_summary_blocks(&compaction.summary)
-                        .iter()
-                        .enumerate()
-                        .map(
-                            |(block_index, block)| match bas::model::presentation::content_to_v1(
-                                block,
-                            ) {
-                                Ok(block) => self.render_block(
-                                    format!("{id}-summary-{block_index}"),
-                                    &block,
-                                    index,
-                                    cx,
-                                ),
-                                Err(_) => {
-                                    caption(crate::i18n::tr!("summary-preview-unavailable"), cx)
-                                        .into_any_element()
+                    } [(format!("compaction-error-{id}"), ~error, $cx.theme().danger).ui::feedback],
+                @end,
+                @if (expanded)
+                    .div { flex; flex_col; gap_3; px_3; pt_1; pb_3; } [
+                        ..$compaction_summary_blocks(&compaction.summary)
+                            .iter()
+                            .enumerate()
+                            .map(|(block_index, block)| {
+                                match bas::model::presentation::content_to_v1(block) {
+                                    Ok(block) => self.render_block(
+                                        format!("{id}-summary-{block_index}"),
+                                        &block,
+                                        index,
+                                        cx,
+                                    ),
+                                    Err(_) => caption(tr!("summary-preview-unavailable"), cx)
+                                        .into_any_element(),
                                 }
-                            },
-                        )
-                    ]
-                });
-            }
+                            }),
+                    ],
+                @end,
+            ]
         }
         .into_any_element()
     }

@@ -1,11 +1,17 @@
 //! An independently-lived, in-memory frontend log viewer.
 
 use super::log::{Entry, Level, Snapshot, Store};
-use crate::{theme, ui::window_controls::TitleBar};
+use crate::{
+    i18n::tr,
+    theme,
+    ui::{self, icon_action, window_controls::TitleBar},
+};
+use gds_uim::el;
 use gpui_kit::{
     AnyElement, App, AppContext, Bounds, ClipboardItem, Context, Entity, FocusHandle, Global,
-    KeyBinding, Render, Subscription, Task, TestSupportExt, UniformListScrollHandle, WeakEntity,
-    Window, WindowBounds, WindowDecorations, WindowHandle, WindowKind, WindowOptions, actions,
+    KeyBinding, MouseButton, Render, Subscription, Task, TestSupportExt, UniformListScrollHandle,
+    WeakEntity, Window, WindowBounds, WindowDecorations, WindowHandle, WindowKind, WindowOptions,
+    actions,
     assets::IconName,
     component::{
         ActiveTheme, Root,
@@ -96,7 +102,7 @@ pub(crate) fn init(cx: &mut App) {
                 super::notify(
                     None,
                     Level::Error,
-                    crate::i18n::tr!("logs-open-error"),
+                    tr!("logs-open-error"),
                     &error.to_string(),
                     cx,
                 );
@@ -142,7 +148,7 @@ pub(crate) fn open(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
             ..TitleBar::window_options()
         },
         |window, cx| {
-            window.set_window_title(crate::i18n::tr!("logs-title"));
+            window.set_window_title(tr!("logs-title"));
             let host = cx.new(|cx| Viewer::new(store, window, cx));
             viewer = Some(host.downgrade());
             host.read(cx)
@@ -180,8 +186,7 @@ impl Viewer {
         // Subscribe before the snapshot so a concurrent record cannot be missed.
         let mut changes = store.subscribe();
         let snapshot = store.snapshot();
-        let search =
-            cx.new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr!("logs-search")));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr!("logs-search")));
         let subscription = cx.subscribe(&search, |this, input, _: &InputEvent, cx| {
             this.query = input.read(cx).value().to_string().to_lowercase();
             this.filter();
@@ -288,62 +293,37 @@ impl Viewer {
             Level::Warn => cx.theme().warning,
             _ => cx.theme().foreground,
         };
-        div()
-            .id(("log-entry", id))
-            .test_support()
-            .h(px(ROW_HEIGHT))
-            .w_full()
-            .px_2()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .cursor_pointer()
-            .flex()
-            .items_center()
-            .gap_2()
-            .font_family(cx.theme().mono_font_family.clone())
-            .text_size(px(12.))
-            .when(self.selected == Some(id), |row| row.bg(cx.theme().accent))
-            .child(
-                div()
-                    .w(px(100.))
-                    .flex_shrink_0()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!(
+        el! {
+            .div {
+                # $("log-entry", id); test_support;
+                h: ROW_HEIGHT.px; w_full; px_2; overflow_hidden; whitespace_nowrap;
+                cursor_pointer; flex; items_center; gap_2;
+                font_family: ~$(cx.theme().mono_font_family); text_size: 12.0.px;
+                when: $self.selected == Some(id), { bg: $cx.theme().accent };
+            } [
+                .div { w: 100.0.px; flex_shrink_0; text_color: $cx.theme().muted_foreground; } [
+                    format!(
                         "{:02}:{:02}:{:02}.{:03}Z",
                         at.hour(),
                         at.minute(),
                         at.second(),
                         at.millisecond(),
-                    )),
-            )
-            .child(
-                div()
-                    .w(px(40.))
-                    .flex_shrink_0()
-                    .text_color(color)
-                    .child(entry.level.as_str()),
-            )
-            .child(
-                div()
-                    .w(px(200.))
-                    .flex_shrink_0()
-                    .truncate()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(entry.target.clone()),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(preview(&entry.message)),
-            )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.list_focus.focus(window, cx);
-                this.selected = (this.selected != Some(id)).then_some(id);
-                cx.notify();
-            }))
-            .into_any_element()
+                    ),
+                ],
+                .div { w: 40.0.px; flex_shrink_0; text_color: color; } [$entry.level.as_str()],
+                .div {
+                    w: 200.0.px; flex_shrink_0; truncate; text_color: $cx.theme().muted_foreground;
+                } [~$(entry.target)],
+                .div { flex_1; min_w_0; truncate; } [$(&entry.message).preview],
+            ] {
+                on_click: $cx.listener(move |this, _, window, cx| {
+                    this.list_focus.focus(window, cx);
+                    this.selected = (this.selected != Some(id)).then_some(id);
+                    cx.notify();
+                });
+                into_any_element;
+            }
+        }
     }
 }
 
@@ -363,9 +343,9 @@ fn preview(text: &str) -> String {
 impl Render for Viewer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let detail = self.selected_entry().map(Entry::text);
-        gds_uim::el! {
-            #div {
-                id: "logs-window"; test_support; key_context: "BasLogs";
+        el! {
+            .div {
+                # "logs-window"; test_support; key_context: "BasLogs";
                 size_full; flex; flex_col; bg: $cx.theme().background; text_color: $cx.theme().foreground;
                 on_action: $cx.listener(|_, _: &CloseLogs, window, _| window.remove_window());
                 on_action: $cx.listener(|this, _: &PreviousLog, _, cx| this.move_selection(false, false, cx));
@@ -373,40 +353,55 @@ impl Render for Viewer {
                 on_action: $cx.listener(|this, _: &PreviousLogPage, _, cx| this.move_selection(false, true, cx));
                 on_action: $cx.listener(|this, _: &NextLogPage, _, cx| this.move_selection(true, true, cx));
             } [
-                TitleBar { on_close_window: $|_, window, _| window.remove_window(); } [$crate::i18n::tr!("logs-title")],
-                #div { flex; flex_col; flex_1; min_h_0; min_w_0; } [
-                    #div { id: "logs-toolbar"; test_support; flex; items_center; gap_2; p_2; flex_shrink_0; } [
+                .TitleBar::new {
+                    on_close_window: $|_, window, _| window.remove_window();
+                } [tr!("logs-title")],
+                .div { flex; flex_col; flex_1; min_h_0; min_w_0; } [
+                    .div { # "logs-toolbar"; test_support; flex; items_center; gap_2; p_2; flex_shrink_0; } [
                         $self.level_filter(cx),
                         $self.target_filter(cx),
-                        #div { flex_1; min_w_0; } [
-                            $crate::ui::input::placeholder(&self.search, Input::new(&self.search).cleanable(true)),
+                        .div { flex_1; min_w_0; } [
+                            ($(&self.search), $(&self.search).Input::new { cleanable: true; }).ui::input::placeholder,
                         ],
-                        #crate::ui::icon_action("logs-clear", IconName::ListX, $crate::i18n::tr!("logs-clear")) {
+                        ("logs-clear", IconName::ListX, tr!("logs-clear")).icon_action {
                             on_click: $cx.listener(|this, _, _, cx| { this.clear(); cx.notify(); });
                         },
                     ],
-                    #div {
-                        id: "logs-list-viewport"; test_support;
+                    .div {
+                        # "logs-list-viewport"; test_support;
                         key_context: "BasLogsList"; track_focus: $&self.list_focus;
                         flex_1; min_h_0;
-                        on_mouse_down: gpui_kit::MouseButton::Left,
+                        on_mouse_down: MouseButton::Left,
                             $cx.listener(|this, _, window, cx| this.list_focus.focus(window, cx));
                     } [
-                        $uniform_list("logs-list", self.visible.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                            range.map(|index| this.row(index, cx)).collect()
-                        })).track_scroll(&self.scroll).size_full(),
+                        (
+                            "logs-list",
+                            $self.visible.len(),
+                            $cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                range.map(|index| this.row(index, cx)).collect()
+                            }),
+                        ).uniform_list { track_scroll: $&self.scroll; size_full; },
                     ],
-                    ..$detail.map(|text| div().id("logs-detail").test_support().w_full().min_w_0().max_h(px(DETAIL_HEIGHT)).flex_shrink_0().flex().gap_2().p_2()
-                        .border_t_1().border_color(cx.theme().border)
-                        .child(div().id("logs-detail-text").flex_1().min_w_0().max_h(px(DETAIL_HEIGHT - 16.)).overflow_y_scroll()
-                            .font_family(cx.theme().mono_font_family.clone()).text_size(px(12.))
-                            .whitespace_normal().child(crate::ui::tooltip::wrap_tokens(&text)))
-                        .child(crate::ui::icon_action("logs-copy-selected", IconName::Copy, crate::i18n::tr!("logs-copy-selected"))
-                            .on_click(cx.listener(|this, _, _, cx| this.copy_selected(cx))))
-                        .child(crate::ui::icon_action("logs-close-detail", IconName::Close, crate::i18n::tr!("logs-close-detail"))
-                            .on_click(cx.listener(|this, _, _, cx| { this.selected = None; cx.notify(); })))),
-                    #div { px_2; text_xs; text_color: $cx.theme().muted_foreground; } [
-                        $crate::i18n::tr!("logs-count", visible = self.visible.len(), retained = self.snapshot.entries.len(), evicted = self.snapshot.evicted),
+                    @if (let Some(text) = detail)
+                        .div {
+                            # "logs-detail"; test_support; w_full; min_w_0; max_h: DETAIL_HEIGHT.px;
+                            flex_shrink_0; flex; gap_2; p_2; border_t_1; border_color: $cx.theme().border;
+                        } [
+                            .div {
+                                # "logs-detail-text"; flex_1; min_w_0; max_h: $(DETAIL_HEIGHT - 16.).px;
+                                overflow_y_scroll; font_family: ~$(cx.theme().mono_font_family);
+                                text_size: 12.0.px; whitespace_normal;
+                            } [$(&text).ui::tooltip::wrap_tokens],
+                            ("logs-copy-selected", IconName::Copy, tr!("logs-copy-selected")).icon_action {
+                                on_click: $cx.listener(|this, _, _, cx| this.copy_selected(cx));
+                            },
+                            ("logs-close-detail", IconName::Close, tr!("logs-close-detail")).icon_action {
+                                on_click: $cx.listener(|this, _, _, cx| { this.selected = None; cx.notify(); });
+                            },
+                        ],
+                    @end,
+                    .div { px_2; text_xs; text_color: $cx.theme().muted_foreground; } [
+                        tr!("logs-count", visible = self.visible.len(), retained = self.snapshot.entries.len(), evicted = self.snapshot.evicted),
                     ],
                 ],
             ]

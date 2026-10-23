@@ -92,32 +92,36 @@ impl MarkdownView {
 
 impl RenderOnce for MarkdownView {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        gds_uim::el! {
-            #div {
-                id: $("markdown", self.state.entity_id());
+        el! {
+            .div {
+                # $("markdown", self.state.entity_id());
                 w_full;
                 min_w_0;
-            } [$text_view(&self.state, cx).on_link_click(move |url, event, _, cx| {
-                if !event.is_right_click() { self.links.open(url, cx); }
-            })]
+            } [
+                ($&self.state, cx).text_view {
+                    on_link_click: $move |url, event, _, cx| {
+                        if !event.is_right_click() { self.links.open(url, cx); }
+                    };
+                },
+            ]
         }
     }
 }
 
 fn text_view(state: &Entity<TextViewState>, cx: &App) -> TextView {
     let font_size = theme::content_font_size(cx);
-    gds_uim::el! {
-        TextView($state) {
-            style: $markdown_style(cx);
-            font_family: $cx.theme().font_family.clone();
-            text_size: $font_size;
+    el! {
+        state.TextView::new {
+            style: cx.markdown_style;
+            font_family: ~$(cx.theme().font_family);
+            text_size: font_size;
             line_height: $gpui_kit::relative(theme::content_line_height(cx));
             selectable: true;
             scrollable: false;
-            selection_format: $SelectionFormat::Plain;
+            selection_format: SelectionFormat::Plain;
             w_full;
-            code_block_actions: $actions::code;
-            table_actions: $actions::table;
+            code_block_actions: actions::code;
+            table_actions: actions::table;
         }
     }
 }

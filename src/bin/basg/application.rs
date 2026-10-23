@@ -10,8 +10,12 @@ use gpui_kit::{
     px, size,
 };
 
-use crate::ui::window_controls::TitleBar;
-use crate::{branding, settings, theme};
+use crate::{
+    branding,
+    i18n::tr,
+    settings, theme,
+    ui::{action_button, checkbox, feedback, tooltip::wrap_tokens, window_controls::TitleBar},
+};
 
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
@@ -160,9 +164,9 @@ impl InfoWindow {
         match self {
             // [!todo] here we have product name `BasG`, witch should be a static value and easy to replace with
             // other name
-            Self::About => crate::i18n::tr!("app-about"),
-            Self::Quit => crate::i18n::tr!("app-quit-title"),
-            Self::Confirmation => crate::i18n::tr!("app-confirm"),
+            Self::About => tr!("app-about"),
+            Self::Quit => tr!("app-quit-title"),
+            Self::Confirmation => tr!("app-confirm"),
         }
     }
 
@@ -253,7 +257,7 @@ impl Host {
                 editor.save(&mut document, candidate, window, cx)
             });
             if let Err(error) = result {
-                self.message = crate::i18n::tr!("settings-apply-error", error = error.to_string());
+                self.message = tr!("settings-apply-error", error = error.to_string());
                 cx.notify();
                 return;
             }
@@ -289,84 +293,86 @@ impl Host {
     fn message(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let confirmation = matches!(self.kind, InfoWindow::Confirmation);
         let actions = el! {
-            #div {
+            .div {
                 flex; flex_shrink_0; justify_end; gap_3;
             } [
-                #crate::ui::action_button("message-close") {
-                    label: $if confirmation {
-                        crate::i18n::tr!("action-cancel")
-                    } else {
-                        crate::i18n::tr!("action-close")
-                    };
+                "message-close".action_button {
+                    label: @if (confirmation)
+                        tr!("action-cancel")
+                    @else
+                        tr!("action-close")
+                    @end;
                     on_click: Self::on_close;
                 },
-                ..$confirmation.then(|| el! {
-                    #crate::ui::action_button("message-confirm") {
-                        label: $self.confirm_label.clone();
-                        @$self.destructive => { text_color: $cx.theme().danger; };
-                        on_click: $cx.listener(Self::on_confirm);
-                    }
-                }),
+                @if (confirmation)
+                    "message-confirm".action_button {
+                        label: ~$(self.confirm_label);
+                        @if (self.destructive)
+                            text_color: $cx.theme().danger;
+                        @end;
+                        on_click: (cx, Self::on_confirm).Context::listener;
+                    },
+                @end,
             ]
         };
         el! {
-            #div {
+            .div {
                 flex; flex_col; flex_1; min_h_0; gap_6; p_6;
             } [
-                #div {
-                    id: "application-message-scroll";
+                .div {
+                    # "application-message-scroll";
                     flex_1; min_h_0; overflow_y_scroll; whitespace_normal;
-                } [$crate::ui::feedback("application-message-body", self.message.clone(), cx.theme().foreground)],
-                ..$self.skip_delete_reminder.map(|checked| el! {
-                    #crate::ui::checkbox("delete-dont-ask") {
-                        checked: checked; label: $crate::i18n::tr!("delete-dont-ask");
+                } [$feedback("application-message-body", self.message.clone(), cx.theme().foreground)],
+                @if (let Some(checked) = self.skip_delete_reminder)
+                    "delete-dont-ask".checkbox {
+                        checked: checked; label: tr!("delete-dont-ask");
                         on_click: $cx.listener(|this, checked: &bool, _, cx| {
                             this.skip_delete_reminder = Some(*checked);
                             cx.notify();
                         });
-                    }
-                }),
-                $actions,
+                    },
+                @end,
+                actions,
             ]
         }
     }
 
     fn about(&self) -> impl IntoElement {
-        let version = crate::i18n::tr!("app-version", version = env!("CARGO_PKG_VERSION"));
-        let build_tag = crate::i18n::tr!("app-build-tag", tag = env!("BAS_BUILD_TAG"));
+        let version = tr!("app-version", version = env!("CARGO_PKG_VERSION"));
+        let build_tag = tr!("app-build-tag", tag = env!("BAS_BUILD_TAG"));
         el! {
-            #div {
-                id: "about-content";
+            .div {
+                # "about-content";
                 flex; flex_col; flex_1; min_h_0; overflow_y_scroll;
                 items_center; gap_3; p_6;
             } [
-                #div {
-                    id: "about-dimensional-logo";
+                .div {
+                    # "about-dimensional-logo";
                     test_support;
                     size: 96.0.px;
-                } [#branding::dimensional_logo { size_full; }],
-                $"BasG",
-                #div {
-                    id: "about-version";
+                } [.branding::dimensional_logo { size_full; }],
+                "BasG",
+                .div {
+                    # "about-version";
                     test_support;
                     role: gpui_kit::Role::Label;
-                    aria_label: $version.clone();
-                } [$version],
-                #div {
-                    id: "about-build-tag";
+                    aria_label: ~version;
+                } [version],
+                .div {
+                    # "about-build-tag";
                     test_support;
                     role: gpui_kit::Role::Label;
-                    aria_label: $build_tag.clone();
+                    aria_label: ~build_tag;
                     text_sm; whitespace_normal;
-                } [$crate::ui::tooltip::wrap_tokens(&build_tag)],
-                $crate::i18n::tr!("app-description"),
-                $crate::i18n::tr!("app-license"),
-                #crate::ui::action_button("about-home") {
-                    label: $crate::i18n::tr!("app-home");
+                } [$wrap_tokens(&build_tag)],
+                tr!("app-description"),
+                tr!("app-license"),
+                "about-home".action_button {
+                    label: tr!("app-home");
                     on_click: Self::on_home;
                 },
-                #crate::ui::action_button("about-close") {
-                    label: $crate::i18n::tr!("action-close");
+                "about-close".action_button {
+                    label: tr!("action-close");
                     on_click: Self::on_close;
                 },
             ]
@@ -375,20 +381,20 @@ impl Host {
 
     fn quit(&self) -> impl IntoElement {
         el! {
-            #div {
+            .div {
                 flex; flex_col; gap_6; p_6;
             } [
-                $crate::i18n::tr!("app-quit-question"),
-                $crate::i18n::tr!("app-quit-notice"),
-                #div {
+                tr!("app-quit-question"),
+                tr!("app-quit-notice"),
+                .div {
                     flex; justify_end; gap_3;
                 } [
-                    #crate::ui::action_button("quit-cancel") {
-                        label: $crate::i18n::tr!("action-cancel");
+                    "quit-cancel".action_button {
+                        label: tr!("action-cancel");
                         on_click: Self::on_close;
                     },
-                    #crate::ui::action_button("quit-confirm") {
-                        label: $crate::i18n::tr!("app-quit");
+                    "quit-confirm".action_button {
+                        label: tr!("app-quit");
                         on_click: Self::on_quit_confirm;
                     },
                 ],
@@ -414,17 +420,17 @@ impl Render for Host {
             InfoWindow::Confirmation => self.message(cx).into_any_element(),
         };
         el! {
-            #div {
-                id: id;
+            .div {
+                # id;
                 test_support;
                 size_full; flex; flex_col;
                 bg: $cx.theme().background;
                 text_color: $cx.theme().foreground;
             } [
-                TitleBar {
+                .TitleBar::new {
                     on_close_window: Self::on_close;
-                } [$self.title.clone()],
-                $content,
+                } [~$(self.title)],
+                content,
             ]
         }
     }

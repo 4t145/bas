@@ -41,17 +41,17 @@ impl Workspace {
                 let user = message.role == Role::User;
                 let copy = message.plain_text();
                 let group = SharedString::from(format!("message-{id}"));
-                gds_uim::el! {
-                    #div {
-                        id: $SharedString::from(format!("message-surface-{id}"));
+                el! {
+                    .div {
+                        # format!("message-surface-{id}").SharedString::from;
                         test_support; w_full; min_w_0;
-                        group: $group.clone();
+                        group: ~group;
                         relative; flex; flex_col; gap_2; px_3; py_2; rounded_md;
-                        @user => {
+                        @if (user)
                             border_1;
                             border_color: $cx.theme().border;
                             bg: $cx.theme().muted.opacity(0.35);
-                        };
+                        @end;
                     } [
                         ..$message
                             .content
@@ -60,32 +60,32 @@ impl Workspace {
                             .map(|(block_index, block)| {
                                 self.render_block(message_block_id(message, block_index), block, index, cx)
                             }),
-                        ..$user.then(|| gds_uim::el! {
-                            #div {
+                        @if (user)
+                            .div {
                                 absolute; top_1; right_1; invisible;
-                                group_hover: $group, $gds_uim::m! { visible; };
+                                group_hover: group, { visible; };
                             } [
-                                $message_actions::action_button(SharedString::from(format!("copy-{id}")), IconName::Copy, cx) {
-                                    accessibility_label: $crate::i18n::tr!("action-copy-message");
-                                    tooltip: $crate::i18n::tr!("action-copy-message");
-                                    on_click: $move |_, _, cx| copy_chat_text(&copy, cx);
+                                (format!("copy-{id}").SharedString::from, IconName::Copy, cx).message_actions::action_button {
+                                    accessibility_label: tr!("action-copy-message");
+                                    tooltip: tr!("action-copy-message");
+                                    on_click: move (_, _, cx) => ($&copy, cx).copy_chat_text;
                                 },
-                            ]
-                        }),
+                            ],
+                        @end,
                     ]
                 }
                 .into_any_element()
             }
             Item::Tool(tool) => self.render_tool(&id, tool, index, cx),
             Item::Compaction(compaction) => self.render_compaction(&id, compaction, index, cx),
-            Item::Notice { text, .. } => gds_uim::el! {
-                #div { px_3; py_2; flex; items_start; gap_2; } [
-                    Icon($IconName::Info) {
-                        size: $px(crate::ui::ICON);
+            Item::Notice { text, .. } => el! {
+                .div { px_3; py_2; flex; items_start; gap_2; } [
+                    IconName::Info.Icon::new {
+                        size: ui::ICON.px;
                         text_color: $cx.theme().muted_foreground;
                         flex_shrink_0;
                     },
-                    $caption(text.clone(), cx) { flex_1; min_w_0; },
+                    (~text, cx).caption { flex_1; min_w_0; },
                 ]
             }
             .into_any_element(),
@@ -125,45 +125,35 @@ impl Workspace {
         let input_open = self.selected.timeline.expanded.contains(&input_key);
         let output_open = !self.selected.timeline.expanded.contains(&output_key);
         let title = if tool.title.trim().is_empty() {
-            tool.name
-                .as_deref()
-                .unwrap_or(crate::i18n::tr!("tool-call"))
+            tool.name.as_deref().unwrap_or(tr!("tool-call"))
         } else {
             &tool.title
         };
         let (label, status_icon, color) = match tool.status {
             ToolCallStatus::Pending => (
-                crate::i18n::tr!("status-pending"),
+                tr!("status-pending"),
                 IconName::Clock,
                 cx.theme().muted_foreground,
             ),
-            ToolCallStatus::InProgress => (
-                crate::i18n::tr!("status-running"),
-                IconName::Loader,
-                cx.theme().primary,
-            ),
-            ToolCallStatus::Completed => (
-                crate::i18n::tr!("status-completed"),
-                IconName::Check,
-                cx.theme().success,
-            ),
-            ToolCallStatus::Failed => (
-                crate::i18n::tr!("status-failed"),
-                IconName::CircleX,
-                cx.theme().danger,
-            ),
+            ToolCallStatus::InProgress => {
+                (tr!("status-running"), IconName::Loader, cx.theme().primary)
+            }
+            ToolCallStatus::Completed => {
+                (tr!("status-completed"), IconName::Check, cx.theme().success)
+            }
+            ToolCallStatus::Failed => (tr!("status-failed"), IconName::CircleX, cx.theme().danger),
             _ => (
-                crate::i18n::tr!("status-unknown"),
+                tr!("status-unknown"),
                 IconName::CircleAlert,
                 cx.theme().muted_foreground,
             ),
         };
-        let command = gds_uim::el! {
-            #div {
-                id: $SharedString::from(format!("tool-command-{id}"));
+        let command = el! {
+            .div {
+                # format!("tool-command-{id}").SharedString::from;
                 test_support; flex_1; min_w_0; overflow_hidden;
             } [
-                $self.disclosure(
+                $(self.disclosure(
                     id,
                     &title.split_whitespace().collect::<Vec<_>>().join(" "),
                     expanded,
@@ -175,14 +165,14 @@ impl Workspace {
                         false,
                     )),
                     cx,
-                ) { w_full; },
+                )) { w_full; },
             ]
         };
-        let status = gds_uim::el! {
-            Button($SharedString::from(format!("status-{id}"))) {
+        let status = el! {
+            format!("status-{id}").SharedString::from.Button::new {
                 ghost; xsmall; cursor_default;
-                w: $px(crate::ui::COMPACT_CONTROL); h: $px(crate::ui::COMPACT_CONTROL);
-                p_0; flex_none; tooltip: $label;
+                w: ui::COMPACT_CONTROL.px; h: ui::COMPACT_CONTROL.px;
+                p_0; flex_none; tooltip: label;
             } [
                 $status::activity_icon(
                     SharedString::from(format!("tool-status-animation-{id}")),
@@ -193,55 +183,58 @@ impl Workspace {
         .into_any_element();
         let header = self.content_header(
             id,
-            crate::ui::tooltip::bounded(
+            ui::tooltip::bounded(
                 SharedString::from(format!("tool-hint-{id}")),
                 command,
                 title.to_owned(),
             ),
             Some(status),
         );
-        gds_uim::el! {
-            #content_header::frame(true, cx) [
-                $header,
-                ..$expanded.then(|| {
-                    gds_uim::el! {
-                        #div { flex; flex_col; gap_3; px_3; pt_1; pb_3; } [
-                            ..$self.tool_has_input(tool).then(|| gds_uim::el! {
-                                #div {
-                                    id: $SharedString::from(format!("tool-input-section-{id}"));
-                                    test_support; flex; flex_col; gap_2;
-                                } [
-                                        $self.disclosure(
-                                            &input_key,
-                                            crate::i18n::tr!("tool-input"),
-                                            input_open,
-                                            index,
-                                            None,
-                                            cx,
-                                        ) { w_full; text_color: $cx.theme().muted_foreground; },
-                                        ..$input_open.then(|| self.render_tool_input(id, tool, index, cx)),
-                                ]
-                            }),
-                            #div {
-                                id: $SharedString::from(format!("tool-output-section-{id}"));
+        el! {
+            (true, cx).content_header::frame [
+                header,
+                @if (expanded)
+                    .div { flex; flex_col; gap_3; px_3; pt_1; pb_3; } [
+                        @if (self.tool_has_input(tool))
+                            .div {
+                                # format!("tool-input-section-{id}").SharedString::from;
                                 test_support; flex; flex_col; gap_2;
                             } [
-                                    $self.disclosure(
-                                        &output_key,
-                                        crate::i18n::tr!("tool-output"),
-                                        output_open,
-                                        index,
-                                        None,
-                                        cx,
-                                    ) { w_full; text_color: $cx.theme().muted_foreground; },
-                                    ..$output_open.then(|| self.render_tool_output(id, tool, index, cx)),
+                                $(self.disclosure(
+                                    &input_key,
+                                    tr!("tool-input"),
+                                    input_open,
+                                    index,
+                                    None,
+                                    cx,
+                                )) { w_full; text_color: $cx.theme().muted_foreground; },
+                                @if (input_open)
+                                    $self.render_tool_input(id, tool, index, cx),
+                                @end,
                             ],
-                            $self.render_content_actions(id, id, index, cx),
-                        ]
-                    }
-                }),
+                        @end,
+                        .div {
+                            # format!("tool-output-section-{id}").SharedString::from;
+                            test_support; flex; flex_col; gap_2;
+                        } [
+                            $(self.disclosure(
+                                &output_key,
+                                tr!("tool-output"),
+                                output_open,
+                                index,
+                                None,
+                                cx,
+                            )) { w_full; text_color: $cx.theme().muted_foreground; },
+                            @if (output_open)
+                                $self.render_tool_output(id, tool, index, cx),
+                            @end,
+                        ],
+                        $self.render_content_actions(id, id, index, cx),
+                    ],
+                @end,
             ]
-        }.into_any_element()
+        }
+        .into_any_element()
     }
 
     fn tool_has_input(&self, tool: &ToolCall) -> bool {
@@ -281,36 +274,35 @@ impl Workspace {
                 .and_then(|terminal| terminal.label.as_ref())
                 .is_some_and(|label| label.trim() == tool.title.trim())
         });
-        gds_uim::el! {
-            #div {
-                id: $SharedString::from(format!("tool-input-{id}"));
+        el! {
+            .div {
+                # format!("tool-input-{id}").SharedString::from;
                 test_support; flex; flex_col; gap_2; px_3; pb_3;
             } [
-                ..$tool.name.as_ref().map(|name| gds_uim::el! {
-                    #div {
-                        id: $SharedString::from(format!("tool-name-{id}"));
+                @if (let Some(name) = tool.name.as_ref())
+                    .div {
+                        # format!("tool-name-{id}").SharedString::from;
                         test_support;
                     } [
-                        $caption(
-                            crate::i18n::tr!("tool-name", name = (name).to_string()),
+                        (
+                            tr!("tool-name", name = (name).to_string()),
                             cx,
-                        ),
-                    ]
-                }),
-                ..$((
-                !tool
-                    .raw_input
-                    .as_ref()
-                    .is_some_and(|input| input_contains_command(input, &tool.title))
+                        ).caption,
+                    ],
+                @end,
+                @if (!tool.raw_input.as_ref().is_some_and(|input| input_contains_command(input, &tool.title))
                     && !title_is_terminal_command
                     && (tool.title.contains(['\r', '\n']) || tool.title.chars().count() > 96))
-                    .then(|| self.markdown(
+                    $self.markdown(
                         format!("{id}-command"),
                         code_block("sh", &tool.title),
                         index,
                         cx,
-                    ))),
-                ..$tool.raw_input.as_ref().map(|input| self.render_tool_parameters(id, input, index, cx)),
+                    ),
+                @end,
+                @if (let Some(input) = tool.raw_input.as_ref())
+                    $self.render_tool_parameters(id, input, index, cx),
+                @end,
                 ..$tool.content.iter().filter_map(|content| self.render_terminal_input(id, tool, content, index, cx)),
             ]
         }
@@ -332,21 +324,20 @@ impl Workspace {
             .expect("command belongs to an object")
             .clone();
         parameters.remove("command");
-        gds_uim::el! {
-            #div { flex; flex_col; gap_2; } [
-                $caption(crate::i18n::tr!("tool-command"), cx),
+        el! {
+            .div { flex; flex_col; gap_2; } [
+                (tr!("tool-command"), cx).caption,
                 $self.markdown(format!("{id}-input-command"), code_block("sh", command), index, cx),
-            ].gds_uim::m! {
-                @$(!parameters.is_empty()) => {
-                    child: $caption(crate::i18n::tr!("tool-arguments"), cx);
-                    child: $self.markdown(
+                @if (!parameters.is_empty())
+                    (tr!("tool-arguments"), cx).caption,
+                    $self.markdown(
                         format!("{id}-input"),
                         json_block(&serde_json::Value::Object(parameters)),
                         index,
                         cx,
-                    );
-                };
-            }
+                    ),
+                @end,
+            ]
         }
         .into_any_element()
     }
@@ -369,29 +360,29 @@ impl Workspace {
             .as_ref()?
             .terminals
             .get(reference.terminal_id.0.as_ref())?;
-        Some(gds_uim::el! {
-            #div { flex; flex_col; gap_2; } [
-                ..$terminal.label.as_ref().filter(|label| {
+        Some(el! {
+            .div { flex; flex_col; gap_2; } [
+                @if (let Some(label) = terminal.label.as_ref().filter(|label| {
                     !tool.raw_input.as_ref().is_some_and(|input| input_contains_command(input, label))
-                }).map(|label| {
-                    self.markdown(
+                }))
+                    $self.markdown(
                         format!("{id}-terminal-command-{}", reference.terminal_id),
                         code_block("sh", label),
                         index,
                         cx,
-                    )
-                }),
-                ..$terminal.cwd.as_ref().map(|cwd| gds_uim::el! {
-                    #div {
-                        id: $SharedString::from(format!("terminal-cwd-{}", reference.terminal_id));
+                    ),
+                @end,
+                @if (let Some(cwd) = terminal.cwd.as_ref())
+                    .div {
+                        # format!("terminal-cwd-{}", reference.terminal_id).SharedString::from;
                         test_support;
                     } [
-                        $caption(
-                            crate::i18n::tr!("tool-directory", path = (cwd.display()).to_string()),
+                        (
+                            tr!("tool-directory", path = (cwd.display()).to_string()),
                             cx,
-                        ),
-                    ]
-                }),
+                        ).caption,
+                    ],
+                @end,
             ]
         }.into_any_element())
     }
@@ -403,16 +394,15 @@ impl Workspace {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        gds_uim::el! {
-            #div {
-                id: $SharedString::from(format!("tool-output-{id}"));
+        el! {
+            .div {
+                # format!("tool-output-{id}").SharedString::from;
                 test_support; flex; flex_col; gap_3; pl_3; border_l_2;
                 border_color: $cx.theme().primary.opacity(0.55);
             } [
-                ..$tool.raw_output
-                    .as_ref()
-                    .filter(|_| !self.tool_has_rendered_output(tool))
-                    .map(|output| self.markdown(format!("{id}-output"), json_block(output), index, cx)),
+                @if (let Some(output) = tool.raw_output.as_ref().filter(|_| !self.tool_has_rendered_output(tool)))
+                    $self.markdown(format!("{id}-output"), json_block(output), index, cx),
+                @end,
                 ..$tool.locations.iter().map(|location| {
                 caption(
                     format!(
@@ -445,24 +435,25 @@ impl Workspace {
                         acp::ToolCallContent::Terminal(terminal) => {
                             self.render_terminal(id, terminal, tool, index, cx)
                         }
-                        _ => caption(crate::i18n::tr!("tool-preview-unavailable"), cx)
+                        _ => caption(tr!("tool-preview-unavailable"), cx)
                             .into_any_element(),
                     }),
-                ..$((tool.content.is_empty() && tool.raw_output.is_none()).then(|| {
-                    caption(
-                        if matches!(
+                @if (tool.content.is_empty() && tool.raw_output.is_none())
+                    (
+                        @if (matches!(
                             tool.status,
                             ToolCallStatus::Completed | ToolCallStatus::Failed
-                        ) {
-                            crate::i18n::tr!("tool-empty-output")
-                        } else {
-                            crate::i18n::tr!("tool-awaiting-output")
-                        },
+                        ))
+                            tr!("tool-empty-output")
+                        @else
+                            tr!("tool-awaiting-output")
+                        @end,
                         cx,
-                    )
-                })),
+                    ).caption,
+                @end,
             ]
-        }.into_any_element()
+        }
+        .into_any_element()
     }
     fn tool_has_rendered_output(&self, tool: &ToolCall) -> bool {
         tool.content.iter().any(|content| match content {
@@ -493,82 +484,84 @@ impl Workspace {
             .as_ref()
             .and_then(|c| c.terminals.get(reference.terminal_id.0.as_ref()));
         if let Some(terminal) = terminal {
-            gds_uim::el! {
-                #div {
-                    id: $SharedString::from(format!(
+            el! {
+                .div {
+                    # format!(
                     "terminal-{}",
                     reference.terminal_id
-                    ));
+                    ).SharedString::from;
                     test_support; flex; flex_col; gap_2;
                 } [
-                    ..$((!terminal.output.is_empty()).then(|| self.markdown(
-                        format!("{id}-terminal-{}", reference.terminal_id),
-                        code_block("text", &terminal.output),
-                        index,
-                        cx,
-                    ))),
+                    @if (!terminal.output.is_empty())
+                        $self.markdown(
+                            format!("{id}-terminal-{}", reference.terminal_id),
+                            code_block("text", &terminal.output),
+                            index,
+                            cx,
+                        ),
+                    @end,
                     ..$terminal.exit.as_ref().map(|exit| {
                     let mut status = Vec::new();
                     if let Some(code) = exit.exit_code {
-                        status.push(crate::i18n::tr!(
+                        status.push(tr!(
                             "terminal-exit-code",
                             code = (code).to_string()
                         ));
                     }
                     if let Some(signal) = &exit.signal {
-                        status.push(crate::i18n::tr!(
+                        status.push(tr!(
                             "terminal-signal",
                             signal = (signal).to_string()
                         ));
                     }
-                    gds_uim::el! {
-                        #div {
-                            id: $SharedString::from(format!(
+                    el! {
+                        .div {
+                            # format!(
                                 "terminal-exit-{}",
                                 reference.terminal_id
-                            ));
+                            ).SharedString::from;
                             test_support;
                         } [
-                            $caption(
-                                if status.is_empty() {
-                                    crate::i18n::tr!("terminal-exited").to_owned()
-                                } else {
-                                    status.join(" · ")
-                                },
+                            (
+                                @if (status.is_empty())
+                                    tr!("terminal-exited") { to_owned; }
+                                @else
+                                    $status.join(" · ")
+                                @end,
                                 cx,
-                            ),
+                            ).caption,
                         ]
                     }
                     }),
-                    ..$((terminal.output.is_empty()
+                    @if (terminal.output.is_empty()
                         && terminal.exit.is_none()
-                        && tool.raw_output.is_none()).then(|| {
-                        caption(
-                            if matches!(
+                        && tool.raw_output.is_none())
+                        (
+                            @if (matches!(
                                 tool.status,
                                 ToolCallStatus::Completed | ToolCallStatus::Failed
-                            ) {
-                                crate::i18n::tr!("terminal-empty-output")
-                            } else {
-                                crate::i18n::tr!("terminal-awaiting-output")
-                            },
+                            ))
+                                tr!("terminal-empty-output")
+                            @else
+                                tr!("terminal-awaiting-output")
+                            @end,
                             cx,
-                        )
-                    })),
+                        ).caption,
+                    @end,
                 ]
             }
             .into_any_element()
         } else if tool.raw_output.is_some() {
-            gds_uim::el! { #div }.into_any_element()
+            el! { .div }.into_any_element()
         } else {
             caption(
                 if matches!(
                     tool.status,
                     ToolCallStatus::Completed | ToolCallStatus::Failed
                 ) {
-                    crate::i18n::tr!("terminal-empty-output")
+                    tr!("terminal-empty-output")
                 } else {
-                    crate::i18n::tr!("terminal-awaiting-output")
+                    tr!("terminal-awaiting-output")
                 },
                 cx,
             )
@@ -632,31 +625,35 @@ pub(in crate::workspace) fn render_content(
     links: &links::Context,
     cx: &App,
 ) -> AnyElement {
-    match block {
-        ContentBlock::Text(_) => gds_uim::el! { #div [..markdown] }.into_any_element(),
-        ContentBlock::ResourceLink(resource) => super::resource::render(&id, resource, links, cx),
-        ContentBlock::Image(image) => gds_uim::el! {
-            #div { flex; flex_col; gap_2; } [
-                $caption(crate::i18n::tr!("resource-image", type = (image.mime_type).to_string()), cx),
-                $images::acp_image(&id, image, images, false, cx),
-            ]
-        }.into_any_element(),
-        ContentBlock::Resource(resource) => match &resource.resource {
-            acp::EmbeddedResourceResource::TextResourceContents(text) => gds_uim::el! {
-                #div { flex; flex_col; gap_2; } [$caption(text.uri.clone(), cx), ..markdown]
-            }.into_any_element(),
-            acp::EmbeddedResourceResource::BlobResourceContents(blob) => caption(
-                crate::i18n::tr!("resource-file", type = (blob.uri).to_string(), uri = (blob.mime_type
+    el! {
+        @match (block)
+        @case (ContentBlock::Text(_))
+            .div [..markdown] { into_any_element; }
+        @case (ContentBlock::ResourceLink(resource))
+            ($&id, resource, links, cx).super::resource::render
+        @case (ContentBlock::Image(image))
+            .div { flex; flex_col; gap_2; } [
+                (tr!("resource-image", type = (image.mime_type).to_string()), cx).caption,
+                ($&id, image, images, false, cx).images::acp_image,
+            ] { into_any_element; }
+        @case (ContentBlock::Resource(resource))
+            @match (&resource.resource)
+            @case (acp::EmbeddedResourceResource::TextResourceContents(text))
+                .div { flex; flex_col; gap_2; } [(~$(text.uri), cx).caption, ..markdown] { into_any_element; }
+            @case (acp::EmbeddedResourceResource::BlobResourceContents(blob))
+                (
+                    tr!("resource-file", type = (blob.uri).to_string(), uri = (blob.mime_type
                         .as_deref()
                         .unwrap_or("application/octet-stream")).to_string()),
-                cx,
-            )
-            .into_any_element(),
-            _ => caption(crate::i18n::tr!("resource-embedded"), cx).into_any_element(),
-        },
-        ContentBlock::Audio(audio) => {
-            crate::audio::content(&id, &id, audio, audio_player, cx)
-        }
-        _ => caption(crate::i18n::tr!("resource-preview-unavailable"), cx).into_any_element(),
+                    cx,
+                ).caption { into_any_element; }
+            @case (_)
+                (tr!("resource-embedded"), cx).caption { into_any_element; }
+            @end
+        @case (ContentBlock::Audio(audio))
+            ($&id, $&id, audio, audio_player, cx).crate::audio::content
+        @case (_)
+            (tr!("resource-preview-unavailable"), cx).caption { into_any_element; }
+        @end
     }
 }

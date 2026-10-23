@@ -1,6 +1,8 @@
 //! Passive session indicators shared by the conversation sidebar and history browser.
 
+use crate::i18n::tr;
 use bas::model::{SessionMeta, SessionSnapshot, SessionStatus};
+use gds_uim::el;
 use gpui_kit::{
     AnyElement, App, SharedString, TestSupportExt,
     assets::IconName,
@@ -49,36 +51,41 @@ impl Status {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Starting => crate::i18n::tr!("status-starting"),
-            Self::Working => crate::i18n::tr!("status-running"),
-            Self::Unread => crate::i18n::tr!("status-unread"),
-            Self::Idle => crate::i18n::tr!("status-ready"),
-            Self::Failed => crate::i18n::tr!("status-failed"),
-            Self::Stopped => crate::i18n::tr!("status-stopped"),
+            Self::Starting => tr!("status-starting"),
+            Self::Working => tr!("status-running"),
+            Self::Unread => tr!("status-unread"),
+            Self::Idle => tr!("status-ready"),
+            Self::Failed => tr!("status-failed"),
+            Self::Stopped => tr!("status-stopped"),
         }
     }
 
     fn indicator(self, id: SharedString, cx: &App) -> AnyElement {
-        let indicator = gds_uim::el! { #div {
-            id: id; test_support; flex; items_center; justify_center; flex_shrink_0;
+        let indicator = el! { .div {
+            # id; test_support; flex; items_center; justify_center; flex_shrink_0;
         } };
-        match self {
-            Self::Starting | Self::Working => gds_uim::el! {
-                $indicator { size: STATUS_SIZE.px; } [
-                    Spinner { icon: IconName::LoaderCircle; with_size: STATUS_SIZE.px; color: $cx.theme().primary; }
+        el! {
+            @match (self)
+            @case (Self::Starting | Self::Working)
+                indicator { size: STATUS_SIZE.px; } [
+                    .Spinner::new { icon: IconName::LoaderCircle; with_size: STATUS_SIZE.px; color: $cx.theme().primary; }
                 ]
-            },
-            Self::Idle => gds_uim::el! { $indicator { size_0; } },
-            Self::Unread | Self::Stopped => gds_uim::el! { $indicator {
-                size: LIGHT_SIZE.px; rounded_full;
-                bg: $(match self {
-                    Self::Stopped => cx.theme().muted_foreground,
-                    _ => cx.theme().primary,
-                });
-            } },
-            Self::Failed => gds_uim::el! { $indicator { size: STATUS_SIZE.px; } [
-                Icon(IconName::TriangleAlert) { with_size: STATUS_SIZE.px; text_color: $cx.theme().danger; }
-            ] },
+            @case (Self::Idle)
+                indicator { size_0; }
+            @case (Self::Unread | Self::Stopped)
+                indicator {
+                    size: LIGHT_SIZE.px; rounded_full;
+                    bg: @if (self == Self::Stopped)
+                        $cx.theme().muted_foreground
+                    @else
+                        $cx.theme().primary
+                    @end;
+                }
+            @case (Self::Failed)
+                indicator { size: STATUS_SIZE.px; } [
+                    IconName::TriangleAlert.Icon::new { with_size: STATUS_SIZE.px; text_color: $cx.theme().danger; }
+                ]
+            @end
         }.into_any_element()
     }
 
@@ -89,16 +96,16 @@ impl Status {
         cx: &App,
     ) -> AnyElement {
         let id: SharedString = id.into();
-        let slot = gds_uim::el! { #div {
+        let slot = el! { .div {
             size: super::COMPACT_CONTROL.px; flex_shrink_0; flex; items_center; justify_center;
         } [$self.indicator(indicator_id.into(), cx)] };
         if self == Self::Idle {
             return slot.into_any_element();
         }
-        gds_uim::el! { $slot {
-            id: id; test_support; cursor_default; role: gpui_kit::Role::Status;
+        el! { slot {
+            # id; test_support; cursor_default; role: gpui_kit::Role::Status;
             aria_label: $self.label();
-            hoverable_tooltip: $move |window, cx| super::tooltip::view(self.label(), window, cx);
+            hoverable_tooltip: move (window, cx) => ($self.label(), window, cx).super::tooltip::view;
         } }
         .into_any_element()
     }
@@ -106,13 +113,13 @@ impl Status {
 
 pub(crate) fn archived(id: impl Into<SharedString>) -> AnyElement {
     let id: SharedString = id.into();
-    let label = crate::i18n::tr!("session-archived");
-    gds_uim::el! { #div {
-        id: id; test_support; role: gpui_kit::Role::Status; aria_label: label;
+    let label = tr!("session-archived");
+    el! { .div {
+        # id; test_support; role: gpui_kit::Role::Status; aria_label: label;
         size: super::COMPACT_CONTROL.px; flex; items_center; justify_center; flex_shrink_0;
         cursor_default;
-        hoverable_tooltip: $move |window, cx| super::tooltip::view(label, window, cx);
-    } [Icon(IconName::Archive) { size: STATUS_SIZE.px; }] }
+        hoverable_tooltip: move (window, cx) => (label, window, cx).super::tooltip::view;
+    } [IconName::Archive.Icon::new { size: STATUS_SIZE.px; }] }
     .into_any_element()
 }
 

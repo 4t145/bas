@@ -1,8 +1,12 @@
 //! User-initiated playback of complete ACP audio blocks, never automatic replay.
 
-use crate::ui::ContentRow;
+use crate::{
+    i18n::tr,
+    ui::{self, ContentRow, icon_action},
+};
 use bas::acp;
 use base64::Engine;
+use gds_uim::el;
 use gpui_kit::{
     AnyElement, App, Context, Entity, Task, TestSupportExt, assets::IconName, component::*, div,
     prelude::*,
@@ -160,7 +164,7 @@ impl Player {
             .is_err()
         {
             self.commands = None;
-            self.state = State::Failed(crate::i18n::tr!("audio-worker-ended").into());
+            self.state = State::Failed(tr!("audio-worker-ended").into());
         }
         cx.notify();
     }
@@ -215,33 +219,33 @@ pub(crate) fn content(
     let stop = player.clone();
     let toggle_id = playback_id.to_owned();
     let stop_id = playback_id.to_owned();
-    let description = gds_uim::el! {
-        #div { truncate; text_size: crate::ui::SMALL; } [
-            $crate::i18n::tr!("resource-audio", type = audio.mime_type.clone()),
+    let description = el! {
+        .div { truncate; text_size: ui::SMALL; } [
+            tr!("resource-audio", type = audio.mime_type.clone()),
         ]
     };
-    gds_uim::el! { #div {
-        id: $format!("audio-{id}"); test_support; flex; flex_col; gap_2; p_3;
+    el! { .div {
+        # format!("audio-{id}"); test_support; flex; flex_col; gap_2; p_3;
         border_1; border_color: $cx.theme().border; rounded_md;
     } [
-        ContentRow($format!("audio-row-{id}"), $description) { icon: IconName::Volume2; } [
-            #crate::ui::icon_action($format!("audio-toggle-{id}"),
-                $(if playing { IconName::Pause } else { IconName::Play }),
-                $(if playing { crate::i18n::tr!("audio-pause") } else { crate::i18n::tr!("audio-play") })) {
+        (format!("audio-row-{id}"), description).ContentRow::new { icon: IconName::Volume2; } [
+            (format!("audio-toggle-{id}"),
+                @if (playing) IconName::Pause @else IconName::Play @end,
+                @if (playing) tr!("audio-pause") @else tr!("audio-play") @end).icon_action {
                 loading: loading;
                 on_click: $move |_, _, cx| toggle.update(cx, |player, cx| player.toggle(scope, toggle_id.clone(), Arc::clone(&audio), cx));
             },
-            #crate::ui::icon_action($format!("audio-stop-{id}"), IconName::Square, $crate::i18n::tr!("audio-stop")) {
+            (format!("audio-stop-{id}"), IconName::Square, tr!("audio-stop")).icon_action {
                 disabled: $!can_stop;
                 on_click: $move |_, _, cx| stop.update(cx, |player, cx| {
                     if player.scope == scope && player.id.as_deref() == Some(&stop_id) { player.stop(cx); }
                 });
             },
         ],
-        ..$error.map(|error| gds_uim::el! {
-            #div { text_size: $crate::ui::SMALL; text_color: $cx.theme().danger; } [
-                $crate::i18n::tr!("audio-error", error = error),
-            ]
-        }),
+        @if (let Some(error) = error)
+            .div { text_size: ui::SMALL; text_color: $cx.theme().danger; } [
+                tr!("audio-error", error = error),
+            ],
+        @end,
     ] }.into_any_element()
 }

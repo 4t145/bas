@@ -1,5 +1,4 @@
 use super::*;
-use gds_uim::el;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::PopupMenuItem;
 
@@ -21,8 +20,8 @@ pub(super) fn action_item(
         let shortcut = hint_action.as_ref().and_then(|action| {
             Kbd::binding_for_action(action.as_ref(), context, window).map(|kbd| {
                 el! {
-                    #div {
-                        id: "shortcut";
+                    .div {
+                        # "shortcut";
                         test_support;
                         flex_shrink_0;
                         text_color: $cx.theme().muted_foreground;
@@ -31,15 +30,15 @@ pub(super) fn action_item(
             })
         });
         el! {
-            #div {
-                id: label;
+            .div {
+                # label;
                 test_support;
                 role: gpui_kit::Role::Label;
                 aria_label: label;
                 flex; flex_1; items_baseline; gap_4;
-                text_size: crate::ui::SMALL;
+                text_size: ui::SMALL;
             } [
-                #div { id: "label"; test_support; flex_1; } [$label],
+                .div { # "label"; test_support; flex_1; } [label],
                 ..shortcut,
             ]
         }
@@ -56,9 +55,9 @@ impl Workspace {
         let connected = self.backend.connected;
         self.menu_button(
             el! {
-                #layout::icon_button("app-menu", IconName::Menu) {
-                    accessibility_label: $crate::i18n::tr!("app-menu");
-                    tooltip: $crate::i18n::tr!("app-menu");
+                ("app-menu", IconName::Menu).icon_button {
+                    accessibility_label: tr!("app-menu");
+                    tooltip: tr!("app-menu");
                 }
             },
             10,

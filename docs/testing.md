@@ -13,7 +13,7 @@ python3 tests/install_basg_dev.py -v
 ```
 
 真实 Nix source 回归验证 metadata 的锁定 URL round-trip 和源码过滤，
-覆盖 Git 子模块与 path 快照的类型边界；使用临时目录，不修改系统 profile：
+覆盖不含 vendor 源码的 package source 和 Git 宏依赖锁定；使用临时目录，不修改系统 profile：
 
 ```sh
 python3 tests/nix_source.py -v
@@ -22,7 +22,7 @@ python3 tests/nix_source.py -v
 本机 GUI 开发见 [本机启动](gui.md#本机启动)。外部 Agent 通过 ACP Registry
 按需安装；以下自动测试使用 embedded echo 和受控 ACP fixture，不读取凭据或调用真实模型。
 
-在物理 checkout 先执行 `git submodule update --init --recursive`，然后在仓库根目录运行：
+无需初始化子模块，在仓库根目录运行：
 
 ```sh
 nix develop -c cargo test --all-targets

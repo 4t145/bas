@@ -547,14 +547,14 @@ impl Workspace {
         let busy = self.selected.id.is_some_and(|id| {
             self.sessions.pending.loading_attachments.contains(&id) || self.composition_locked(id)
         });
-        gds_uim::el! {
-            Button("add-attachment") {
+        el! {
+            "add-attachment".Button::new {
                 ghost;
                 xsmall;
                 icon: IconName::Plus;
-                tooltip: $crate::i18n::tr!("attachment-add");
+                tooltip: tr!("attachment-add");
                 disabled: $self.selected.id.is_none() || busy;
-                on_click: $cx.listener(Self::on_choose_attachments);
+                on_click: (cx, Self::on_choose_attachments).Context::listener;
             }
         }
     }

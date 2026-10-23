@@ -43,20 +43,22 @@ impl Agents {
         let manage_id = id.clone();
         let target = self.target();
         let owner = cx.entity().downgrade();
-        Some(gds_uim::el! { #div {
-            id: "agents-save-feedback"; test_support; flex; flex_col; gap_2;
+        Some(el! { .div {
+            # "agents-save-feedback"; test_support; flex; flex_col; gap_2;
             p_3; border_1; border_color: $cx.theme().border; rounded_md;
         } [
-            $crate::settings::feedback("agents-save-result", label, cx.theme().foreground),
-            ..$error.map(|error| crate::settings::feedback("agents-save-error", error, cx.theme().danger)),
-            #div { flex; items_center; gap_2; } [
-                Button("agents-saved-chat") {
-                    small; icon: IconName::MessageCircle; label: $crate::i18n::tr!("agent-start-chat");
+            ("agents-save-result", label, $cx.theme().foreground).settings::feedback,
+            @if (let Some(error) = error)
+                ("agents-save-error", error, $cx.theme().danger).settings::feedback,
+            @end,
+            .div { flex; items_center; gap_2; } [
+                ("agents-saved-chat").Button::new {
+                    small; icon: IconName::MessageCircle; label: tr!("agent-start-chat");
                     disabled: $(!status.is_some_and(Status::connected) || !self.registry.editable() || self.logging_out(spec));
                     on_click: $cx.listener(move |this, _, _, cx| this.begin_chat(id.clone(), cx));
                 },
-                Button("agents-saved-manage") {
-                    small; icon: IconName::Settings; label: $crate::i18n::tr!("agent-manage");
+                ("agents-saved-manage").Button::new {
+                    small; icon: IconName::Settings; label: tr!("agent-manage");
                     on_click: $move |_, _, cx| {
                         let id = manage_id.clone();
                         let target = target.clone();

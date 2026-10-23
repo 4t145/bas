@@ -25,87 +25,88 @@ impl Workspace {
         };
         let group = SharedString::from(format!("thread-row-{id}"));
         let menu_session = session.clone();
-        let title_content = if editing {
-            self.render_title_editor(cx)
-        } else {
-            gds_uim::el! { #div {
-                id: $format!("thread-title-text-{id}"); test_support;
-                min_w_0; truncate; text_size: $crate::ui::SMALL;
-                on_click: $cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
-                    if event.click_count() == 2 {
-                        this.on_thread_row_rename(id, window, cx);
-                    }
-                });
-            } [
-                $title(session)
-            ] }
-            .into_any_element()
-        };
-        let pin = (pinned && !editing).then(|| {
-            gds_uim::el! { Icon(IconName::Pin) { xsmall; flex_shrink_0; } }
-        });
-        let bookmark = (bookmarked && !editing).then(|| {
-            gds_uim::el! {
-                #div { id: $format!("thread-bookmark-{id}"); test_support; flex_shrink_0; } [
-                    Icon(IconName::Bookmark) { xsmall; text_color: $cx.theme().primary; }
-                ]
-            }
-        });
-        let title_row = gds_uim::el! {
-            #div {
-                id: $SharedString::from(format!("thread-title-{id}"));
+        let title_row = el! {
+            .div {
+                # format!("thread-title-{id}").SharedString::from;
                 test_support; h: layout::ICON_BUTTON_SIZE.px; min_w_0; flex; items_center; gap_1;
-                @$!editing => {
-                    group_hover: $group.clone(), $gds_uim::m! { pr: $px(ACTIONS_WIDTH + ACTIONS_GAP); };
-                };
-            } [$title_content, ..pin, ..bookmark]
+                @if (!editing)
+                    group_hover: ~group, { pr: $(ACTIONS_WIDTH + ACTIONS_GAP).px; };
+                @end;
+            } [
+                @if (editing)
+                    $self.render_title_editor(cx),
+                @else
+                    .div {
+                        # format!("thread-title-text-{id}"); test_support;
+                        min_w_0; truncate; text_size: ui::SMALL;
+                        on_click: $cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                            if event.click_count() == 2 {
+                                this.on_thread_row_rename(id, window, cx);
+                            }
+                        });
+                    } [session.title],
+                @end,
+                @if (pinned && !editing)
+                    IconName::Pin.Icon::new { xsmall; flex_shrink_0; },
+                @end,
+                @if (bookmarked && !editing)
+                    .div { # format!("thread-bookmark-{id}"); test_support; flex_shrink_0; } [
+                        IconName::Bookmark.Icon::new { xsmall; text_color: $cx.theme().primary; },
+                    ],
+                @end,
+            ]
         };
-        let actions = gds_uim::el! {
-            #div {
-                id: $SharedString::from(format!("thread-actions-{id}"));
+        let actions = el! {
+            .div {
+                # format!("thread-actions-{id}").SharedString::from;
                 test_support; absolute; top_0; right_0; flex; items_center;
                 w: ACTIONS_WIDTH.px; h: layout::ICON_BUTTON_SIZE.px; invisible;
-                @$!editing => { group_hover: $group.clone(), $gds_uim::m! { visible; }; };
+                @if (!editing)
+                    group_hover: ~group, { visible; };
+                @end;
             } [
                 $self.thread_visibility_button(session, cx),
             ]
         };
-        let details = gds_uim::el! {
-            #div { flex; items_center; justify_between; gap_2; min_w_0; h: layout::ICON_BUTTON_SIZE.px; } [
-                ..$self.navigation.view.flat().then(|| gds_uim::el! {
-                    #div { id: $format!("thread-workspace-{id}"); test_support; min_w_0; flex_1; truncate;
-                        text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                    } [$super::groups::name(session.cwd.as_deref())]
-                }),
-                #div {
-                    id: $SharedString::from(format!("thread-time-{id}"));
-                    test_support; flex_shrink_0; text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                } [$recent_time(session.updated_at, Timestamp::now())],
-                #div {
-                    id: $SharedString::from(format!("thread-rail-{id}"));
+        let details = el! {
+            .div { flex; items_center; justify_between; gap_2; min_w_0; h: layout::ICON_BUTTON_SIZE.px; } [
+                @if (self.navigation.view.flat())
+                    .div { # format!("thread-workspace-{id}"); test_support; min_w_0; flex_1; truncate;
+                        text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                    } [$super::groups::name(session.cwd.as_deref())],
+                @end,
+                .div {
+                    # format!("thread-time-{id}").SharedString::from;
+                    test_support; flex_shrink_0; text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                } [($session.updated_at, .Timestamp::now).recent_time],
+                .div {
+                    # format!("thread-rail-{id}").SharedString::from;
                     test_support; size: layout::ICON_BUTTON_SIZE.px; flex_shrink_0;
                 } [$state.render(format!("thread-status-{id}"), format!("thread-indicator-{id}"), cx)],
             ]
         };
-        gds_uim::el! {
-            #div {
-                id: $SharedString::from(format!("session-{id}"));
+        el! {
+            .div {
+                # format!("session-{id}").SharedString::from;
                 test_support; group: group; w_full; px_3; py_2; cursor_pointer;
                 flex; items_start; gap_2;
-                @$self.selected.id == Some(id) => { bg: $cx.theme().sidebar_accent; };
-                hover => { bg: $cx.theme().sidebar_accent; };
+                @if (self.selected.id == Some(id))
+                    bg: $cx.theme().sidebar_accent;
+                @end;
+                hover: { bg: $cx.theme().sidebar_accent; };
                 on_click: $cx.listener(move |this, _, window, cx| this.select(id, window, cx));
                 on_mouse_down: gpui_kit::MouseButton::Right,
                     $cx.listener(move |this, event, window, cx| {
                         this.on_thread_row_context_menu(&menu_session, event, window, cx);
                     });
             } [
-                #div { h: layout::ICON_BUTTON_SIZE.px; flex; items_center; flex_shrink_0; } [
+                .div { h: layout::ICON_BUTTON_SIZE.px; flex; items_center; flex_shrink_0; } [
                     $self.agent_icon(format!("thread-agent-{id}"), session.agent.as_str(), cx),
                 ],
-                #div { relative; flex_1; min_w_0; flex; flex_col; } [$title_row, $details, $actions],
+                .div { relative; flex_1; min_w_0; flex; flex_col; } [title_row, details, actions],
             ]
-        }.into_any_element()
+        }
+        .into_any_element()
     }
 
     fn on_thread_row_rename(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
@@ -136,9 +137,9 @@ impl Workspace {
         if session.archived || !self.sessions.is_draft(id) {
             return self.archive_button(session, "archive", cx);
         }
-        gds_uim::el! { #layout::icon_button($SharedString::from(format!("discard-{id}")), IconName::Trash) {
-            accessibility_label: $crate::i18n::tr!("draft-discard");
-            tooltip: $crate::i18n::tr!("draft-discard");
+        el! { (format!("discard-{id}").SharedString::from, IconName::Trash).icon_button {
+            accessibility_label: tr!("draft-discard");
+            tooltip: tr!("draft-discard");
             disabled: $(!self.backend.connected
                     || self.sessions.pending.archiving.contains(&id)
                     || self.sessions.pending.deleting.contains(&id));

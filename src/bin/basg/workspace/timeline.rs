@@ -526,30 +526,29 @@ impl Workspace {
         if !loading && error.is_none() {
             return None;
         }
-        Some(gds_uim::el! {
-            #div {
-                id: "older-history-status"; test_support;
+        Some(el! {
+            .div {
+                # "older-history-status"; test_support;
                 absolute; top_0; left_0; right_0; flex; justify_center; px_3;
             } [
-                #div {
+                .div {
                     flex; items_center; gap_2; px_3; py_1; max_w_full;
                     rounded_md; bg: $cx.theme().background;
-                    text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+                    text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
                 } [
-                    ..$loading.then(|| status::activity_icon(
-                        "older-history-loading", IconName::LoaderCircle,
-                        cx.theme().muted_foreground, true,
-                    )),
-                    ..$loading.then(|| crate::i18n::tr!("session-history-loading-older")),
-                    ..$error.map(|error| crate::ui::feedback(
-                        "older-history-error", error.presentation(), cx.theme().danger
-                    ).compact()),
-                    ..$error.map(|_| gds_uim::el! {
-                        #crate::ui::action_button("older-history-retry") {
-                            label: $crate::i18n::tr!("session-history-retry");
+                    @if (loading)
+                        ("older-history-loading", IconName::LoaderCircle,
+                            $cx.theme().muted_foreground, true).status::activity_icon,
+                        tr!("session-history-loading-older"),
+                    @end,
+                    @if (let Some(error) = error)
+                        ("older-history-error", $error.presentation(), $cx.theme().danger)
+                            .feedback { compact; },
+                        "older-history-retry".action_button {
+                            label: tr!("session-history-retry");
                             on_click: $cx.listener(|this, _, _, cx| this.load_older_history(cx));
-                        }
-                    }),
+                        },
+                    @end,
                 ],
             ]
         }.into_any_element())

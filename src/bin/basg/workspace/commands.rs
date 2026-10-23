@@ -112,31 +112,35 @@ impl Workspace {
             .take(VISIBLE_COMMANDS)
             .map(|(index, command)| {
                 let name = command.name.clone();
-                gds_uim::el! {
-                    #div {
-                        id: $SharedString::from(format!("slash-{}", command.name));
+                el! {
+                    .div {
+                        # format!("slash-{}", command.name).SharedString::from;
                         test_support; cursor_pointer; rounded_md; px_2; py_1;
-                        @$index == selected => { bg: $cx.theme().accent; };
+                        @if (index == selected)
+                            bg: $cx.theme().accent;
+                        @end;
                         on_click: $cx.listener(move |this, _, window, cx| {
                             this.insert_command(&name, window, cx)
                         });
                     } [
-                        #div {
-                            text_size: $crate::ui::SMALL;
+                        .div {
+                            text_size: ui::SMALL;
                             font_weight: FontWeight::SEMIBOLD;
-                        } [$format!("/{}", command.name)],
-                        #caption($command.description.clone(), cx) { truncate; },
+                        } [format!("/{}", command.name)],
+                        (~$(command.description), cx).caption { truncate; },
                     ]
                 }
             })
             .collect::<Vec<_>>();
         let hint = self.command_hint(cx).map(|hint| {
-            gds_uim::el! { #caption(hint, cx) { px_3; py_1; } }
+            el! { (hint, cx).caption { px_3; py_1; } }
         });
-        gds_uim::el! {
-            #div {
-                id: "command-suggestions"; flex; flex_col; flex_shrink_0;
-                @has_candidates => { border_b_1; border_color: $cx.theme().border; p_2; };
+        el! {
+            .div {
+                # "command-suggestions"; flex; flex_col; flex_shrink_0;
+                @if (has_candidates)
+                    border_b_1; border_color: $cx.theme().border; p_2;
+                @end;
             } [..shortcuts, ..rows, ..hint]
         }
         .into_any_element()

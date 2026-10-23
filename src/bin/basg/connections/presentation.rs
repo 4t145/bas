@@ -1,6 +1,8 @@
 //! Shared, user-facing transport descriptions, independent of saved names and notes.
 
+use crate::{i18n::tr, ui};
 use bas::service::Target;
+use gds_uim::el;
 use gpui_kit::{
     assets::IconName,
     component::{ActiveTheme, Icon, menu::PopupMenuItem},
@@ -13,11 +15,11 @@ mod tests;
 
 pub(crate) fn label(target: &Target) -> &'static str {
     match target {
-        Target::Local => crate::i18n::tr!("connections-local"),
+        Target::Local => tr!("connections-local"),
         Target::Tcp(_) => "TCP",
         Target::Mtls(_) => "mTLS",
         Target::Unix(_) => "Unix socket",
-        Target::Pipe(_) => crate::i18n::tr!("connections-pipe"),
+        Target::Pipe(_) => tr!("connections-pipe"),
     }
 }
 
@@ -47,7 +49,7 @@ fn local_endpoint(resolved: std::io::Result<Target>) -> String {
     match resolved {
         Ok(Target::Unix(path)) => path.display().to_string(),
         Ok(Target::Pipe(name)) => name,
-        _ => crate::i18n::tr!("connections-local-endpoint").into(),
+        _ => tr!("connections-local-endpoint").into(),
     }
 }
 
@@ -57,16 +59,8 @@ pub(crate) fn summary(target: &Target) -> String {
 
 pub(crate) fn tooltip(target: &Target) -> String {
     match target {
-        Target::Tcp(_) => format!(
-            "{} · {}",
-            summary(target),
-            crate::i18n::tr!("connections-tcp-security")
-        ),
-        Target::Mtls(_) => format!(
-            "{} · {}",
-            summary(target),
-            crate::i18n::tr!("connections-mtls-security")
-        ),
+        Target::Tcp(_) => format!("{} · {}", summary(target), tr!("connections-tcp-security")),
+        Target::Mtls(_) => format!("{} · {}", summary(target), tr!("connections-mtls-security")),
         _ => summary(target),
     }
 }
@@ -79,24 +73,24 @@ pub(crate) fn menu_item(profile: &bas::config::ConnectionProfile) -> PopupMenuIt
     let target = profile.target.clone();
     PopupMenuItem::element(move |_, cx| {
         let hint = hint.clone();
-        gds_uim::el! { #div {
-            id: $id.clone(); test_support; role: Role::Label;
-            aria_label: $hint.clone(); flex_1; flex; flex_col; gap_1; min_w_0; w_0; overflow_hidden;
-            hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(hint.clone(), window, cx);
+        el! { .div {
+            # ~id; test_support; role: Role::Label;
+            aria_label: ~hint; flex_1; flex; flex_col; gap_1; min_w_0; w_0; overflow_hidden;
+            hoverable_tooltip: move (window, cx) => (~hint, window, cx).ui::tooltip::view;
         } [
-            #div { w_full; min_w_0; flex; items_center; gap_2; text_base; } [
-                $icon(&target) { size: crate::ui::ICON.px; flex_shrink_0; },
-                #div {
-                    id: $format!("{id}-name"); test_support; role: Role::Label;
-                    aria_label: $name.clone(); flex_1; min_w_0; truncate;
-                } [$name.clone()],
+            .div { w_full; min_w_0; flex; items_center; gap_2; text_base; } [
+                $(&target).icon { size: ui::ICON.px; flex_shrink_0; },
+                .div {
+                    # format!("{id}-name"); test_support; role: Role::Label;
+                    aria_label: ~name; flex_1; min_w_0; truncate;
+                } [~name],
             ],
-            #div {
-                id: $format!("{id}-endpoint"); test_support; role: Role::Label;
-                aria_label: $address.clone();
-                w_full; min_w_0; truncate; text_size: crate::ui::SMALL;
+            .div {
+                # format!("{id}-endpoint"); test_support; role: Role::Label;
+                aria_label: ~address;
+                w_full; min_w_0; truncate; text_size: ui::SMALL;
                 text_color: $cx.theme().muted_foreground;
-            } [$address.clone()],
+            } [~address],
         ] }
     })
 }

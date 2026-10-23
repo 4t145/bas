@@ -115,23 +115,23 @@ impl RenderOnce for AgentIcon {
         let (kind, content) = match artwork {
             Some(Artwork::Svg { bytes, embedded }) => {
                 let logo = if embedded {
-                    el! { #svg { path: $self.uri.clone(); } }
+                    el! { .svg { path: ~$(self.uri); } }
                 } else {
-                    el! { #svg { data: $&bytes; } }
+                    el! { .svg { data: $&bytes; } }
                 };
                 (
                     "svg",
-                    el! { $logo { size: $self.size; text_color: color; } }.into_any_element(),
+                    el! { logo { size: $self.size; text_color: color; } }.into_any_element(),
                 )
             }
             Some(Artwork::Bitmap(image)) => (
                 "image",
-                el! { #img(image) { size: $self.size; } }.into_any_element(),
+                el! { image.img { size: $self.size; } }.into_any_element(),
             ),
             None => (
                 "fallback",
                 el! {
-                    Icon(IconName::Bot) {
+                    IconName::Bot.Icon::new {
                         size: $self.size;
                         text_color: color;
                     }
@@ -140,17 +140,17 @@ impl RenderOnce for AgentIcon {
             ),
         };
         el! {
-            #div {
-                id: $self.id.clone();
+            .div {
+                # ~$(self.id);
                 test_support;
                 size: $self.size;
                 flex_shrink_0;
             } [
-                #div {
-                    id: $format!("{}-{kind}", self.id);
+                .div {
+                    # format!("{}-{kind}", self.id);
                     test_support;
                     size: $self.size;
-                } [$content],
+                } [content],
             ]
         }
     }

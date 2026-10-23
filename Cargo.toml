@@ -70,7 +70,7 @@ flate2 = "1"
 bzip2 = "0.6"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 semver = "1"
-gds-uim = { path = "vendor/gds-uim", optional = true }
+gds-uim = { git = "https://github.com/4t145/gds-uim.git", rev = "94fe061888c45e137daff0d45c172c36bdb09882", optional = true }
 gpui-kit = { version = "=0.6.6", optional = true, features = [
     "tree-sitter-markdown",
     "tree-sitter-rust",

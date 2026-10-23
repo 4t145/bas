@@ -183,20 +183,15 @@ impl Workspace {
     }
 
     pub(super) fn mode_button(&self, cx: &mut Context<Self>) -> Button {
-        gds_uim::el! { #icon_button(
+        el! { (
             "toggle-mode",
-            $(if self.window.compact {
-                IconName::Maximize2
-            } else {
-                IconName::Minimize2
-            }),
-        ) {
-        hoverable_tooltip: $shortcuts::tooltip(if self.window.compact {
-            crate::i18n::tr!("window-expand")
-        } else {
-            crate::i18n::tr!("window-compact")
-        }, ToggleMode);
-        on_click: $cx.listener(Self::on_layout_toggle_mode);
+            @if (self.window.compact) IconName::Maximize2 @else IconName::Minimize2 @end,
+        ).icon_button {
+            hoverable_tooltip: (
+                @if (self.window.compact) tr!("window-expand") @else tr!("window-compact") @end,
+                ToggleMode,
+            ).shortcuts::tooltip;
+            on_click: $cx.listener(Self::on_layout_toggle_mode);
         } }
     }
 
@@ -212,9 +207,9 @@ impl Workspace {
         self.composer
             .available_height
             .set((f32::from(window.viewport_size().height) - 180.).max(80.));
-        gds_uim::el! {
-            #div {
-                id: "bas-workspace"; key_context: "BasWorkspace"; size_full; flex;
+        el! {
+            .div {
+                # "bas-workspace"; key_context: "BasWorkspace"; size_full; flex;
                 text_color: $cx.theme().foreground;
                 capture_any_mouse_down: $cx.listener(Self::on_layout_mouse_down);
                 on_action: $|_: &gpui_kit::component::input::Enter, _, _| {};
@@ -237,11 +232,11 @@ impl Workspace {
                 on_action: $cx.listener(Self::on_delete_thread);
                 on_action: $cx.listener(Self::on_add_workspace);
             } [
-                $(if self.window.compact {
-                self.render_popup(cx)
-            } else {
-                self.render_window(window, cx)
-                }),
+                @if (self.window.compact)
+                    $self.render_popup(cx),
+                @else
+                    $self.render_window(window, cx),
+                @end,
                 ..$self.inline_context_menu(),
                 ..$self.inline_preview(),
             ]
@@ -257,23 +252,20 @@ impl Workspace {
     }
 
     fn render_popup(&self, cx: &mut Context<Self>) -> AnyElement {
-        let preview = self.window.reply_preview.as_ref()
-            .filter(|preview| preview.window.is_none()).map(|preview| {
-                gds_uim::el! { #div { flex_shrink_0; h: $preview.size.height; } [$preview.content.clone()] }
-            });
-        let menu = self.window.menu.as_ref().filter(|menu| menu.window.is_none()).map(|menu| {
-            gds_uim::el! { #div { flex_shrink_0; h: $menu.size.height; } [$menu.content.clone()] }
-        });
-        let output = self
-            .window
-            .output_open
-            .then(|| self.render_layout_compact_output(cx));
-        gds_uim::el! {
-            #div {
-                id: "minimal-mode"; size_full; flex; flex_col; rounded_xl; overflow_hidden;
+        el! {
+            .div {
+                # "minimal-mode"; size_full; flex; flex_col; rounded_xl; overflow_hidden;
                 border_1; border_color: $cx.theme().border; bg: $theme::content_background(cx);
             } [
-                ..preview, ..menu, ..output,
+                @if (let Some(preview) = self.window.reply_preview.as_ref().filter(|preview| preview.window.is_none()))
+                    .div { flex_shrink_0; h: $preview.size.height; } [~$(preview.content)],
+                @end,
+                @if (let Some(menu) = self.window.menu.as_ref().filter(|menu| menu.window.is_none()))
+                    .div { flex_shrink_0; h: $menu.size.height; } [~$(menu.content)],
+                @end,
+                @if (self.window.output_open)
+                    $self.render_layout_compact_output(cx),
+                @end,
                 $self.render_layout_compact_header(cx),
                 $self.render_composer(cx),
             ]
@@ -282,83 +274,79 @@ impl Workspace {
     }
 
     fn render_layout_compact_output(&self, cx: &mut Context<Self>) -> AnyElement {
-        let feedback = self
+        let has_feedback = self
             .selected
             .timeline
             .conversation
             .as_ref()
-            .is_some_and(|conversation| !conversation.notices.is_empty())
-            .then(|| {
-                gds_uim::el! { #div {
-                    id: "compact-feedback"; test_support; flex_shrink_0;
+            .is_some_and(|conversation| !conversation.notices.is_empty());
+        el! { .div {
+            # "agent-output"; test_support; flex; flex_col; flex_1; min_h_0;
+            border_b_1; border_color: $cx.theme().border;
+        } [
+            @if (has_feedback)
+                .div {
+                    # "compact-feedback"; test_support; flex_shrink_0;
                     max_h: $px(OUTPUT_HEIGHT / 2.); overflow_y_scroll;
                     pl: chat::THREAD_BODY_PADDING.px;
                     pr: $px(turn_navigation::RAIL_WIDTH + chat::THREAD_BODY_PADDING);
-                } [..$self.render_notices(cx)] }
-            });
-        gds_uim::el! { #div {
-            id: "agent-output"; test_support; flex; flex_col; flex_1; min_h_0;
-            border_b_1; border_color: $cx.theme().border;
-        } [..feedback, $self.render_timeline(cx)] }
+                } [..$self.render_notices(cx)],
+            @end,
+            $self.render_timeline(cx),
+        ] }
         .into_any_element()
     }
 
     fn render_layout_compact_status(&self, cx: &mut Context<Self>) -> AnyElement {
-        let archived = self
-            .current()
-            .is_some_and(|session| session.archived)
-            .then(|| caption(crate::i18n::tr!("session-archived"), cx));
-        let activity = self.activity_label().map(|label| {
-            gds_uim::el! { #caption(label, cx) { flex_1; min_w_0; truncate; } }
-        });
-        let summary = self
-            .activity_label()
-            .is_none()
-            .then(|| self.render_reply_summary(cx))
-            .flatten();
-        gds_uim::el! { #div {
-            id: "compact-status"; test_support; flex_1; cursor_grab; min_w_0;
-            flex; items_center; gap_1; text_size: $crate::ui::SMALL;
+        el! { .div {
+            # "compact-status"; test_support; flex_1; cursor_grab; min_w_0;
+            flex; items_center; gap_1; text_size: ui::SMALL;
             on_mouse_down: gpui_kit::MouseButton::Left, Self::on_layout_window_move;
         } [
             $self.session_indicator("compact-connection", cx),
-            ..archived, ..activity, ..summary,
+            @if (self.current().is_some_and(|session| session.archived))
+                (tr!("session-archived"), cx).caption,
+            @end,
+            @match (self.activity_label())
+            @case (Some(label))
+                (label, cx).caption { flex_1; min_w_0; truncate; },
+            @case (None)
+                ..$self.render_reply_summary(cx),
+            @end,
         ] }
         .into_any_element()
     }
 
     fn render_layout_compact_header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let navigation = (self.selected.id.is_some() && self.window.output_open)
-            .then(|| self.render_conversation_navigation(cx));
-        let restore = self
-            .current()
-            .filter(|session| session.archived)
-            .map(|session| self.archive_button(session, "compact-restore", cx));
-        let authentication = self
-            .selected
-            .authentication
-            .required
-            .is_some()
-            .then(|| self.authentication_button(cx));
-        gds_uim::el! { #div {
-            id: "compact-header"; test_support; flex; items_center; gap_1;
+        el! { .div {
+            # "compact-header"; test_support; flex; items_center; gap_1;
             mx: composer::COMPOSER_SIDE_PADDING.px;
             pl: composer::COMPOSER_CONTROL_INSET.px; pr: composer::COMPOSER_CONTROL_INSET.px;
-            @$cfg!(target_os = "macos") => { pl: MACOS_WINDOW_CONTROLS_WIDTH.px; };
+            @if (cfg!(target_os = "macos"))
+                pl: MACOS_WINDOW_CONTROLS_WIDTH.px;
+            @end;
             h: COMPACT_HEADER_HEIGHT.px; flex_shrink_0;
         } [
-            #icon_button("toggle-output", $(if self.window.output_open { IconName::ChevronDown } else { IconName::ChevronRight })) {
-                hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("conversation-toggle"), ToggleOutput);
+            ("toggle-output", @if (self.window.output_open) IconName::ChevronDown @else IconName::ChevronRight @end).icon_button {
+                hoverable_tooltip: $shortcuts::tooltip(tr!("conversation-toggle"), ToggleOutput);
                 on_click: $cx.listener(Self::on_layout_toggle_output);
             },
             $self.agent_button(cx),
             ..$self.render_plan_indicator(cx),
             $self.render_layout_compact_status(cx),
-            ..navigation, ..restore, ..authentication,
+            @if (self.selected.id.is_some() && self.window.output_open)
+                $self.render_conversation_navigation(cx),
+            @end,
+            @if (let Some(session) = self.current().filter(|session| session.archived))
+                $self.archive_button(session, "compact-restore", cx),
+            @end,
+            @if (self.selected.authentication.required.is_some())
+                $self.authentication_button(cx),
+            @end,
             $self.application_button(cx),
             $self.workspace_button(cx),
-            #icon_button("new-session", IconName::Plus) {
-                hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("session-new"), NewSession);
+            ("new-session", IconName::Plus).icon_button {
+                hoverable_tooltip: $shortcuts::tooltip(tr!("session-new"), NewSession);
                 on_click: $cx.listener(Self::on_layout_new_session);
             },
             $self.mode_button(cx),
@@ -366,13 +354,11 @@ impl Workspace {
     }
 
     fn render_window(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let sidebar = self
-            .window
-            .sidebar_visible
-            .then(|| self.render_sidebar(window, cx));
-        gds_uim::el! { #div { id: "window-mode"; size_full; flex; } [
-            ..sidebar,
-            #div { flex; flex_col; flex_1; min_w_0; h_full; bg: $theme::content_background(cx); } [
+        el! { .div { # "window-mode"; size_full; flex; } [
+            @if (self.window.sidebar_visible)
+                $self.render_sidebar(window, cx),
+            @end,
+            .div { flex; flex_col; flex_1; min_w_0; h_full; bg: $theme::content_background(cx); } [
                 $self.render_header(window, cx), $self.render_chat(cx),
             ],
         ] }

@@ -19,16 +19,16 @@ impl Workspace {
     }
 
     pub(in crate::workspace) fn authentication_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        crate::ui::tooltip::bounded(
+        ui::tooltip::bounded(
             "authentication-hint",
-            gds_uim::el! {
-                Button("agent-authenticate") {
+            el! {
+                "agent-authenticate".Button::new {
                     xsmall;
-                    label: $crate::i18n::tr!("auth-action");
-                    on_click: $cx.listener(Self::on_workspace_auth_open);
+                    label: tr!("auth-action");
+                    on_click: (cx, Self::on_workspace_auth_open).Context::listener;
                 }
             },
-            crate::i18n::tr!("auth-action"),
+            tr!("auth-action"),
         )
         .into_any_element()
     }

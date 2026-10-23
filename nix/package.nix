@@ -40,7 +40,6 @@ rustPlatform.buildRustPackage (finalAttrs: {
       ../src
       ../proto
       ../assets
-      (lib.fileset.fileFilter (file: file.name != ".git") ../vendor/gds-uim)
       ../tests
     ];
   };
@@ -48,7 +47,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
   BAS_BUILD_TAG =
     if buildTag != null then buildTag
     else "nix-source-${builtins.substring 0 32 (builtins.baseNameOf finalAttrs.src)}";
-  cargoLock.lockFile = ../Cargo.lock;
+  cargoLock = {
+    lockFile = ../Cargo.lock;
+    # Both gds-uim packages come from this same Git checkout.
+    outputHashes."gds-uim-0.1.0" = "sha256-yVojxpvvejy2NBKgcKsffBMqrPqe6YOJ94vtjCUz7dQ=";
+  };
   buildFeatures = lib.optionals gui [ "gui" ];
   cargoBuildFlags = lib.optionals gui [
     "--bin"

@@ -111,9 +111,9 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let expected = spec.clone();
-        gds_uim::el! {
-            #item::action($format!("agent-logout-{}", spec.id), $gpui_kit::assets::IconName::LogOut, $crate::i18n::tr!("agent-logout")) {
-                tooltip: $crate::i18n::tr!("agent-logout-help");
+        el! {
+            (format!("agent-logout-{}", spec.id), IconName::LogOut, tr!("agent-logout")).item::action {
+                tooltip: tr!("agent-logout-help");
                 loading: $self.logging_out(spec);
                 disabled: $!self.can_logout(spec, cx);
                 on_click: $cx.listener(move |this, _, _, cx| this.request_logout(expected.clone(), cx));

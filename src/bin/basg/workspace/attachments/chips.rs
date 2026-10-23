@@ -39,13 +39,13 @@ impl Workspace {
                         let name = attachment.name.clone();
                         let icon = if image { IconName::Image } else { IconName::File };
                         let background = if selected {
-                                cx.theme().primary.opacity(0.18)
-                            } else {
-                                cx.theme().background
-                            };
+                            cx.theme().primary.opacity(0.18)
+                        } else {
+                            cx.theme().background
+                        };
                         let mut chip = el! {
-                            #div {
-                                id: $SharedString::from(format!("attachment-{id}-{}", range.start));
+                            .div {
+                                # format!("attachment-{id}-{}", range.start).SharedString::from;
                                 test_support;
                                 flex;
                                 items_center;
@@ -58,35 +58,34 @@ impl Workspace {
                                 border_color: $cx.theme().border;
                                 bg: background;
                                 text_color: $cx.theme().foreground;
-                                font_family: $cx.theme().font_family.clone();
+                                font_family: ~$(cx.theme().font_family);
                                 text_size: $theme::content_font_size(cx);
                                 line_height: $gpui_kit::relative(1.);
                                 cursor_pointer;
                                 on_mouse_down: MouseButton::Left, $move |_, window, cx| {
                                     Self::on_attachment_chip_click(&click_owner, &range, window, cx);
                                 };
-                                @image => {
+                                @if (image)
                                     on_hover: $move |hovered, window, cx| {
                                         let _ = hover_owner.update(cx, |this, cx| {
                                             this.hover_attachment(id, *hovered, bounds, window, cx)
                                         });
                                     };
-                                };
-                                @$!image => {
+                                @else
                                     hoverable_tooltip: $move |window, cx| {
-                                        crate::ui::tooltip::view(
-                                            crate::i18n::tr!("attachment-select", name = name.as_str()),
+                                        ui::tooltip::view(
+                                            tr!("attachment-select", name = name.as_str()),
                                             window,
                                             cx,
                                         )
                                     };
-                                };
+                                @end;
                             } [
-                                Icon(icon) {
-                                    size: crate::ui::SMALL_ICON.px;
+                                icon.Icon::new {
+                                    size: ui::SMALL_ICON.px;
                                     flex_shrink_0;
                                 },
-                                #div { min_w_0; truncate; } [$label],
+                                .div { min_w_0; truncate; } [label],
                             ]
                         }.into_any_element();
                         chip.prepaint_as_root(

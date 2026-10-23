@@ -113,24 +113,24 @@ impl AppearancePage {
     fn number_stepper(&self, field: Field, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let value = self.draft_number(field, cx);
         let input = self.setting_input(field);
-        gds_uim::el! {
-            #div {
-                id: $format!("{}-stepper", field.id()); test_support;
+        el! {
+            .div {
+                # format!("{}-stepper", field.id()); test_support;
                 flex; items_center; flex_shrink_0; w: STEPPER_WIDTH.px;
                 h: ui::COMPACT_CONTROL.px; border_1; rounded_md; border_color: $cx.theme().border;
             } [
-                #ui::icon_button($format!("{}-decrease", field.id()), $IconName::Minus) {
-                    accessibility_label: $crate::i18n::tr!("appearance-value-decrease", field = field.label());
-                    tooltip: $crate::i18n::tr!("appearance-value-decrease", field = field.label());
+                (format!("{}-decrease", field.id()), IconName::Minus).ui::icon_button {
+                    accessibility_label: tr!("appearance-value-decrease", field = field.label());
+                    tooltip: tr!("appearance-value-decrease", field = field.label());
                     disabled: $(self.document.is_none() || value.and_then(|value| field.stepped(value, false)).is_none());
                     on_click: $cx.listener(move |this, _, window, cx| this.step_number(field, false, window, cx));
                 },
-                #div { id: $field.id(); test_support; flex_1; min_w_0; } [
+                .div { # $field.id(); test_support; flex_1; min_w_0; } [
                     $ui::input::placeholder(input, Input::new(input).small().appearance(false).text_center().disabled(self.document.is_none()))
                 ],
-                #ui::icon_button($format!("{}-increase", field.id()), $IconName::Plus) {
-                    accessibility_label: $crate::i18n::tr!("appearance-value-increase", field = field.label());
-                    tooltip: $crate::i18n::tr!("appearance-value-increase", field = field.label());
+                (format!("{}-increase", field.id()), IconName::Plus).ui::icon_button {
+                    accessibility_label: tr!("appearance-value-increase", field = field.label());
+                    tooltip: tr!("appearance-value-increase", field = field.label());
                     disabled: $(self.document.is_none() || value.and_then(|value| field.stepped(value, true)).is_none());
                     on_click: $cx.listener(move |this, _, window, cx| this.step_number(field, true, window, cx));
                 },
@@ -196,23 +196,21 @@ impl AppearancePage {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let controls = match field {
-            Field::UiFont => gds_uim::el! { #div { flex; items_center; gap_2; flex_1; min_w_0; } [
-                #div { flex_1; min_w_0; } [$self.control(field)],
+            Field::UiFont => el! { .div { flex; items_center; gap_2; flex_1; min_w_0; } [
+                .div { flex_1; min_w_0; } [$self.control(field)],
                 $self.number_stepper(Field::UiSize, cx),
             ] }
             .into_any_element(),
             Field::UiSize | Field::ContentSize | Field::LineHeight | Field::Opacity => {
                 self.number_stepper(field, cx)
             }
-            _ => {
-                gds_uim::el! { #div { flex_1; min_w_0; flex; justify_end; } [$self.control(field)] }
-                    .into_any_element()
-            }
+            _ => el! { .div { flex_1; min_w_0; flex; justify_end; } [$self.control(field)] }
+                .into_any_element(),
         };
-        let reset = self.overridden(field, cx).then(|| gds_uim::el! {
-            #ui::icon_button($format!("{}-default", field.id()), $IconName::RotateCcw) {
-                accessibility_label: $crate::i18n::tr!("appearance-reset-field", field = field.label());
-                tooltip: $crate::i18n::tr!("appearance-reset-field", field = field.label());
+        let reset = self.overridden(field, cx).then(|| el! {
+            (format!("{}-default", field.id()), IconName::RotateCcw).ui::icon_button {
+                accessibility_label: tr!("appearance-reset-field", field = field.label());
+                tooltip: tr!("appearance-reset-field", field = field.label());
                 disabled: $self.document.is_none();
                 on_click: $cx.listener(move |this, _, window, cx| this.reset_field(field, window, cx));
             }

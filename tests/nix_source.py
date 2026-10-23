@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -63,18 +64,36 @@ class NixSourceTests(unittest.TestCase):
         self.assertNotIn("submodules", parse_qs(urlsplit(uri).query), uri)
         self.assertEqual(second["locked"], first["locked"])
 
-    def test_initialized_vendor_source_is_preserved(self):
-        vendor = self.source / "vendor/gds-uim"
-        self.assertTrue(
-            (vendor / "Cargo.toml").is_file(),
-            "Initialize vendor/gds-uim before running: git submodule update --init --recursive",
-        )
-        self.assertTrue(
-            any((vendor / "src").rglob("*.rs")),
-            f"Snapshot is missing vendor Rust source: {vendor}",
-        )
-        self.assertFalse((self.source / ".git").exists())
-        self.assertFalse((vendor / ".git").exists())
+    def test_packages_use_locked_git_dependency_without_vendor_source(self):
+        for package in ("bas", "basg"):
+            with self.subTest(package=package):
+                source = Path(run("nix", "eval", "--raw", f"{self.source}#{package}.src"))
+                self.assertFalse((source / ".git").exists())
+                self.assertFalse((source / "vendor").exists())
+                manifest = tomllib.loads((source / "Cargo.toml").read_text())
+                dependency = manifest["dependencies"]["gds-uim"]
+                self.assertEqual(dependency["git"], "https://github.com/4t145/gds-uim.git")
+                self.assertTrue(dependency["optional"])
+                self.assertNotIn("path", dependency)
+                revision = dependency["rev"]
+                self.assertRegex(revision, r"^[0-9a-f]{40}$")
+                lock = tomllib.loads((source / "Cargo.lock").read_text())
+                macros = {
+                    entry["name"]: entry for entry in lock["package"]
+                    if entry["name"] in ("gds-uim", "gds-uim-macros")
+                }
+                self.assertEqual(set(macros), {"gds-uim", "gds-uim-macros"})
+                for entry in macros.values():
+                    self.assertEqual(
+                        entry["source"],
+                        f"git+{dependency['git']}?rev={revision}#{revision}",
+                    )
+                self.assertEqual(macros["gds-uim"]["dependencies"], ["gds-uim-macros"])
+                # Force package evaluation, including the locked Git output hash.
+                self.assertTrue(
+                    run("nix", "eval", "--raw", f"{self.source}#{package}.drvPath")
+                    .endswith(".drv")
+                )
 
     def test_snapshot_filter(self):
         # Only synthetic placeholders are read here, never a user's .env.
@@ -87,23 +106,20 @@ class NixSourceTests(unittest.TestCase):
                 "src/untracked.rs",
                 "src/service/target/tests.rs",
                 "acp-test-agent/Cargo.toml",
-                "vendor/gds-uim/Cargo.toml",
-                "vendor/gds-uim/src/lib.rs",
-                "vendor/gds-uim/src/target/tests.rs",
-                ".gitmodules",
+                "acp-test-agent/src/lib.rs",
+                "acp-test-agent/src/target/tests.rs",
                 ".envrc",
             ]
             excluded = [
                 ".git/config",
-                "vendor/gds-uim/.git",
+                "acp-test-agent/.git",
                 ".delta/worktrees/clone/src/lib.rs",
                 ".direnv/cache",
                 ".env",
                 ".env.private",
-                "vendor/gds-uim/.env.private",
+                "acp-test-agent/.env.private",
                 "target/output",
                 "acp-test-agent/target/output",
-                "vendor/gds-uim/target/output",
                 "node_modules/package/index.js",
                 "result/output",
                 "__pycache__/module.pyc",

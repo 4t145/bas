@@ -1,5 +1,5 @@
 use super::*;
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::{menu::PopupMenuItem, switch::Switch};
 use gpui_kit::{Bounds, canvas, component::badge::Badge};
 use std::{cell::Cell, rc::Rc};
 
@@ -44,27 +44,27 @@ impl Workspace {
         let metadata = self.backend.metadata.clone();
         let server = self.backend.server.clone();
         let parent = self.window.handle;
-        let icon = gds_uim::el! {
-            $self.agent_icon("agent-picker-icon", &selected, cx) {
+        let icon = el! {
+            $(self.agent_icon("agent-picker-icon", &selected, cx)) {
                 size: TOOLBAR_AGENT_ICON_SIZE.px;
-                text_color: $(if disabled {
-                    cx.theme().muted_foreground
-                } else {
-                    cx.theme().foreground
-                });
+                text_color: @if (disabled) $cx.theme().muted_foreground @else $cx.theme().foreground @end;
             }
         };
-        let button = gds_uim::el! { Button("agent-picker") {
+        let button = el! { "agent-picker".Button::new {
             ghost; xsmall; h: layout::ICON_BUTTON_SIZE.px; p_0;
-            @$!self.selected.waiting_for_agent_selection => { w: layout::ICON_BUTTON_SIZE.px; };
+            @if (!self.selected.waiting_for_agent_selection)
+                w: layout::ICON_BUTTON_SIZE.px;
+            @end;
             flex_shrink_0; disabled: disabled;
-            accessibility_label: $(if selected.is_empty() {
-                hint.to_owned()
-            } else {
-                crate::i18n::tr!("agent-current", agent = selected.as_str())
-            });
-            @$self.selected.waiting_for_agent_selection => { label: $crate::i18n::tr!("agent-choose"); };
-        } [$icon] };
+            accessibility_label: @if (selected.is_empty())
+                $hint.to_owned()
+            @else
+                tr!("agent-current", agent = selected.as_str())
+            @end;
+            @if (self.selected.waiting_for_agent_selection)
+                label: tr!("agent-choose");
+            @end;
+        } [icon] };
         let menu = if disabled {
             button.into_any_element()
         } else {
@@ -86,16 +86,16 @@ impl Workspace {
                                     .as_ref()
                                     .and_then(|metadata| metadata.read(cx).icon(&server, &label))
                                     .unwrap_or_default();
-                                gds_uim::el! {
-                                    #div {
-                                        id: $format!("agent-menu-label-{label}");
+                                el! {
+                                    .div {
+                                        # format!("agent-menu-label-{label}");
                                         test_support; role: gpui_kit::Role::Label;
-                                        aria_label: $label.clone(); flex; flex_1; min_w_0; items_center; gap_2;
+                                        aria_label: ~label; flex; flex_1; min_w_0; items_center; gap_2;
                                     } [
-                                        crate::agents::icon::AgentIcon($format!("agent-menu-icon-{label}"), artwork) {
+                                        (format!("agent-menu-icon-{label}"), artwork).AgentIcon::new {
                                             size: AGENT_ICON_SIZE.px;
                                         },
-                                        #div { flex_1; truncate; } [$label.clone()],
+                                        .div { flex_1; truncate; } [~label],
                                     ]
                                 }
                             })
@@ -113,13 +113,13 @@ impl Workspace {
                     menu.separator()
                     .item(
                         PopupMenuItem::element(|_, _| {
-                            gds_uim::el! { #div {
-                                id: "agent-menu-install-label"; test_support; role: gpui_kit::Role::Label;
-                                aria_label: $crate::i18n::tr!("agent-install-action");
+                            el! { .div {
+                                # "agent-menu-install-label"; test_support; role: gpui_kit::Role::Label;
+                                aria_label: tr!("agent-install-action");
                                 flex; flex_1; items_center; gap_2;
                             } [
-                                Icon(IconName::Plus) { size: AGENT_ICON_SIZE.px; },
-                                $crate::i18n::tr!("agent-install-action"),
+                                IconName::Plus.Icon::new { size: AGENT_ICON_SIZE.px; },
+                                tr!("agent-install-action"),
                             ] }
                         })
                         .on_click(move |_, window, cx| {
@@ -140,25 +140,25 @@ impl Workspace {
             .reply_preview
             .as_ref()
             .is_some_and(|preview| preview.key == reply::PreviewKey::Activity);
-        gds_uim::el! { #div {
-            id: "agent-picker-hint"; test_support; relative; flex; flex_shrink_0;
+        el! { .div {
+            # "agent-picker-hint"; test_support; relative; flex; flex_shrink_0;
             on_hover: $cx.listener(move |this, hovered: &bool, window, cx| {
                 this.hover_activity(*hovered, bounds.get(), window, cx);
             });
             on_mouse_down: gpui_kit::MouseButton::Left, $cx.listener(|this, _, window, cx| {
                 this.close_reply_preview(window, cx);
             });
-            @$running > 0 => {
+            @if (running > 0)
                 pr_3;
                 role: gpui_kit::Role::Status;
-                aria_label: $crate::i18n::tr!("agent-activity-count", count = running);
-            };
-            @$running == 0 && !activity_open => {
-                hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(hint.clone(), window, cx);
-            };
+                aria_label: tr!("agent-activity-count", count = running);
+            @end;
+            @if (running == 0 && !activity_open)
+                hoverable_tooltip: move (window, cx) => (~hint, window, cx).ui::tooltip::view;
+            @end;
         } [
-            Badge { count: running; small; max: 99; color: $cx.theme().primary; } [$menu],
-            #canvas($move |bounds, _, _| measured.set(bounds), $|_, _, _, _| {}) { absolute; size_full; },
+            .Badge::new { count: running; small; max: 99; color: $cx.theme().primary; } [menu],
+            (move (bounds, _, _) => $measured.set(bounds), $|_, _, _, _| {}).canvas { absolute; size_full; },
         ] }
     }
 }
@@ -182,14 +182,14 @@ impl Workspace {
 
     pub(super) fn render_config_options(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use bas::acp;
-        let mut row = gds_uim::el! { #div {
-            id: "session-options"; flex; items_center; w_full; min_w_0; gap_1; overflow_x_scroll;
-        } [#div { flex_1; }] };
+        let mut row = el! { .div {
+            # "session-options"; flex; items_center; w_full; min_w_0; gap_1; overflow_x_scroll;
+        } [.div { flex_1; }] };
         if self.selected.creating {
-            return gds_uim::el! { $row [
-                Button("options-loading") {
+            return el! { row [
+                "options-loading".Button::new {
                     ghost; xsmall; cursor_default; icon: IconName::Loader;
-                    tooltip: $crate::i18n::tr!("agent-initializing");
+                    tooltip: tr!("agent-initializing");
                 }
             ] };
         }
@@ -232,16 +232,16 @@ impl Workspace {
                     let control = crate::ui::tooltip::bounded(
                         SharedString::from(format!("config-hint-{}", option.id)),
                         self.menu_button(
-                            gds_uim::el! { Button(id) {
+                            el! { id.Button::new {
                                 flex_shrink_0;
                                 disabled: $self.sessions.pending.configuring.contains(&session);
-                                accessibility_label: $name.clone();
+                                accessibility_label: ~name;
                                 ghost; xsmall; max_w: 130.0.px; icon: IconName::ChevronDown;
-                            } [#div {
-                                id: $SharedString::from(format!("config-label-{}", option.id));
+                            } [.div {
+                                # format!("config-label-{}", option.id).SharedString::from;
                                 test_support; min_w_0; whitespace_nowrap; text_ellipsis;
-                                line_height: $gpui_kit::relative(1.); text_size: $crate::ui::SMALL;
-                            } [$name]] },
+                                line_height: 1.0.gpui_kit::relative; text_size: ui::SMALL;
+                            } [name]] },
                             choices.len(),
                             self.sessions.pending.configuring.contains(&session),
                             move |mut menu, _, _| {
@@ -268,25 +268,27 @@ impl Workspace {
                         ),
                         hint,
                     );
-                    row = gds_uim::el! { $row [$control] };
+                    row = el! { row [control] };
                 }
                 acp::SessionConfigKind::Boolean(boolean) => {
                     let hint = config_option_hint(option);
-                    let label = gds_uim::el! { #div {
-                        id: $SharedString::from(format!("config-label-{}", option.id));
-                        test_support; text_size: $crate::ui::SMALL;
-                        text_color: $(if self.sessions.pending.configuring.contains(&session) {
-                            cx.theme().muted_foreground
-                        } else {
-                            cx.theme().foreground
-                        });
-                    } [$option.name.clone()] };
-                    let switch = gds_uim::el! {
-                        gpui_kit::component::switch::Switch(id) {
+                    let label = el! { .div {
+                        # format!("config-label-{}", option.id).SharedString::from;
+                        test_support; text_size: ui::SMALL;
+                        text_color: @if (self.sessions.pending.configuring.contains(&session))
+                            $cx.theme().muted_foreground
+                        @else
+                            $cx.theme().foreground
+                        @end;
+                    } [~$(option.name)] };
+                    let switch = el! {
+                        id.Switch::new {
                             flex_shrink_0; checked: $boolean.current_value;
                             disabled: $self.sessions.pending.configuring.contains(&session);
-                            @$!self.sessions.pending.configuring.contains(&session) => { cursor_pointer; };
-                            xsmall; accessibility_label: $option.name.clone();
+                            @if (!self.sessions.pending.configuring.contains(&session))
+                                cursor_pointer;
+                            @end;
+                            xsmall; accessibility_label: ~$(option.name);
                             on_change: $move |checked, window, cx| {
                                 let request = acp::SetSessionConfigOptionRequest::new(
                                     session.to_string(), config_id.clone(), *checked,
@@ -297,14 +299,12 @@ impl Workspace {
                             };
                         }
                     };
-                    row = gds_uim::el! { $row [
-                        #div {
-                            id: $SharedString::from(format!("config-field-{}", option.id));
+                    row = el! { row [
+                        .div {
+                            # format!("config-field-{}", option.id).SharedString::from;
                             test_support; flex_shrink_0; flex; items_center; gap_2; px_1;
-                            hoverable_tooltip: $move |window, cx| {
-                                crate::ui::tooltip::view(hint.clone(), window, cx)
-                            };
-                        } [$label, $switch]
+                            hoverable_tooltip: move (window, cx) => (~hint, window, cx).ui::tooltip::view;
+                        } [label, switch]
                     ] };
                 }
                 _ => {}

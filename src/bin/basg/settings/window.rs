@@ -12,7 +12,7 @@ use gpui_kit::{
 };
 
 use crate::ui::window_controls::TitleBar;
-use crate::{settings::Settings, theme};
+use crate::{i18n::tr, settings::Settings, theme};
 
 const WIDTH: f32 = 960.;
 const HEIGHT: f32 = 720.;
@@ -201,19 +201,19 @@ impl Render for Host {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title(crate::i18n::tr!("settings-window-title"));
         el! {
-            #div {
-                id: "settings-window";
+            .div {
+                # "settings-window";
                 test_support;
                 key_context: "BasSettings";
                 size_full; flex; flex_col;
                 bg: $cx.theme().background;
                 text_color: $cx.theme().foreground;
-                on_action: $cx.listener(Self::on_close_action);
+                on_action: (cx, Self::on_close_action).Context::listener;
             } [
-                TitleBar {
-                    on_close_window: $cx.listener(Self::on_close_click);
-                } [$crate::i18n::tr!("settings-window-title")],
-                #div { flex_1; min_h_0; } [$self.settings.clone()],
+                .TitleBar::new {
+                    on_close_window: (cx, Self::on_close_click).Context::listener;
+                } [tr!("settings-window-title")],
+                .div { flex_1; min_h_0; } [~$(self.settings)],
             ]
         }
     }

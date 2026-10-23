@@ -1,7 +1,10 @@
 //! First-party native titlebars share the workspace's compact button scale.
 
+use super::{Button, COMPACT_CONTROL, SMALL, SMALL_ICON};
+use crate::i18n::tr;
 use std::{cell::Cell, rc::Rc};
 
+use gds_uim::el;
 use gpui_kit::{
     AnyElement, App, ClickEvent, Decorations, IntoElement, MouseButton, ParentElement, RenderOnce,
     SharedString, Styled, TestSupportExt, Window, WindowControlArea, WindowOptions,
@@ -52,96 +55,86 @@ fn control(
     icon: IconName,
     hint: SharedString,
     area: WindowControlArea,
-) -> super::Button {
-    super::Button::new(id)
-        .ghost()
-        .xsmall()
-        .w(px(super::COMPACT_CONTROL))
-        .h(px(super::COMPACT_CONTROL))
-        .p_0()
-        .flex_shrink_0()
-        .child(
-            div()
-                .id(gpui_kit::SharedString::from(format!("{id}-icon")))
-                .test_support()
-                .flex()
-                .child(Icon::new(icon).with_size(px(super::SMALL_ICON))),
-        )
-        .accessibility_label(hint.clone())
-        .tooltip(hint)
-        .when(cfg!(target_os = "windows"), |button| {
-            button.window_control_area(area)
-        })
-        .on_mouse_down(MouseButton::Left, |_, window, cx| {
-            window.prevent_default();
-            cx.stop_propagation();
-        })
+) -> Button {
+    el! {
+        id.Button::new {
+            ghost; xsmall; w: COMPACT_CONTROL.px; h: COMPACT_CONTROL.px;
+            p_0; flex_shrink_0;
+        } [
+            .div {
+                # format!("{id}-icon").SharedString::from; test_support; flex;
+            } [icon.Icon::new { with_size: SMALL_ICON.px; }],
+        ] {
+            accessibility_label: ~hint; tooltip: hint;
+            when: cfg!(target_os = "windows"), { window_control_area: area };
+            on_mouse_down: MouseButton::Left, $|_, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+            };
+        }
+    }
 }
 
 impl RenderOnce for WindowControls {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let mut controls = div()
-            .id("window-controls")
-            .flex()
-            .items_center()
-            .gap_1()
-            .flex_shrink_0();
+        let controls = el! {
+            .div { # "window-controls"; flex; items_center; gap_1; flex_shrink_0; }
+        };
         if cfg!(target_os = "macos") || cfg!(target_family = "wasm") {
             return controls;
         }
         let supported = window.window_controls();
-        if supported.minimize {
-            controls = controls.child(
-                control(
-                    "window-minimize",
-                    IconName::WindowMinimize,
-                    crate::i18n::tr!("window-minimize").into(),
-                    WindowControlArea::Min,
-                )
-                .on_click(|_, window, cx| {
-                    cx.stop_propagation();
-                    window.minimize_window();
-                }),
-            );
-        }
-        if supported.maximize {
-            let (icon, hint) = if window.is_maximized() {
-                (IconName::WindowRestore, crate::i18n::tr!("window-restore"))
+        let maximize = supported.maximize.then(|| {
+            if window.is_maximized() {
+                (IconName::WindowRestore, tr!("window-restore"))
             } else {
+                (IconName::WindowMaximize, tr!("window-maximize"))
+            }
+        });
+        el! {
+            controls [
+                @if (supported.minimize)
+                    (
+                        "window-minimize",
+                        IconName::WindowMinimize,
+                        tr!("window-minimize") { into },
+                        WindowControlArea::Min,
+                    ).control {
+                        on_click: $|_, window, cx| {
+                            cx.stop_propagation();
+                            window.minimize_window();
+                        };
+                    },
+                @end,
+                @if (let Some((icon, hint)) = maximize)
+                    ("window-maximize", icon, hint { into }, WindowControlArea::Max).control {
+                        on_click: $move |event, window, cx| {
+                            cx.stop_propagation();
+                            if let Some(handler) = &self.maximize {
+                                handler(event, window, cx);
+                            } else {
+                                window.zoom_window();
+                            }
+                        };
+                    },
+                @end,
                 (
-                    IconName::WindowMaximize,
-                    crate::i18n::tr!("window-maximize"),
-                )
-            };
-            controls = controls.child(
-                control("window-maximize", icon, hint.into(), WindowControlArea::Max).on_click(
-                    move |event, window, cx| {
+                    "window-close",
+                    IconName::WindowClose,
+                    tr!("window-close") { into },
+                    WindowControlArea::Close,
+                ).control {
+                    on_click: $move |event, window, cx| {
                         cx.stop_propagation();
-                        if let Some(handler) = &self.maximize {
+                        if let Some(handler) = &self.close {
                             handler(event, window, cx);
                         } else {
-                            window.zoom_window();
+                            window.remove_window();
                         }
-                    },
-                ),
-            );
+                    };
+                },
+            ]
         }
-        controls.child(
-            control(
-                "window-close",
-                IconName::WindowClose,
-                crate::i18n::tr!("window-close").into(),
-                WindowControlArea::Close,
-            )
-            .on_click(move |event, window, cx| {
-                cx.stop_propagation();
-                if let Some(handler) = &self.close {
-                    handler(event, window, cx);
-                } else {
-                    window.remove_window();
-                }
-            }),
-        )
     }
 }
 
@@ -187,52 +180,43 @@ impl RenderOnce for TitleBar {
         let down = dragging.clone();
         let up = dragging.clone();
         let outside = dragging.clone();
-        let mut title = div()
-            .id("title-bar-content")
-            .flex()
-            .items_center()
-            .flex_1()
-            .h_full()
-            .text_size(super::SMALL)
-            .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, move |_, _, _| down.set(true))
-            .on_mouse_up(MouseButton::Left, move |_, _, _| up.set(false))
-            .on_mouse_down_out(move |_, _, _| outside.set(false))
-            .on_mouse_move(move |_, window, _| {
-                if dragging.replace(false) {
-                    window.start_window_move();
-                }
-            })
-            .on_double_click(|_, window, _| {
-                if cfg!(target_os = "macos") {
-                    window.titlebar_double_click();
-                } else if cfg!(target_os = "linux") {
-                    window.zoom_window();
-                }
-            });
-        if cfg!(target_os = "linux")
-            && matches!(window.window_decorations(), Decorations::Client { .. })
-        {
-            title = title.on_mouse_down(MouseButton::Right, |event, window, _| {
-                window.show_window_menu(event.position)
-            });
+        let title = el! {
+            .div {
+                # "title-bar-content"; flex; items_center; flex_1; h_full;
+                text_size: SMALL; window_control_area: WindowControlArea::Drag;
+                on_mouse_down: MouseButton::Left, $move |_, _, _| down.set(true);
+                on_mouse_up: MouseButton::Left, $move |_, _, _| up.set(false);
+                on_mouse_down_out: $move |_, _, _| outside.set(false);
+                on_mouse_move: $move |_, window, _| {
+                    if dragging.replace(false) {
+                        window.start_window_move();
+                    }
+                };
+                on_double_click: $|_, window, _| {
+                    if cfg!(target_os = "macos") {
+                        window.titlebar_double_click();
+                    } else if cfg!(target_os = "linux") {
+                        window.zoom_window();
+                    }
+                };
+                @if (cfg!(target_os = "linux")
+                    && matches!(window.window_decorations(), Decorations::Client { .. }))
+                    on_mouse_down: MouseButton::Right, $|event, window, _| {
+                        window.show_window_menu(event.position)
+                    };
+                @end;
+            }
+        };
+        el! {
+            .div {
+                # "title-bar"; flex; items_center; gap_1; h: HEIGHT.px; flex_shrink_0; px_3;
+                when: $cfg!(target_os = "macos") && !window.is_fullscreen(),
+                    { pl: MACOS_CONTROLS_WIDTH.px };
+                bg: $cx.theme().title_bar; border_b_1; border_color: $cx.theme().title_bar_border;
+            } [
+                title [..$self.children],
+                $self.controls,
+            ]
         }
-        div()
-            .id("title-bar")
-            .flex()
-            .items_center()
-            .gap_1()
-            .h(px(HEIGHT))
-            .flex_shrink_0()
-            .px_3()
-            .when(
-                cfg!(target_os = "macos") && !window.is_fullscreen(),
-                |bar| bar.pl(px(MACOS_CONTROLS_WIDTH)),
-            )
-            .bg(cx.theme().title_bar)
-            .border_b_1()
-            .border_color(cx.theme().title_bar_border)
-            .child(title.children(self.children))
-            .child(self.controls)
     }
 }

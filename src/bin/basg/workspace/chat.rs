@@ -13,7 +13,7 @@ const INITIALIZATION_MESSAGES_MAX_HEIGHT: f32 = 160.;
 const APPROVAL_PANEL_HEIGHT: f32 = 240.;
 
 pub(super) fn content_panel() -> Div {
-    gds_uim::el! { #div { w_full; min_w_0; max_w: $px(CONTENT_WIDTH); mx_auto; } }
+    el! { .div { w_full; min_w_0; max_w: CONTENT_WIDTH.px; mx_auto; } }
 }
 
 impl Workspace {
@@ -23,7 +23,7 @@ impl Workspace {
                 conversation.foreground_state,
                 Some(bas::acp_v2::StateUpdate::RequiresAction(_))
             ) {
-                return crate::i18n::tr!("status-agent-confirming").into();
+                return tr!("status-agent-confirming").into();
             }
             for item in conversation.items.iter().rev() {
                 match item {
@@ -31,13 +31,13 @@ impl Workspace {
                         message,
                         streaming: true,
                     } if message.role == Role::Thought => {
-                        return crate::i18n::tr!("status-thinking").into();
+                        return tr!("status-thinking").into();
                     }
                     Item::Message {
                         message,
                         streaming: true,
                     } if message.role == Role::Agent => {
-                        return crate::i18n::tr!("status-responding").into();
+                        return tr!("status-responding").into();
                     }
                     Item::Tool(tool)
                         if matches!(
@@ -45,83 +45,89 @@ impl Workspace {
                             ToolCallStatus::Pending | ToolCallStatus::InProgress
                         ) =>
                     {
-                        return crate::i18n::tr!("status-tool", tool = (tool.title).to_string());
+                        return tr!("status-tool", tool = (tool.title).to_string());
                     }
                     _ => {}
                 }
             }
         }
-        crate::i18n::tr!("status-thinking").into()
+        tr!("status-thinking").into()
     }
 
     pub(super) fn render_chat(&self, cx: &mut Context<Self>) -> AnyElement {
-        gds_uim::el! {
-            #div {
-                id: "thread-body";
+        el! {
+            .div {
+                # "thread-body";
                 test_support;
                 flex;
                 flex_col;
                 flex_1;
                 min_h_0;
                 w_full;
-                @$(!self.window.compact) => {
-                    pl: $px(THREAD_BODY_PADDING);
-                    pr: $px(turn_navigation::RAIL_WIDTH + THREAD_BODY_PADDING);
-                };
+                @if (!self.window.compact)
+                    pl: THREAD_BODY_PADDING.px;
+                    pr: $(turn_navigation::RAIL_WIDTH + THREAD_BODY_PADDING).px;
+                @end;
             } [
                 ..$self.render_notices(cx),
-                ..$((!self.composer_fills_thread()).then(|| self.render_timeline(cx))),
-                ..$self.composer_fills_thread().then(|| self.render_initialization_messages(cx)).flatten(),
-                #content_panel() {
-                    id: "thread-composition"; test_support;
+                @if (!self.composer_fills_thread())
+                    $self.render_timeline(cx),
+                @end,
+                @if (self.composer_fills_thread())
+                    ..$self.render_initialization_messages(cx),
+                @end,
+                .content_panel {
+                    # "thread-composition"; test_support;
                     flex; flex_col; flex_shrink_0;
-                    @$self.composer_fills_thread() => { flex_1; min_h_0; };
-                    @$self.window.compact => { px: $px(COMPOSER_SIDE_PADDING); };
+                    @if (self.composer_fills_thread()) flex_1; min_h_0; @end;
+                    @if (self.window.compact) px: COMPOSER_SIDE_PADDING.px; @end;
                 } [
-                    #div {
+                    .div {
                         w_full;
-                        id: "conversation-status";
+                        # "conversation-status";
                         test_support;
                         flex;
                         items_center;
                         gap_2;
-                        pl: $px(COMPOSER_CONTROL_INSET);
+                        pl: COMPOSER_CONTROL_INSET.px;
                         py_1;
                     } [
                         $self.agent_button(cx),
                         ..$self.render_plan_indicator(cx),
                         $self.session_indicator("conversation-connection", cx),
-                        ..$self.activity_label().map(|label| gds_uim::el! {
-                            $caption(label, cx) { flex_1; min_w_0; truncate; }
-                        }),
-                        #div { flex_1; },
-                        ..$((self.selected.id.is_some() && !self.composer_fills_thread())
-                            .then(|| self.render_conversation_navigation(cx))),
+                        @if (let Some(label) = self.activity_label())
+                            (label, cx).caption { flex_1; min_w_0; truncate; },
+                        @end,
+                        .div { flex_1; },
+                        @if (self.selected.id.is_some() && !self.composer_fills_thread())
+                            $self.render_conversation_navigation(cx),
+                        @end,
                     ],
                     $self.render_composer(cx),
                 ],
             ]
-        }.into_any_element()
+        }
+        .into_any_element()
     }
 
     pub(super) fn render_conversation_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
-        gds_uim::el! {
-            #div {
-                id: "conversation-navigation";
+        el! {
+            .div {
+                # "conversation-navigation";
                 test_support;
                 flex;
                 items_center;
                 gap_1;
             } [
-                $message_actions::action_button("scroll-to-top", IconName::ArrowUp, cx) {
-                    accessibility_label: $crate::i18n::tr!("conversation-top");
-                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("conversation-top"), shortcuts::ScrollConversationToTop);
-                    on_click: $cx.listener(Self::on_chat_top);
+                ("scroll-to-top", IconName::ArrowUp, cx).message_actions::action_button {
+                    accessibility_label: tr!("conversation-top");
+                    hoverable_tooltip: $shortcuts::tooltip(tr!("conversation-top"), shortcuts::ScrollConversationToTop);
+                    on_click: (cx, Self::on_chat_top).Context::listener;
                 },
-                $message_actions::action_button("scroll-to-bottom", IconName::ArrowDown, cx) {
-                    accessibility_label: $crate::i18n::tr!("conversation-latest");
-                    hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("conversation-latest"), ScrollConversationToEnd);
-                    on_click: $cx.listener(Self::on_chat_bottom);
+                ("scroll-to-bottom", IconName::ArrowDown, cx).message_actions::action_button {
+                    accessibility_label: tr!("conversation-latest");
+                    hoverable_tooltip: $shortcuts::tooltip(tr!("conversation-latest"), ScrollConversationToEnd);
+                    on_click: (cx, Self::on_chat_bottom).Context::listener;
                 },
             ]
         }
@@ -144,17 +150,17 @@ impl Workspace {
             .as_ref()
             .filter(|state| !state.rows.is_empty())?;
         Some(
-            gds_uim::el! {
-                #content_panel() {
-                    id: "agent-initialization-messages";
+            el! {
+                .content_panel {
+                    # "agent-initialization-messages";
                     test_support;
                     flex_shrink_0;
-                    max_h: $px(INITIALIZATION_MESSAGES_MAX_HEIGHT);
+                    max_h: INITIALIZATION_MESSAGES_MAX_HEIGHT.px;
                     overflow_y_scroll;
                     border_b_1;
                     border_color: $cx.theme().border;
                 } [
-                    $caption(crate::i18n::tr!("conversation-startup"), cx) { px_3; pt_2; },
+                    (tr!("conversation-startup"), cx).caption { px_3; pt_2; },
                     ..$((0..conversation.rows.len()).map(|index| self.render_item(index, cx))),
                 ]
             }
@@ -174,9 +180,9 @@ impl Workspace {
             .conversation
             .as_ref()
             .is_none_or(|conversation| conversation.items.is_empty());
-        gds_uim::el! {
-            #div {
-                id: "conversation-timeline";
+        el! {
+            .div {
+                # "conversation-timeline";
                 test_support;
                 flex;
                 flex_col;
@@ -184,51 +190,55 @@ impl Workspace {
                 min_h_0;
                 size_full;
             } [
-                ..$awaiting_history.then(|| self.render_history_transition(cx)),
-                ..$((empty && !awaiting_history && self.selected.authentication.panel.is_none()).then(|| self.render_empty_timeline(cx))),
-                ..$((!empty).then(|| self.render_timeline_list(cx))),
-                ..$((!self.selected.approval.panel.is_empty()).then(|| self.render_timeline_approval(cx))),
+                @if (awaiting_history)
+                    $self.render_history_transition(cx),
+                @end,
+                @if (empty && !awaiting_history && self.selected.authentication.panel.is_none())
+                    $self.render_empty_timeline(cx),
+                @end,
+                @if (!empty)
+                    $self.render_timeline_list(cx),
+                @end,
+                @if (!self.selected.approval.panel.is_empty())
+                    $self.render_timeline_approval(cx),
+                @end,
                 ..$self.render_queue_panel(cx),
-                ..$self.selected.authentication.panel.as_ref().map(|panel| {
-                    gds_uim::el! {
-                        #content_panel() {
-                            id: "thread-authentication";
-                            test_support;
-                            p_4; my_3; flex_shrink_0; min_w_0;
-                            @empty => { my_auto; };
-                            border_1; rounded_md; border_color: $cx.theme().border;
-                            bg: $cx.theme().muted.opacity(0.2);
-                            max_h: $px(360.);
-                            overflow_y_scroll;
-                        } [$panel.entity.clone()]
-                    }
-                }),
-                ..$((!self.selected.elicitations.is_empty()).then(|| {
-                    gds_uim::el! {
-                        #div {
-                            id: "thread-elicitations";
-                            test_support;
-                            @$self.window.compact => { px_3; };
-                            py_2;
-                            max_h: $px(360.);
-                            overflow_y_scroll;
-                        } [
-                            $content_panel() [
-                                ..$self.selected.elicitations.values().map(|panel| panel.entity.clone())
-                            ],
-                        ]
-                    }
-                })),
+                @if (let Some(panel) = self.selected.authentication.panel.as_ref())
+                    .content_panel {
+                        # "thread-authentication";
+                        test_support;
+                        p_4; my_3; flex_shrink_0; min_w_0;
+                        @if (empty) my_auto; @end;
+                        border_1; rounded_md; border_color: $cx.theme().border;
+                        bg: $cx.theme().muted.opacity(0.2);
+                        max_h: 360.0.px;
+                        overflow_y_scroll;
+                    } [~$(panel.entity)],
+                @end,
+                @if (!self.selected.elicitations.is_empty())
+                    .div {
+                        # "thread-elicitations";
+                        test_support;
+                        @if (self.window.compact) px_3; @end;
+                        py_2;
+                        max_h: 360.0.px;
+                        overflow_y_scroll;
+                    } [
+                        .content_panel [
+                            ..$(self.selected.elicitations.values()) { map: panel => ~$(panel.entity) },
+                        ],
+                    ],
+                @end,
             ]
         }.into_any_element()
     }
 
     fn render_history_transition(&self, cx: &mut Context<Self>) -> AnyElement {
         let (label, loading) = match &self.selected.stream {
-            StreamState::Loading | StreamState::Live => (crate::i18n::tr!("status-loading"), true),
-            StreamState::Reconnecting(_) => (crate::i18n::tr!("status-reconnecting"), true),
-            StreamState::Unavailable(_) => (crate::i18n::tr!("status-session-unavailable"), false),
-            StreamState::Closed => (crate::i18n::tr!("status-session-ended"), false),
+            StreamState::Loading | StreamState::Live => (tr!("status-loading"), true),
+            StreamState::Reconnecting(_) => (tr!("status-reconnecting"), true),
+            StreamState::Unavailable(_) => (tr!("status-session-unavailable"), false),
+            StreamState::Closed => (tr!("status-session-ended"), false),
         };
         let failure = match &self.selected.stream {
             StreamState::Unavailable(error) | StreamState::Reconnecting(error) => {
@@ -237,42 +247,42 @@ impl Workspace {
             _ => None,
         };
         let retry = !loading && self.selected.id.is_some();
-        gds_uim::el! { #content_panel() {
-            id: "conversation-history-transition"; test_support;
+        el! { .content_panel {
+            # "conversation-history-transition"; test_support;
             role: gpui_kit::Role::Status; aria_label: label;
             flex_1; min_h_0; flex; flex_col; items_center; justify_center; gap_3; p_5;
-            text_size: crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+            text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
         } [
-            ..$loading.then(|| status::activity_icon(
-                "conversation-history-loading", IconName::LoaderCircle, cx.theme().muted_foreground, true
-            )),
-            $label,
-            ..$failure.map(|message| crate::ui::feedback(
-                "history-load-error", message, cx.theme().danger
-            )),
-            ..$retry.then(|| gds_uim::el! {
-                #crate::ui::action_button("history-load-retry") {
+            @if (loading)
+                ("conversation-history-loading", IconName::LoaderCircle, $cx.theme().muted_foreground, true).status::activity_icon,
+            @end,
+            label,
+            @if (let Some(message) = failure)
+                ("history-load-error", message, $cx.theme().danger).ui::feedback,
+            @end,
+            @if (retry)
+                "history-load-retry".ui::action_button {
                     label: $self.history_retry_label();
                     disabled: $self.history_retry_disabled();
                     on_click: $cx.listener(|this, _, _, cx| this.retry_history(cx));
-                }
-            }),
+                },
+            @end,
         ] }.into_any_element()
     }
 
     fn render_empty_timeline(&self, cx: &mut Context<Self>) -> AnyElement {
         let label = if self.selected.creating {
-            crate::i18n::tr!("status-creating")
+            tr!("status-creating")
         } else if self.selected.waiting_for_agent_selection {
-            crate::i18n::tr!("conversation-choose-agent")
+            tr!("conversation-choose-agent")
         } else if self.selected.id.is_some() || self.window.compact {
-            crate::i18n::tr!("conversation-empty")
+            tr!("conversation-empty")
         } else {
-            crate::i18n::tr!("conversation-start")
+            tr!("conversation-start")
         };
-        gds_uim::el! {
-            #div {
-                id: "empty-conversation-message"; test_support;
+        el! {
+            .div {
+                # "empty-conversation-message"; test_support;
                 w_full;
                 flex_1;
                 min_h_0;
@@ -283,10 +293,10 @@ impl Workspace {
                 gap_2;
                 p_5;
             } [
-                $caption(label, cx),
-                ..$((!self.window.compact && self.selected.id.is_none()).then(|| {
-                    caption(navigation::groups::path_label(self.navigation.selected_directory.as_deref()), cx)
-                })),
+                (label, cx).caption,
+                @if (!self.window.compact && self.selected.id.is_none())
+                    ($(navigation::groups::path_label(self.navigation.selected_directory.as_deref())), cx).caption,
+                @end,
             ]
         }
         .into_any_element()
@@ -294,27 +304,25 @@ impl Workspace {
 
     fn render_timeline_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let view = cx.entity();
-        gds_uim::el! {
-            #div {
+        el! {
+            .div {
                 relative; flex_1; min_h_0; w_full;
-                on_scroll_wheel: $cx.listener(Self::on_navigation_wheel);
+                on_scroll_wheel: (cx, Self::on_navigation_wheel).Context::listener;
             } [
-                $list(self.selected.timeline.list.clone(), move |index, _, cx| {
-                    view.update(cx, |this, cx| this.render_item(index, cx))
-                }) { size_full; },
-                #div {
+                (~$(self.selected.timeline.list), move (index, _, cx) => $view.update(cx, |this, cx| this.render_item(index, cx))).list { size_full; },
+                .div {
                     absolute; inset_0;
-                    @$self.window.compact => {
+                    @if (self.window.compact)
                         pl: THREAD_BODY_PADDING.px;
                         pr: $(turn_navigation::RAIL_WIDTH + THREAD_BODY_PADDING).px;
-                    };
+                    @end;
                 } [
-                    #content_panel() {
-                        id: "timeline-navigation-anchor"; test_support; relative; h_full;
+                    .content_panel {
+                        # "timeline-navigation-anchor"; test_support; relative; h_full;
                     } [$self.render_turn_navigation(cx)],
                 ],
-                #div {
-                    id: "timeline-scrollbar"; test_support;
+                .div {
+                    # "timeline-scrollbar"; test_support;
                     absolute; top_0; bottom_0; w: THREAD_BODY_PADDING.px;
                     right: $(if self.window.compact { 0. } else { -turn_navigation::RAIL_WIDTH - THREAD_BODY_PADDING }).px;
                 } [
@@ -332,17 +340,17 @@ impl Workspace {
     fn render_timeline_approval(&self, cx: &mut Context<Self>) -> AnyElement {
         let session = self.selected.id;
         let epoch = self.selected.epoch;
-        gds_uim::el! {
-            #div {
-                id: "approval-panel";
+        el! {
+            .div {
+                # "approval-panel";
                 test_support;
-                @$self.window.compact => { px_3; };
+                @if (self.window.compact) px_3; @end;
                 py_2;
                 flex_shrink_0;
-                max_h: $px(APPROVAL_PANEL_HEIGHT);
+                max_h: APPROVAL_PANEL_HEIGHT.px;
                 overflow_y_scroll;
             } [
-                $content_panel() [
+                .content_panel [
                     $self.selected.approval.panel.render(cx, move |this, request_id, outcome, _, cx| {
                         if let Some(session) = session {
                             this.respond_permission(session, epoch, request_id, outcome, cx);
@@ -355,35 +363,35 @@ impl Workspace {
 
     pub(super) fn stream_label(&self) -> String {
         if self.composer.paste_pending {
-            return crate::i18n::tr!("status-pasting").into();
+            return tr!("status-pasting").into();
         }
         if !self.selected.approval.panel.is_empty() {
-            return crate::i18n::tr!("status-approval").into();
+            return tr!("status-approval").into();
         }
         if self.selected.approval.error.is_some() {
-            return crate::i18n::tr!("status-approval-unavailable").into();
+            return tr!("status-approval-unavailable").into();
         }
         if !self.selected.elicitations.is_empty() {
-            return crate::i18n::tr!("status-input").into();
+            return tr!("status-input").into();
         }
         if !self.backend.connected {
             return if self.backend.error.is_some() {
-                crate::i18n::tr!("status-reconnecting").into()
+                tr!("status-reconnecting").into()
             } else {
-                crate::i18n::tr!("status-connecting").into()
+                tr!("status-connecting").into()
             };
         }
         if self.selected.id.is_none() {
             return if self.selected.creating {
-                crate::i18n::tr!("status-creating").into()
+                tr!("status-creating").into()
             } else if self.selected.waiting_for_agent_selection {
-                crate::i18n::tr!("status-select-agent").into()
+                tr!("status-select-agent").into()
             } else if self.selected.authentication.required.is_some() {
-                crate::i18n::tr!("status-auth").into()
+                tr!("status-auth").into()
             } else if self.backend.agents.is_empty() {
-                crate::i18n::tr!("status-no-agents").into()
+                tr!("status-no-agents").into()
             } else {
-                crate::i18n::tr!(
+                tr!(
                     "composer-shortcuts-custom",
                     send = self.composer_send_shortcut(),
                     newline = self.composer_newline_shortcut()
@@ -395,14 +403,14 @@ impl Workspace {
             .id
             .is_some_and(|id| !self.sessions.healthy(id))
         {
-            return crate::i18n::tr!("status-failed").into();
+            return tr!("status-failed").into();
         }
         if self
             .selected
             .id
             .is_some_and(|id| self.sessions.pending.configuring.contains(&id))
         {
-            return crate::i18n::tr!("status-applying").into();
+            return tr!("status-applying").into();
         }
         if self
             .selected
@@ -410,27 +418,27 @@ impl Workspace {
             .and_then(|id| self.sessions.outboxes.get(&id))
             .is_some_and(|outbox| outbox.unknown().is_some())
         {
-            return crate::i18n::tr!("status-submission-unknown").into();
+            return tr!("status-submission-unknown").into();
         }
         if self.selected.id.is_some_and(|id| self.sending(id)) {
-            return crate::i18n::tr!("status-sending").into();
+            return tr!("status-sending").into();
         }
         match &self.selected.stream {
-            StreamState::Loading => crate::i18n::tr!("status-loading").into(),
+            StreamState::Loading => tr!("status-loading").into(),
             StreamState::Live if self.working() => self.work_status(),
-            StreamState::Live => crate::i18n::tr!("status-synced").into(),
-            StreamState::Reconnecting(_) => crate::i18n::tr!("status-reconnecting").into(),
-            StreamState::Unavailable(_) => crate::i18n::tr!("status-session-unavailable").into(),
-            StreamState::Closed => crate::i18n::tr!("status-session-ended").into(),
+            StreamState::Live => tr!("status-synced").into(),
+            StreamState::Reconnecting(_) => tr!("status-reconnecting").into(),
+            StreamState::Unavailable(_) => tr!("status-session-unavailable").into(),
+            StreamState::Closed => tr!("status-session-ended").into(),
         }
     }
 
     fn render_item(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(conversation) = self.selected.timeline.conversation.as_ref() else {
-            return gds_uim::el! { #div }.into_any_element();
+            return el! { .div }.into_any_element();
         };
         let Some(row) = conversation.rows.get(index) else {
-            return gds_uim::el! { #div }.into_any_element();
+            return el! { .div }.into_any_element();
         };
         let items = &conversation.items[row.items.clone()];
         let item = &items[0];
@@ -446,19 +454,19 @@ impl Workspace {
             self.render_entry(item, index, cx)
         };
         let panel_id = SharedString::from(format!("message-content-{id}"));
-        gds_uim::el! {
-            #div {
-                id: $SharedString::from(id);
+        el! {
+            .div {
+                # id.SharedString::from;
                 test_support;
-                @$self.window.compact => {
-                    pl: $px(THREAD_BODY_PADDING);
-                    pr: $px(turn_navigation::RAIL_WIDTH + THREAD_BODY_PADDING);
-                };
+                @if (self.window.compact)
+                    pl: THREAD_BODY_PADDING.px;
+                    pr: $(turn_navigation::RAIL_WIDTH + THREAD_BODY_PADDING).px;
+                @end;
                 py_1; w_full; min_w_0;
                 text_size: $theme::content_font_size(cx);
             } [
-                $content_panel() { id: $panel_id; test_support; } [
-                    $content,
+                .content_panel { # panel_id; test_support; } [
+                    content,
                     ..$self.render_message_actions(
                             items
                                 .last()

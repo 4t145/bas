@@ -15,15 +15,15 @@ fn marker_tick(
     bookmarked: bool,
     cx: &App,
 ) -> AnyElement {
-    gds_uim::el! {
-        #div { size_full; flex; items_center; justify_center; } [
-            #div {
-                id: id; test_support; w: TICK_WIDTH.px;
-                h: $(if active { ACTIVE_TICK_HEIGHT } else { 2. }).px; rounded_full;
-                bg: $(if active || bookmarked { cx.theme().primary } else { cx.theme().muted_foreground.opacity(0.7) });
-                group_hover: group, $gds_uim::m! {
+    el! {
+        .div { size_full; flex; items_center; justify_center; } [
+            .div {
+                # id; test_support; w: TICK_WIDTH.px;
+                h: @if (active) ACTIVE_TICK_HEIGHT.px @else 2.0.px @end; rounded_full;
+                bg: @if (active || bookmarked) $cx.theme().primary @else $cx.theme().muted_foreground.opacity(0.7) @end;
+                group_hover: group, {
                     w: HOVER_TICK_WIDTH.px;
-                    h: $(if active { ACTIVE_TICK_HEIGHT } else { 3. }).px;
+                    h: @if (active) ACTIVE_TICK_HEIGHT.px @else 3.0.px @end;
                     bg: $cx.theme().primary;
                 };
             }
@@ -55,7 +55,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(session) = self.selected.id else {
-            return gds_uim::el! { #div }.into_any_element();
+            return el! { .div }.into_any_element();
         };
         let navigation = &self.selected.timeline.navigation;
         let active = self.active_marker();
@@ -68,8 +68,8 @@ impl Workspace {
                     .list
                     .is_scrolled_to_end()
                     .unwrap_or(false));
-        let mut markers = gds_uim::el! { #div {
-            id: $SharedString::from(format!("turn-prompts-{session}")); test_support;
+        let mut markers = el! { .div {
+            # format!("turn-prompts-{session}").SharedString::from; test_support;
             w_full; min_h_0; flex; flex_col; flex_shrink_1; overflow_y_scroll;
         } };
         let entries = navigation
@@ -106,68 +106,68 @@ impl Workspace {
                 bookmarked,
                 cx,
             );
-            let marker = gds_uim::el! { #div {
-                id: marker_id; test_support; role: gpui_kit::Role::Button;
-                aria_label: hint; group: group; h: $px(marker_height); min_h: 2.0.px;
+            let marker = el! { .div {
+                # marker_id; test_support; role: gpui_kit::Role::Button;
+                aria_label: hint; group: group; h: marker_height.px; min_h: 2.0.px;
                 flex_shrink_0; w_full; cursor_pointer;
                 hoverable_tooltip: $move |window, cx| {
                     let preview = preview.clone();
-                    let at = crate::ui::time::recent_time(at, Timestamp::now());
-                    let previous = shortcuts::hint(crate::i18n::tr!("turn-marker-previous"),
+                    let at = ui::time::recent_time(at, Timestamp::now());
+                    let previous = shortcuts::hint(tr!("turn-marker-previous"),
                         &shortcuts::PreviousConversationTurn, window);
-                    let next = shortcuts::hint(crate::i18n::tr!("turn-marker-next"),
+                    let next = shortcuts::hint(tr!("turn-marker-next"),
                         &shortcuts::NextConversationTurn, window);
                     let label = format!("{label}\n{previous}\n{next}");
-                    crate::ui::tooltip::element("turn-marker-tooltip", label, move |_, cx| {
-                        gds_uim::el! { #div { flex; flex_col; gap_2; } [
-                            #div {
-                                id: "turn-marker-preview"; test_support;
-                                whitespace_normal; text_size: crate::ui::SMALL;
+                    ui::tooltip::element("turn-marker-tooltip", label, move |_, cx| {
+                        el! { .div { flex; flex_col; gap_2; } [
+                            .div {
+                                # "turn-marker-preview"; test_support;
+                                whitespace_normal; text_size: ui::SMALL;
                                 pb_2; border_b_1; border_color: $cx.theme().border;
-                            } [$preview.clone()],
-                            #div {
-                                id: "turn-marker-metadata"; test_support;
+                            } [~preview],
+                            .div {
+                                # "turn-marker-metadata"; test_support;
                                 flex; items_center; justify_between; gap_3;
                                 text_xs; text_color: $cx.theme().muted_foreground;
                             } [
-                                #div {
-                                    id: "turn-marker-time"; test_support;
-                                    role: gpui_kit::Role::Label; aria_label: $at.clone();
-                                } [$at.clone()],
-                                ..$bookmarked.then(|| gds_uim::el! {
-                                    #div {
-                                        id: "turn-marker-bookmark-label"; test_support;
+                                .div {
+                                    # "turn-marker-time"; test_support;
+                                    role: gpui_kit::Role::Label; aria_label: ~at;
+                                } [~at],
+                                @if (bookmarked)
+                                    .div {
+                                        # "turn-marker-bookmark-label"; test_support;
                                         role: gpui_kit::Role::Label;
-                                        aria_label: $crate::i18n::tr!("turn-marker-bookmarked");
+                                        aria_label: tr!("turn-marker-bookmarked");
                                         flex; items_center; gap_1; flex_shrink_0;
                                         rounded_sm; px_1; whitespace_nowrap;
                                         bg: $cx.theme().primary.opacity(0.15);
                                         text_color: $cx.theme().primary;
                                     } [
-                                        #div {
-                                            id: "turn-marker-bookmark-icon"; test_support;
+                                        .div {
+                                            # "turn-marker-bookmark-icon"; test_support;
                                             flex; items_center; flex_shrink_0;
-                                        } [Icon(IconName::Bookmark) { xsmall; }],
-                                        $crate::i18n::tr!("turn-marker-bookmarked"),
-                                    ]
-                                }),
+                                        } [IconName::Bookmark.Icon::new { xsmall; }],
+                                        tr!("turn-marker-bookmarked"),
+                                    ],
+                                @end,
                             ],
-                            #div {
-                                id: "turn-marker-shortcuts"; test_support;
+                            .div {
+                                # "turn-marker-shortcuts"; test_support;
                                 flex; flex_col; gap_1; pt_2; border_t_1;
                                 border_color: $cx.theme().border; text_xs;
                                 text_color: $cx.theme().muted_foreground;
                             } [
-                                #div [$control_hint],
-                                #div {
-                                    id: "turn-marker-previous-hint"; test_support;
-                                    role: gpui_kit::Role::Label; aria_label: $previous.clone();
-                                } [$previous.clone()],
-                                #div {
-                                    id: "turn-marker-next-hint"; test_support;
-                                    role: gpui_kit::Role::Label; aria_label: $next.clone();
-                                } [$next.clone()],
-                                #div [$crate::i18n::tr!("turn-marker-wheel-hint")],
+                                .div [control_hint],
+                                .div {
+                                    # "turn-marker-previous-hint"; test_support;
+                                    role: gpui_kit::Role::Label; aria_label: ~previous;
+                                } [~previous],
+                                .div {
+                                    # "turn-marker-next-hint"; test_support;
+                                    role: gpui_kit::Role::Label; aria_label: ~next;
+                                } [~next],
+                                .div [tr!("turn-marker-wheel-hint")],
                             ],
                         ] }.into_any_element()
                     }, window, cx)
@@ -177,41 +177,42 @@ impl Workspace {
                     if event.modifiers().control { this.toggle_marker_bookmark(session, cursor, cx); }
                     else { this.navigate_to_marker(cursor, cx); }
                 });
-            } [$tick] };
-            markers = gds_uim::el! { $markers [$marker] };
+            } [tick] };
+            markers = el! { markers [marker] };
         }
         let group: SharedString = "turn-marker-end".into();
-        let end = gds_uim::el! { #div {
-            id: $group.clone(); test_support; role: gpui_kit::Role::Button;
-            aria_label: $crate::i18n::tr!("conversation-end"); group: $group.clone();
-            hoverable_tooltip: $shortcuts::tooltip(crate::i18n::tr!("conversation-end"), ScrollConversationToEnd);
+        let end = el! { .div {
+            # ~group; test_support; role: gpui_kit::Role::Button;
+            aria_label: tr!("conversation-end"); group: ~group;
+            hoverable_tooltip: $shortcuts::tooltip(tr!("conversation-end"), ScrollConversationToEnd);
             h: MARKER_HEIGHT.px; w_full; flex_shrink_0; cursor_pointer;
             on_click: $cx.listener(|this, _, _, cx| this.scroll_conversation_to_end(cx));
-        } [$marker_tick("turn-marker-line-end".into(), group, at_end, false, cx)] };
-        gds_uim::el! { #div {
-            id: "turn-navigation"; test_support; absolute; top_0; bottom_0; right: $px(-RAIL_WIDTH);
+        } [("turn-marker-line-end" { into }, group, at_end, false, cx).marker_tick] };
+        el! { .div {
+            # "turn-navigation"; test_support; absolute; top_0; bottom_0; right: $px(-RAIL_WIDTH);
             flex; flex_col; justify_center; py_1; w: RAIL_WIDTH.px; flex_shrink_0;
         } [
-            #div {
-                id: "turn-shortcuts"; test_support; flex; flex_col; w_full; min_h_0; max_h_full; rounded_md;
-                hover => { bg: $cx.theme().muted.opacity(0.24); };
+            .div {
+                # "turn-shortcuts"; test_support; flex; flex_col; w_full; min_h_0; max_h_full; rounded_md;
+                hover: { bg: $cx.theme().muted.opacity(0.24); };
                 on_scroll_wheel: $cx.listener(|this, event, window, cx| {
                     this.on_navigation_wheel(event, window, cx);
                     cx.stop_propagation();
                 });
             } [
-                ..$navigation.overview_request.is_some().then(|| status::activity_icon(
-                    "turn-overview-loading", IconName::LoaderCircle, cx.theme().muted_foreground, true)),
-                ..$navigation.overview_error.as_ref().map(|error| gds_uim::el! {
-                    #crate::ui::tooltip::bounded("turn-overview-error",
-                        $gds_uim::el! { #div { text_color: $cx.theme().danger; } ["!"] },
+                @if (navigation.overview_request.is_some())
+                    ("turn-overview-loading", IconName::LoaderCircle, $cx.theme().muted_foreground, true).status::activity_icon,
+                @end,
+                @if (let Some(error) = navigation.overview_error.as_ref())
+                    ("turn-overview-error",
+                        .div { text_color: $cx.theme().danger; } ["!"],
                         $error.presentation(),
-                    ) {
+                    ).ui::tooltip::bounded {
                         test_support; cursor_pointer;
                         on_click: $cx.listener(|this, _, _, cx| this.request_history_overview(0, cx));
-                    }
-                }),
-                $markers, $end,
+                    },
+                @end,
+                markers, end,
             ],
         ] }.into_any_element()
     }
@@ -226,29 +227,32 @@ impl Workspace {
         if !loading && error.is_none() && !navigation.detached {
             return None;
         }
-        Some(gds_uim::el! { #div {
-            id: "history-location-status"; test_support;
+        Some(el! { .div {
+            # "history-location-status"; test_support;
             absolute; bottom_0; left_0; right_0; flex; justify_center; px_3;
         } [
-            #div {
+            .div {
                 flex; items_center; gap_2; px_3; py_1; max_w_full; rounded_md;
-                bg: $cx.theme().background; text_size: crate::ui::SMALL;
+                bg: $cx.theme().background; text_size: ui::SMALL;
             } [
-                ..$loading.then(|| status::activity_icon("history-location-loading",
-                    IconName::LoaderCircle, cx.theme().muted_foreground, true)),
-                ..$error.map(|error| crate::ui::feedback("history-location-error", error.presentation(), cx.theme().danger).compact()),
-                ..$((!loading && navigation.after.is_some()).then(|| gds_uim::el! {
-                    #crate::ui::action_button("history-location-newer") {
-                        label: $crate::i18n::tr!("turn-marker-load-newer");
+                @if (loading)
+                    ("history-location-loading", IconName::LoaderCircle, $cx.theme().muted_foreground, true).status::activity_icon,
+                @end,
+                @if (let Some(error) = error)
+                    ("history-location-error", $error.presentation(), $cx.theme().danger).feedback { compact; },
+                @end,
+                @if (!loading && navigation.after.is_some())
+                    "history-location-newer".action_button {
+                        label: tr!("turn-marker-load-newer");
                         on_click: $cx.listener(|this, _, _, cx| this.load_next_history(cx));
-                    }
-                })),
-                ..$((!loading).then(|| gds_uim::el! {
-                    #crate::ui::action_button("history-location-latest") {
-                        label: $crate::i18n::tr!("conversation-end");
+                    },
+                @end,
+                @if (!loading)
+                    "history-location-latest".action_button {
+                        label: tr!("conversation-end");
                         on_click: $cx.listener(|this, _, _, cx| this.scroll_conversation_to_end(cx));
-                    }
-                })),
+                    },
+                @end,
             ],
         ] }.into_any_element())
     }

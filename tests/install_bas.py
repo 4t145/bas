@@ -19,7 +19,7 @@ class InstallBasTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         scripts = self.root / "scripts"
         scripts.mkdir()
-        for name in ("install-bas", "nix-profile-install"):
+        for name in ("install-bas", "install-basg", "nix-profile-install"):
             shutil.copy2(ROOT / "scripts" / name, scripts / name)
         self.executable(scripts / "nix-source", "#!/bin/sh\nprintf 'fixture-source\\n'\n")
         binaries = self.root / "bin"
@@ -201,6 +201,20 @@ elif command not in ("daemon-reload", "restart"):
                 )
             if call[:2] == ["profile", "remove"]:
                 self.assertEqual(call[-1], "bas")
+
+    def test_gui_installs_from_plain_snapshot_without_submodules(self):
+        result = self.run_installer(
+            "--profile", "/fixture/profile", script="install-basg"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(calls, [
+            ["profile", "list", "--profile", "/fixture/profile", "--json"],
+            ["eval", "--raw", "fixture-source#basg.outPath"],
+            ["profile", "remove", "--profile", "/fixture/profile", "basg"],
+            ["profile", "add", "fixture-source#basg", "--profile", "/fixture/profile"],
+        ])
+        self.assertFalse(self.config.exists())
 
 
 

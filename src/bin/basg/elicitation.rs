@@ -3,6 +3,7 @@ use gpui_kit::component::*;
 use std::collections::BTreeMap;
 
 use bas::authentication::elicitation::{Kind, Mode, Request};
+use gds_uim::el;
 use gpui_kit::{
     App, Context, Entity, EventEmitter, Render, Subscription, TestSupportExt, Window,
     component::{
@@ -14,6 +15,11 @@ use gpui_kit::{
     prelude::*,
 };
 use serde_json::{Map, Value, json};
+
+use crate::{
+    i18n::tr,
+    ui::{self, action_button, checkbox, feedback},
+};
 
 pub(crate) struct Answered {
     pub request_id: String,
@@ -122,14 +128,14 @@ impl Panel {
                     Kind::Integer => text
                         .parse::<i64>()
                         .map(|value| json!(value))
-                        .map_err(|_| crate::i18n::tr!("validation-integer").into()),
+                        .map_err(|_| tr!("validation-integer").into()),
                     Kind::Number => text
                         .parse::<f64>()
                         .ok()
                         .filter(|value| value.is_finite())
                         .and_then(serde_json::Number::from_f64)
                         .map(Value::Number)
-                        .ok_or_else(|| crate::i18n::tr!("validation-number").into()),
+                        .ok_or_else(|| tr!("validation-number").into()),
                     _ => unreachable!("only textual fields create inputs"),
                 };
                 match value {
@@ -150,7 +156,7 @@ impl Panel {
                 None if field.required => {
                     errors.insert(
                         field.name.clone(),
-                        crate::i18n::tr!("validation-required", field = (field.title).to_string()),
+                        tr!("validation-required", field = (field.title).to_string()),
                     );
                 }
                 _ => {}
@@ -233,9 +239,9 @@ impl Panel {
         self.submitting = true;
         self.accepted = action == "accept";
         self.message = if matches!(self.request.mode, Mode::Url(_)) && self.accepted {
-            crate::i18n::tr!("elicitation-browser").into()
+            tr!("elicitation-browser").into()
         } else {
-            crate::i18n::tr!("elicitation-submitting").into()
+            tr!("elicitation-submitting").into()
         };
         cx.emit(Answered {
             request_id: self.request_id.clone(),
@@ -253,18 +259,18 @@ impl Panel {
     ) -> gpui_kit::AnyElement {
         let name = field.name.clone();
         let description = field.description.clone().map(|description| {
-            gds_uim::el! {
-                #div {
-                    text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                } [ $description ]
+            el! {
+                .div {
+                    text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                } [description]
             }
         });
-        let mut row = gds_uim::el! {
-            #div {
-                id: $format!("elicitation-field-{name}");
+        let mut row = el! {
+            .div {
+                # format!("elicitation-field-{name}");
                 test_support; flex; flex_col; gap_1;
             } [
-                $format!("{}{}", field.title, if field.required { " *" } else { "" }),
+                format!("{}{}", field.title, if field.required { " *" } else { "" }),
                 ..description
             ]
         };
@@ -272,8 +278,8 @@ impl Panel {
         match &field.kind {
             Kind::String | Kind::Number | Kind::Integer => {
                 let input = &self.inputs[&name];
-                row = gds_uim::el! { $row [
-                    $crate::ui::input::placeholder(input, Input::new(input).id(id).small().disabled(self.submitting))
+                row = el! { row [
+                    (input, input.Input::new { # id; small; disabled: $self.submitting; }).ui::input::placeholder,
                 ] };
             }
             Kind::Boolean => {
@@ -283,29 +289,30 @@ impl Panel {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let name = name.clone();
-                row = gds_uim::el! { $row [ Switch($id) {
-                    checked: $checked; disabled: $self.submitting;
-                    @$(!self.submitting) => { cursor_pointer; };
-                    accessibility_label: $field.title.clone();
+                row = el! { row [ id.Switch::new {
+                    checked: checked; disabled: $self.submitting;
+                    @if (!self.submitting) cursor_pointer; @end;
+                    accessibility_label: ~$(field.title);
                     on_change: $cx.listener(move |this, checked, _, cx| {
                         this.set_value(name.clone(), Value::Bool(*checked), cx);
                     });
                 } ] };
             }
             Kind::Enum { options } => {
-                row = gds_uim::el! { $row [ #div { flex; flex_wrap; gap_1; } [..$(
+                row = el! { row [ .div { flex; flex_wrap; gap_1; } [..$(
                     options.iter().enumerate().map(|(index, option)| {
                         let name = name.clone();
                         let value = option.value.clone();
-                        gds_uim::el! { $crate::ui::action_button(format!("{id}-{index}")) {
-                            label: $option.title.clone();
+                        el! { format!("{id}-{index}").action_button {
+                            label: ~$(option.title);
                             disabled: $self.submitting;
-                            tooltip: $crate::i18n::tr!(
+                            tooltip: tr!(
                                 "option-choose",
                                 name = option.title.as_str()
                             );
-                            @$(self.values.get(&name).and_then(Value::as_str)
-                                == Some(value.as_str())) => { primary; };
+                            @if (self.values.get(&name).and_then(Value::as_str) == Some(value.as_str()))
+                                primary;
+                            @end;
                             on_click: $cx.listener(move |this, _, _, cx| {
                                 this.set_value(name.clone(), Value::String(value.clone()), cx);
                             });
@@ -320,13 +327,13 @@ impl Panel {
                     })
                     .and_then(|option| option.description.as_ref())
                 {
-                    row = gds_uim::el! { $row [ #div {
-                        text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                    } [ $description.clone() ] ] };
+                    row = el! { row [ .div {
+                        text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                    } [~description] ] };
                 }
             }
             Kind::MultiSelect { options } => {
-                row = gds_uim::el! { $row [ #div { flex; flex_col; gap_1; } [..$(
+                row = el! { row [ .div { flex; flex_col; gap_1; } [..$(
                     options.iter().enumerate().map(|(index, option)| {
                         let name = name.clone();
                         let value = option.value.clone();
@@ -339,10 +346,10 @@ impl Panel {
                                     .iter()
                                     .any(|item| item.as_str() == Some(value.as_str()))
                             });
-                        gds_uim::el! { $crate::ui::checkbox(format!("{id}-{index}")) {
-                            label: $option.title.clone(); checked: $checked;
+                        el! { format!("{id}-{index}").checkbox {
+                            label: ~$(option.title); checked: checked;
                             disabled: $self.submitting;
-                            @$(!self.submitting) => { cursor_pointer; };
+                            @if (!self.submitting) cursor_pointer; @end;
                             on_click: $cx.listener(move |this, checked, _, cx| {
                                 this.select_value(&name, &value, *checked, cx);
                             });
@@ -352,8 +359,8 @@ impl Panel {
             }
         }
         if let Some(error) = self.errors.get(&name) {
-            row = gds_uim::el! { $row [
-                $crate::ui::feedback(format!("elicitation-{}-field-{name}-error", self.request_id), error.clone(), cx.theme().danger)
+            row = el! { row [
+                $feedback(format!("elicitation-{}-field-{name}-error", self.request_id), error.clone(), cx.theme().danger)
             ] };
         }
         row.into_any_element()
@@ -362,13 +369,13 @@ impl Panel {
 
 impl Render for Panel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let panel = gds_uim::el! {
-            #div {
-                id: $format!("elicitation-{}", self.request_id); test_support;
-                flex; flex_col; gap_2; text_size: $crate::ui::SMALL;
+        let panel = el! {
+            .div {
+                # format!("elicitation-{}", self.request_id); test_support;
+                flex; flex_col; gap_2; text_size: ui::SMALL;
                 p_3; border_1; border_color: $cx.theme().border; rounded_md;
             } [
-                $crate::ui::feedback(format!("elicitation-{}-message", self.request_id), self.request.message.clone(), cx.theme().foreground)
+                $feedback(format!("elicitation-{}-message", self.request_id), self.request.message.clone(), cx.theme().foreground)
             ]
         };
         let panel = match &self.request.mode {
@@ -378,47 +385,47 @@ impl Render for Panel {
                     .iter()
                     .map(|field| self.render_field(field, cx))
                     .collect::<Vec<_>>();
-                gds_uim::el! { $panel [
+                el! { panel [
                     ..fields,
-                    $crate::ui::action_button("elicitation-submit") {
-                        small; primary; label: $crate::i18n::tr!("action-submit");
-                        disabled: $self.submitting; on_click: $cx.listener(Self::on_accept);
+                    "elicitation-submit".action_button {
+                        small; primary; label: tr!("action-submit");
+                        disabled: $self.submitting; on_click: (cx, Self::on_accept).Context::listener;
                     }
                 ] }
             }
             Mode::Url(url) => {
-                gds_uim::el! { $panel [
-                    $crate::i18n::tr!(
+                el! { panel [
+                    tr!(
                         "elicitation-host",
                         host = (url.host).to_string()
                     ),
-                    #div {
-                        id: "elicitation-url"; test_support; text_size: $crate::ui::SMALL;
-                    } [ $url.url.clone() ],
-                    $crate::ui::action_button("elicitation-open-url") {
-                        primary; label: $crate::i18n::tr!("action-open-link");
-                        disabled: $self.submitting; on_click: $cx.listener(Self::on_open_url);
+                    .div {
+                        # "elicitation-url"; test_support; text_size: ui::SMALL;
+                    } [~$(url.url)],
+                    "elicitation-open-url".action_button {
+                        primary; label: tr!("action-open-link");
+                        disabled: $self.submitting; on_click: (cx, Self::on_open_url).Context::listener;
                     }
                 ] }
             }
         };
         let message = (!self.message.is_empty()).then(|| {
-            crate::ui::feedback(
+            feedback(
                 format!("elicitation-{}-feedback", self.request_id),
                 self.message.clone(),
                 cx.theme().foreground,
             )
         });
-        gds_uim::el! {
-            $panel [
-                #div { flex; gap_2; } [
-                    $crate::ui::action_button("elicitation-decline") {
-                        label: $crate::i18n::tr!("action-decline"); disabled: $self.submitting;
-                        on_click: $cx.listener(Self::on_decline);
+        el! {
+            panel [
+                .div { flex; gap_2; } [
+                    "elicitation-decline".action_button {
+                        label: tr!("action-decline"); disabled: $self.submitting;
+                        on_click: (cx, Self::on_decline).Context::listener;
                     },
-                    $crate::ui::action_button("elicitation-cancel") {
-                        label: $crate::i18n::tr!("action-cancel"); disabled: $self.submitting;
-                        on_click: $cx.listener(Self::on_cancel);
+                    "elicitation-cancel".action_button {
+                        label: tr!("action-cancel"); disabled: $self.submitting;
+                        on_click: (cx, Self::on_cancel).Context::listener;
                     }
                 ],
                 ..message

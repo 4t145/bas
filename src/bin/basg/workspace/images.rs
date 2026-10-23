@@ -286,7 +286,7 @@ pub(super) fn wrap(
     let source = Text::from(TextView::new(document)).get_text(cx);
     let used = cache.clone();
     el! {
-        #frame(id, cache, content, cx) {
+        (id, cache, content, cx).frame {
             on_children_prepainted: $move |_, window, cx| {
                 used.update(cx, |cache, cx| cache.markdown_changed(&source, window, cx));
             };
@@ -297,12 +297,12 @@ pub(super) fn wrap(
 
 fn frame(id: &str, cache: &Entity<Cache>, content: AnyElement, cx: &App) -> Div {
     el! {
-        #div {
+        .div {
             w_full; flex; flex_col;
-            image_cache: $cache.clone();
+            image_cache: ~cache;
         } [
-            $content,
-            ..$cache.read(cx).errors.iter().map(|(key, message)| crate::ui::feedback(
+            content,
+            ..$cache.read(cx).errors.iter().map(|(key, message)| ui::feedback(
                 format!("image-error-{id}-{key}"), message.clone(), cx.theme().muted_foreground,
             )),
         ]
@@ -318,22 +318,22 @@ pub(super) fn acp_image(
 ) -> AnyElement {
     let source: SharedUri = format!("data:{};base64,{}", image.mime_type, image.data).into();
     let content = el! {
-        #img($source.clone()) {
+        ~source.img {
             object_fit: gpui_kit::ObjectFit::Contain;
-            id: $SharedString::from(format!("image-{id}"));
+            # format!("image-{id}").SharedString::from;
             test_support;
             max_w_full;
-            @preview => { size_full; };
+            @if (preview) size_full; @end;
         }
     }
     .into_any_element();
     let used = cache.clone();
     el! {
-        #frame(id, cache, content, cx) {
+        (id, cache, content, cx).frame {
             on_children_prepainted: $move |_, window, cx| {
                 used.update(cx, |cache, cx| cache.image_changed(&source, window, cx));
             };
-            @preview => { h_full; };
+            @if (preview) h_full; @end;
         }
     }
     .into_any_element()

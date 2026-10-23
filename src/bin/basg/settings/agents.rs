@@ -1,7 +1,12 @@
 //! Agent configuration and shared operations for the independent installation window.
 
 use super::action_button as button;
-use crate::ui::Button;
+use crate::{
+    i18n::tr,
+    settings,
+    ui::{self, Button},
+};
+use gds_uim::el;
 mod actions;
 mod authentication;
 mod feedback;
@@ -47,6 +52,7 @@ use bas::config::{
 };
 use gpui_kit::{
     App, Context, Entity, Render, ScrollHandle, Subscription, Task, TestSupportExt, Window,
+    assets::IconName,
     component::{button::*, input::*, *},
     div,
     prelude::*,
@@ -1154,17 +1160,21 @@ impl Agents {
             .expect("configured custom or embedded agent");
         let edit = spec.clone();
         let custom = entry.source == bas::management::Source::Custom;
-        gds_uim::el! {
-            #div { flex; items_center; gap_1; } [
-                ..$bool::then(spec.kind == Kind::Acp, || self.check_button(format!("agents-check-{index}"), spec, cx)),
+        el! {
+            .div { flex; items_center; gap_1; } [
+                @if (spec.kind == Kind::Acp)
+                    $self.check_button(format!("agents-check-{index}"), spec, cx),
+                @end,
                 $self.account_actions(spec, cx),
-                ..$custom.then(|| gds_uim::el! { #item::action($format!("agents-edit-{index}"), $gpui_kit::assets::IconName::Settings, $crate::i18n::tr!("agent-edit-config")) {
-                    disabled: $(!self.registry.editable() || !custom);
-                    on_click: $cx.listener(move |this, _, window, cx| {
-                        this.edit(edit.clone(), Some(edit.id.clone()), window, cx)
-                    });
-                } }),
-                ..$custom.then(|| self.remove_button(spec.id.as_str(), cx)),
+                @if (custom)
+                    (format!("agents-edit-{index}"), IconName::Settings, tr!("agent-edit-config")).item::action {
+                        disabled: $(!self.registry.editable() || !custom);
+                        on_click: $cx.listener(move |this, _, window, cx| {
+                            this.edit(edit.clone(), Some(edit.id.clone()), window, cx)
+                        });
+                    },
+                    $self.remove_button(spec.id.as_str(), cx),
+                @end,
             ]
         }.into_any_element()
     }
@@ -1192,11 +1202,11 @@ impl Agents {
             entry,
             content,
         };
-        gds_uim::el! {
-            #div {
-                id: $format!("agents-card-{index}"); test_support;
+        el! {
+            .div {
+                # format!("agents-card-{index}"); test_support;
                 w_full; min_w_0;
-            } [$card]
+            } [card]
         }
         .into_any_element()
     }
@@ -1214,42 +1224,42 @@ impl Agents {
             .spec()
             .is_some_and(|spec| spec.kind == Kind::Embedded);
         let connected = self.draft_connected(cx);
-        let actions = gds_uim::el! {
-            #div { id: "agents-form-actions"; test_support; w_full; flex; items_center; gap_2; } [
-                #div { flex_1; },
+        let actions = el! {
+            .div { # "agents-form-actions"; test_support; w_full; flex; items_center; gap_2; } [
+                .div { flex_1; },
                 $self.cancel_button(cx),
-                $button("agents-save") {
+                ("agents-save").button {
                     disabled: $(!self.registry.editable() || self.document.is_none() || self.configuration_task.is_some());
-                    label: $crate::i18n::tr!("agent-save");
-                    on_click: $cx.listener(Self::on_save);
+                    label: tr!("agent-save");
+                    on_click: (cx, Self::on_save).Context::listener;
                 },
             ]
         };
-        gds_uim::el! {
-            #div { flex; flex_col; gap_4; } [
-                ..$bool::then(!embedded && !connected, || gds_uim::el! {
-                    #div {
-                        id: "agents-connection-help"; test_support;
-                        text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                    } [ $crate::i18n::tr!("agent-custom-help") ]
-                }),
-                ..$self.form.rows(embedded, connected).into_iter().map(|(id, label, input)| gds_uim::el! {
-                    #div { flex; flex_col; gap_1; } [
-                        #div { text_size: $crate::ui::SMALL; } [ $label ],
-                        #div { id: $id; test_support; } [
-                            $crate::ui::input::placeholder(input, Input::new(input).small().disabled(self.editor.deleting() || !self.registry.editable() || self.configuration_task.is_some()))
+        el! {
+            .div { flex; flex_col; gap_4; } [
+                @if (!embedded && !connected)
+                    .div {
+                        # "agents-connection-help"; test_support;
+                        text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                    } [tr!("agent-custom-help")],
+                @end,
+                ..$(self.form.rows(embedded, connected)) { into_iter; map: ((id, label, input),) =>
+                    .div { flex; flex_col; gap_1; } [
+                        .div { text_size: ui::SMALL; } [label],
+                        .div { # id; test_support; } [
+                            $ui::input::placeholder(input, Input::new(input).small().disabled(self.editor.deleting() || !self.registry.editable() || self.configuration_task.is_some()))
                         ],
                     ]
-                }),
-                ..$self.editor.deleting().then(|| gds_uim::el! {
-                    #div { text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground; } [
-                        $crate::i18n::tr!("agent-remove-confirm-help")
-                    ]
-                }),
-                ..$bool::then(!self.message.is_empty(), || crate::settings::feedback(
-                    "agents-form-message", self.message.clone(), cx.theme().danger,
-                )),
-                $actions,
+                },
+                @if (self.editor.deleting())
+                    .div { text_size: ui::SMALL; text_color: $cx.theme().muted_foreground; } [
+                        tr!("agent-remove-confirm-help")
+                    ],
+                @end,
+                @if (!self.message.is_empty())
+                    ("agents-form-message", ~$(self.message), $cx.theme().danger).settings::feedback,
+                @end,
+                actions,
             ]
         }.into_any_element()
     }
@@ -1331,10 +1341,10 @@ impl Agents {
                 .scroll_to_top_of_item(index.min(section_count.saturating_sub(1)));
         }
         let header = if page == Page::Onboarding && drafting {
-            gds_uim::el! {
-                #div { flex; items_center; gap_2; } [
-                    #div { text_size: $crate::ui::HEADING; } [
-                        $crate::i18n::tr!("agent-add-custom")
+            el! {
+                .div { flex; items_center; gap_2; } [
+                    .div { text_size: ui::HEADING; } [
+                        tr!("agent-add-custom")
                     ],
                 ]
             }
@@ -1342,27 +1352,27 @@ impl Agents {
         } else if page == Page::Onboarding {
             self.registry_header(cx)
         } else {
-            gds_uim::el! {
-                #div {
-                    id: "agents-configuration-header"; test_support;
+            el! {
+                .div {
+                    # "agents-configuration-header"; test_support;
                     flex; items_center; justify_between; gap_3;
                 } [
-                    #div { text_size: $crate::ui::HEADING; } [
-                        $crate::i18n::tr!("settings-agents")
+                    .div { text_size: ui::HEADING; } [
+                        tr!("settings-agents")
                     ],
-                    #div {
-                        id: "agents-configuration-actions"; test_support;
+                    .div {
+                        # "agents-configuration-actions"; test_support;
                         flex; items_center; gap_2;
                     } [
-                        Button("agents-add") {
-                            ghost; small; icon: $gpui_kit::assets::IconName::Plus;
-                            label: $crate::i18n::tr!("agent-add");
-                            on_click: $cx.listener(Self::on_add_agent);
+                        ("agents-add").Button::new {
+                            ghost; small; icon: IconName::Plus;
+                            label: tr!("agent-add");
+                            on_click: (cx, Self::on_add_agent).Context::listener;
                         },
-                        #item::action("agents-reload", $gpui_kit::assets::IconName::RefreshCw, $crate::i18n::tr!("settings-refresh-agents")) {
+                        ("agents-reload", IconName::RefreshCw, tr!("settings-refresh-agents")).item::action {
                             disabled: $self.configuration_task.is_some();
                             loading: $self.configuration_task.is_some();
-                            on_click: $cx.listener(Self::on_reload_agents);
+                            on_click: (cx, Self::on_reload_agents).Context::listener;
                         },
                     ],
                 ]
@@ -1397,36 +1407,39 @@ impl Agents {
                         bas::management::Source::Custom => ("agents-source-custom", crate::i18n::tr!("agent-source-custom")),
                         bas::management::Source::Embedded => ("agents-source-embedded", crate::i18n::tr!("agent-builtin")),
                     };
-                    gds_uim::el! { #div { id: id; test_support; role: gpui_kit::Role::Label; aria_label: label; py_2; text_size: crate::ui::HEADING; } [$label] }
+                    el! { .div { # id; test_support; role: gpui_kit::Role::Label; aria_label: label; py_2; text_size: ui::HEADING; } [label] }
                 });
                 previous = Some(source);
-                content.push(gds_uim::el! { #div { flex; flex_col; gap_2; } [..heading, $self.configuration_card(index, entry, cx)] }.into_any_element());
+                content.push(el! { .div { flex; flex_col; gap_2; } [..heading, $self.configuration_card(index, entry, cx)] }.into_any_element());
             }
         }
-        let heading = gds_uim::el! {
-            #div { p_5; flex_shrink_0; flex; flex_col; gap_2; } [
-                $header,
-                ..$dirty.then(|| crate::settings::feedback(
-                    "agents-dirty", crate::i18n::tr!("settings-unsaved"), cx.theme().foreground,
-                )),
-                ..$bool::then(!self.message.is_empty() && self.editor.spec().is_none(), || crate::settings::feedback(
-                    "agents-message", self.message.clone(), cx.theme().muted_foreground,
-                )),
-                ..$bool::then(page == Page::Onboarding, || self.saved_feedback(cx)).flatten(),
-                ..$bool::then(!self.registration_errors.is_empty(), || crate::settings::feedback(
-                    "agents-registration-errors", self.registration_errors.clone(), cx.theme().foreground,
-                )),
+        let heading = el! {
+            .div { p_5; flex_shrink_0; flex; flex_col; gap_2; } [
+                header,
+                @if (dirty)
+                    ("agents-dirty", tr!("settings-unsaved"), $cx.theme().foreground).settings::feedback,
+                @end,
+                @if (!self.message.is_empty() && self.editor.spec().is_none())
+                    ("agents-message", ~$(self.message), $cx.theme().muted_foreground).settings::feedback,
+                @end,
+                @if (page == Page::Onboarding)
+                    ..$self.saved_feedback(cx),
+                @end,
+                @if (!self.registration_errors.is_empty())
+                    ("agents-registration-errors", ~$(self.registration_errors), $cx.theme().foreground).settings::feedback,
+                @end,
             ]
         };
-        gds_uim::el! {
-            #div {
-                id: "agents-page"; test_support; size_full; flex; flex_col;
+        el! {
+            .div {
+                # "agents-page"; test_support; size_full; flex; flex_col;
                 bg: $registry::Palette::current(cx).background;
             } [
-                $heading,
-                #div {
-                    id: "agents-sections"; test_support; flex_1; min_h_0; overflow_y_scroll;
-                    track_scroll: $(if page == Page::Configuration { &self.scroll } else { &self.installation_scroll }); px_5; pb_5; flex; flex_col; gap_2;
+                heading,
+                .div {
+                    # "agents-sections"; test_support; flex_1; min_h_0; overflow_y_scroll;
+                    track_scroll: @if (page == Page::Configuration) $&self.scroll @else $&self.installation_scroll @end;
+                    px_5; pb_5; flex; flex_col; gap_2;
                 } [ ..content ],
             ]
         }.into_any_element()

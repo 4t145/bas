@@ -1,5 +1,9 @@
 use super::*;
 use crate::ui::{self, Button};
+use crate::{
+    i18n::tr,
+    settings::{action_button, feedback, form::CONTROLS_WIDTH},
+};
 use gds_uim::el;
 use gpui_kit::{
     AnyElement, FontWeight, Render, TestSupportExt,
@@ -16,22 +20,23 @@ impl Page {
     fn add_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let manual = cx.entity().downgrade();
         let discover = manual.clone();
-        el! { #ui::icon_action("connection-new", IconName::Plus, $crate::i18n::tr!("connections-add")) {
+        el! { ("connection-new", IconName::Plus, tr!("connections-add")).ui::icon_action {
             disabled: $(self.editor.is_some() || self.profiles.read(cx).entries().is_empty());
             dropdown_menu: $move |menu, _, _| {
                 let manual = manual.clone();
                 let discover = discover.clone();
                 ui::menu(menu)
-                .item(PopupMenuItem::new(crate::i18n::tr!("connections-manual"))
+                .item(PopupMenuItem::new(tr!("connections-manual"))
                     .on_click(move |_, window, cx| {
                         let _ = manual.update(cx, |this, cx| this.add(window, cx));
                     }))
-                .item(PopupMenuItem::new(crate::i18n::tr!("connections-discover"))
+                .item(PopupMenuItem::new(tr!("connections-discover"))
                     .on_click(move |_, window, cx| {
                         let _ = discover.update(cx, |this, cx| this.discover(window, cx));
                     }))
             };
-        } }.into_any_element()
+        } }
+        .into_any_element()
     }
 
     fn discovery_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -45,23 +50,23 @@ impl Page {
                 .unwrap_or(discovery::LOCAL_NAME)
                 .to_owned();
             let address = connections::presentation::endpoint(endpoint);
-            Some(el! { #div {
-                id: "connection-discovered"; test_support;
+            Some(el! { .div {
+                # "connection-discovered"; test_support;
                 flex; items_center; gap_3; min_w_0;
             } [
-                #div { flex_1; flex; flex_col; gap_2; min_w_0; } [
-                    #div { flex; items_center; gap_2; min_w_0; } [
-                        $connections::presentation::icon(&bas::service::Target::Local) { size: $px(ui::ICON); flex_shrink_0; },
-                        #div {
-                            id: "connection-discovered-name"; test_support;
-                            role: gpui_kit::Role::Label; aria_label: $name.clone();
+                .div { flex_1; flex; flex_col; gap_2; min_w_0; } [
+                    .div { flex; items_center; gap_2; min_w_0; } [
+                        ($&bas::service::Target::Local).connections::presentation::icon { size: ui::ICON.px; flex_shrink_0; },
+                        .div {
+                            # "connection-discovered-name"; test_support;
+                            role: gpui_kit::Role::Label; aria_label: ~name;
                             flex_1; min_w_0; truncate;
-                        } [$name],
+                        } [name],
                     ],
-                    $crate::settings::feedback("connection-discovered-endpoint", address, cx.theme().muted_foreground).compact(),
+                    ("connection-discovered-endpoint", address, $cx.theme().muted_foreground).feedback { compact },
                 ],
-                #super::super::action_button("connection-discovered-add") {
-                    label: $(if added { crate::i18n::tr!("connections-already-added") } else { crate::i18n::tr!("connections-create") });
+                ("connection-discovered-add").action_button {
+                    label: @if (added) tr!("connections-already-added") @else tr!("connections-create") @end;
                     disabled: added; flex_shrink_0;
                     on_click: $cx.listener(|this, _, window, cx| this.add_discovered(window, cx));
                 },
@@ -69,47 +74,50 @@ impl Page {
         } else {
             None
         };
-        Some(el! { #div {
-            id: "connection-discovery"; test_support;
+        Some(el! { .div {
+            # "connection-discovery"; test_support;
             flex; flex_col; gap_3; p_3; border_1; rounded_md; min_w_0;
             border_color: $cx.theme().border; flex_shrink_0;
         } [
-            #div { flex; items_center; gap_2; } [
-                #div { flex_1; font_weight: FontWeight::SEMIBOLD; } [$crate::i18n::tr!("connections-discover")],
-                #ui::icon_action("connection-discovery-cancel", IconName::X, $crate::i18n::tr!("connections-cancel")) {
+            .div { flex; items_center; gap_2; } [
+                .div { flex_1; font_weight: FontWeight::SEMIBOLD; } [tr!("connections-discover")],
+                ("connection-discovery-cancel", IconName::X, tr!("connections-cancel")).ui::icon_action {
                     on_click: $cx.listener(|this, _, window, cx| this.cancel(window, cx));
                 },
             ],
-            #div { text_color: $cx.theme().muted_foreground; } [$crate::i18n::tr!("connections-discovery-scope")],
+            .div { text_color: $cx.theme().muted_foreground; } [tr!("connections-discovery-scope")],
             ..found,
-            ..$matches!(state, State::Loading).then(|| el! { #div {
-                flex; items_center; gap_2;
-            } [
-                Spinner { with_size: $px(ui::ICON); color: $cx.theme().muted_foreground; },
-                $crate::settings::feedback("connection-discovery-loading", crate::i18n::tr!("connections-discovery-loading"), cx.theme().foreground),
-            ] }),
-            ..$matches!(state, State::Failed).then(|| el! { #div { flex; flex_col; gap_2; } [
-                $crate::settings::feedback("connection-discovery-failed", crate::i18n::tr!("connections-discovery-failed"), cx.theme().foreground),
-                #super::super::action_button("connection-discovery-retry") {
-                    label: $crate::i18n::tr!("connections-discovery-retry");
-                    on_click: $cx.listener(|this, _, window, cx| this.discover(window, cx));
-                },
-            ] }),
+            @match (state)
+            @case (State::Loading)
+                .div { flex; items_center; gap_2; } [
+                    .Spinner::new { with_size: ui::ICON.px; color: $cx.theme().muted_foreground; },
+                    ("connection-discovery-loading", tr!("connections-discovery-loading"), $cx.theme().foreground).feedback,
+                ],
+            @case (State::Failed)
+                .div { flex; flex_col; gap_2; } [
+                    ("connection-discovery-failed", tr!("connections-discovery-failed"), $cx.theme().foreground).feedback,
+                    ("connection-discovery-retry").action_button {
+                        label: tr!("connections-discovery-retry");
+                        on_click: $cx.listener(|this, _, window, cx| this.discover(window, cx));
+                    },
+                ],
+            @case (_)
+            @end,
         ] }.into_any_element())
     }
 
     fn transport_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let owner = cx.entity().downgrade();
         let selected = self.transport;
-        let button = el! { Button("connection-type") {
+        let button = el! { ("connection-type").Button::new {
             small; w_full; min_w_0;
-            accessibility_label: $crate::i18n::tr!("connections-type");
+            accessibility_label: tr!("connections-type");
         } [
-            $selected.icon() { size: $px(ui::ICON); },
-            #div { flex_1; min_w_0; text_left; truncate; } [$selected.label()],
-            Icon(IconName::ChevronDown) { size: $px(ui::SMALL_ICON); },
+            $(selected.icon()) { size: ui::ICON.px; },
+            .div { flex_1; min_w_0; text_left; truncate; } [$selected.label()],
+            (IconName::ChevronDown).Icon::new { size: ui::SMALL_ICON.px; },
         ] };
-        el! { $button {
+        el! { button {
             dropdown_menu: $move |menu, _, _| {
                 let mut menu = ui::menu(menu);
                 for &kind in Transport::AVAILABLE {
@@ -126,12 +134,12 @@ impl Page {
     }
 
     fn field(id: &str, label: &'static str, control: AnyElement) -> AnyElement {
-        el! { #div {
-            id: $format!("{id}-row"); test_support;
+        el! { .div {
+            # format!("{id}-row"); test_support;
             flex; items_center; gap_3; py_2; min_w_0; flex_shrink_0;
         } [
-            #div { flex_1; min_w_0; } [$label],
-            #div { id: $id.to_owned(); test_support; w: $px(super::super::form::CONTROLS_WIDTH); min_w_0; flex_shrink_0; } [$control],
+            .div { flex_1; min_w_0; } [label],
+            .div { # $id.to_owned(); test_support; w: CONTROLS_WIDTH.px; min_w_0; flex_shrink_0; } [control],
         ] }.into_any_element()
     }
 
@@ -144,11 +152,11 @@ impl Page {
 
     fn certificate_field(&self, field: certificates::Field, cx: &mut Context<Self>) -> AnyElement {
         let input = field.input(self);
-        let control = el! { #div { w_full; min_w_0; flex; items_center; gap_1; } [
-            #div { flex_1; min_w_0; } [
-                #Input::new(input) { small; w_full; },
+        let control = el! { .div { w_full; min_w_0; flex; items_center; gap_1; } [
+            .div { flex_1; min_w_0; } [
+                (input).Input::new { small; w_full; },
             ],
-            #ui::icon_action($format!("{}-pick", field.id()), IconName::Folder, $field.picker_label()) {
+            (format!("{}-pick", field.id()), IconName::Folder, $field.picker_label()).ui::icon_action {
                 disabled: $self.certificate_picker_open;
                 flex_shrink_0;
                 on_click: $cx.listener(move |this, _, window, cx| this.choose_certificate(field, window, cx));
@@ -197,31 +205,31 @@ impl Page {
         } else {
             Vec::new()
         };
-        el! { #div {
-            id: "connection-editor"; test_support; key_context: "BasConnectionEditor";
+        el! { .div {
+            # "connection-editor"; test_support; key_context: "BasConnectionEditor";
             flex; flex_col; gap_2; min_w_0;
             on_action: $cx.listener(|this, _: &CancelEditing, window, cx| this.cancel(window, cx));
         } [
-            #div { flex; items_center; gap_2; } [
-                #div { flex_1; font_weight: FontWeight::SEMIBOLD; } [
-                    $(if adding { crate::i18n::tr!("connections-add") } else { crate::i18n::tr!("connections-edit-title") }),
+            .div { flex; items_center; gap_2; } [
+                .div { flex_1; font_weight: FontWeight::SEMIBOLD; } [
+                    @if (adding) tr!("connections-add") @else tr!("connections-edit-title") @end,
                 ],
-                #ui::icon_action("connection-cancel", IconName::X, $crate::i18n::tr!("connections-cancel")) {
+                ("connection-cancel", IconName::X, tr!("connections-cancel")).ui::icon_action {
                     on_click: $cx.listener(|this, _, window, cx| this.cancel(window, cx));
                 },
             ],
-            #div { flex; flex_col; } [
+            .div { flex; flex_col; } [
                 ..fields,
                 ..address,
                 ..tls,
-                $Self::field("connection-note", crate::i18n::tr!("connections-note"),
+                $Self::field("connection-note", tr!("connections-note"),
                     Input::new(&self.note).small().w_full().into_any_element()),
             ],
             ..$self.error_view(cx),
-            #div { flex; justify_end; pt_1; } [
-                #super::super::action_button("connection-save") {
-                    icon: $(if adding { IconName::Plus } else { IconName::Check });
-                    label: $(if adding { crate::i18n::tr!("connections-create") } else { crate::i18n::tr!("connections-save") });
+            .div { flex; justify_end; pt_1; } [
+                ("connection-save").action_button {
+                    icon: @if (adding) IconName::Plus @else IconName::Check @end;
+                    label: @if (adding) tr!("connections-create") @else tr!("connections-save") @end;
                     on_click: $cx.listener(|this, _, window, cx| this.save(window, cx));
                 },
             ],
@@ -261,54 +269,56 @@ impl Page {
             _ => None,
         };
         let current = default && connections::current(cx).as_ref() == Some(&profile.options());
-        el! { #div {
-            id: $format!("connection-card-{}", profile.id); test_support;
+        el! { .div {
+            # format!("connection-card-{}", profile.id); test_support;
             w_full; min_w_0; flex; flex_col; gap_2; px_3; py_2; flex_shrink_0;
             bg: $cx.theme().muted; border_1; rounded_md;
-            border_color: $(if default { cx.theme().primary } else { cx.theme().border });
+            border_color: @if (default) $cx.theme().primary @else $cx.theme().border @end;
         } [
-            #div { w_full; flex; items_center; gap_2; min_w_0; } [
-                #div { flex_1; min_w_0; overflow_hidden; flex; flex_col; gap_1; } [
-                    #div { w_full; flex; items_center; gap_2; min_w_0; text_base; } [
-                        $connections::presentation::icon(&profile.target) { size: $px(ui::ICON); flex_shrink_0; },
-                        #div {
-                            id: $format!("connection-title-{}", profile.id); test_support;
-                            role: gpui_kit::Role::Label; aria_label: $name_hint.clone();
+            .div { w_full; flex; items_center; gap_2; min_w_0; } [
+                .div { flex_1; min_w_0; overflow_hidden; flex; flex_col; gap_1; } [
+                    .div { w_full; flex; items_center; gap_2; min_w_0; text_base; } [
+                        ($&profile.target).connections::presentation::icon { size: ui::ICON.px; flex_shrink_0; },
+                        .div {
+                            # format!("connection-title-{}", profile.id); test_support;
+                            role: gpui_kit::Role::Label; aria_label: ~name_hint;
                             min_w_0; truncate; font_weight: FontWeight::SEMIBOLD;
                             hoverable_tooltip: $move |window, cx| ui::tooltip::view(name_hint.clone(), window, cx);
-                        } [$name],
-                        ..$default.then(|| el! { #div {
-                            id: $format!("connection-default-{id}"); test_support;
-                            text_color: $cx.theme().primary; flex_shrink_0;
-                        } [$crate::i18n::tr!("connections-default")] }),
+                        } [name],
+                        @if (default)
+                            .div {
+                                # format!("connection-default-{id}"); test_support;
+                                text_color: $cx.theme().primary; flex_shrink_0;
+                            } [tr!("connections-default")],
+                        @end,
                     ],
-                    #div {
-                        id: $format!("connection-endpoint-{id}"); test_support;
-                        role: gpui_kit::Role::Label; aria_label: $target.clone();
+                    .div {
+                        # format!("connection-endpoint-{id}"); test_support;
+                        role: gpui_kit::Role::Label; aria_label: ~target;
                         w_full; min_w_0; truncate; text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
                         hoverable_tooltip: $move |window, cx| ui::tooltip::view(target_hint.clone(), window, cx);
-                    } [$target],
+                    } [target],
                 ],
-                #div { id: $format!("connection-actions-{id}"); test_support; flex; items_center; gap_1; flex_shrink_0; } [
-                    #ui::icon_action($format!("connection-check-{}", checked.id), IconName::Activity, $(if checking {
-                        crate::i18n::tr!("connections-checking")
-                    } else { crate::i18n::tr!("connections-check") })) {
+                .div { # format!("connection-actions-{id}"); test_support; flex; items_center; gap_1; flex_shrink_0; } [
+                    (format!("connection-check-{}", checked.id), IconName::Activity,
+                        @if (checking) tr!("connections-checking") @else tr!("connections-check") @end
+                    ).ui::icon_action {
                         disabled: $(busy || checking); loading: checking;
                         on_click: $cx.listener(move |this, _, _, cx| this.check_connection(&checked, cx));
                     },
-                    #ui::icon_action($format!("connection-select-{id}"), IconName::Check, $(if current {
-                        crate::i18n::tr!("connections-in-use")
-                    } else { crate::i18n::tr!("connections-use") })) {
+                    (format!("connection-select-{id}"), IconName::Check,
+                        @if (current) tr!("connections-in-use") @else tr!("connections-use") @end
+                    ).ui::icon_action {
                         disabled: $(busy || current);
                         on_click: $cx.listener(move |this, _, _, cx| this.choose(&id, cx));
                     },
-                    #ui::icon_action($format!("connection-edit-{}", edit.id), IconName::Pencil, $crate::i18n::tr!("connections-edit")) {
+                    (format!("connection-edit-{}", edit.id), IconName::Pencil, tr!("connections-edit")).ui::icon_action {
                         disabled: busy;
                         on_click: $cx.listener(move |this, _, window, cx| this.edit(&edit, window, cx));
                     },
-                    #ui::icon_action($format!("connection-remove-{}", remove.id), IconName::Trash, $(if keep_one {
-                        crate::i18n::tr!("connections-keep-one")
-                    } else { crate::i18n::tr!("connections-remove") })) {
+                    (format!("connection-remove-{}", remove.id), IconName::Trash,
+                        @if (keep_one) tr!("connections-keep-one") @else tr!("connections-remove") @end
+                    ).ui::icon_action {
                         disabled: $(busy || keep_one);
                         on_click: $cx.listener(move |this, _, _, cx| this.request_remove(remove.clone(), cx));
                     },
@@ -316,20 +326,22 @@ impl Page {
             ],
             ..$profile.note.map(|note| {
                 let hint = note.clone();
-                el! { #div {
-                    id: $format!("connection-note-{}", profile.id); test_support;
-                    role: gpui_kit::Role::Label; aria_label: $note.clone();
+                el! { .div {
+                    # format!("connection-note-{}", profile.id); test_support;
+                    role: gpui_kit::Role::Label; aria_label: ~note;
                     w_full; min_w_0; truncate;
                     text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
                     hoverable_tooltip: $move |window, cx| ui::tooltip::view(hint.clone(), window, cx);
                 } [$note.replace('\n', " ")] }
             }),
-            ..$check_result.map(|(message, color)| crate::settings::feedback(
-                format!("connection-check-result-{}", profile.id), message, color,
-            )),
-            ..$editing.then(|| el! { #div {
-                border_t_1; border_color: $cx.theme().border; pt_3; pb_1;
-            } [$self.editor_view(cx)] }),
+            @if (let Some((message, color)) = check_result)
+                (format!("connection-check-result-{}", profile.id), message, color).feedback,
+            @end,
+            @if (editing)
+                .div {
+                    border_t_1; border_color: $cx.theme().border; pt_3; pb_1;
+                } [$self.editor_view(cx)],
+            @end,
         ] }.into_any_element()
     }
 }
@@ -356,34 +368,36 @@ impl Render for Page {
                 self.card(profile, default, count <= 1, cx)
             })
             .collect();
-        el! { #div {
-            id: "connections-page"; test_support; track_focus: $&self.focus; key_context: "BasConnections";
+        el! { .div {
+            # "connections-page"; test_support; track_focus: $&self.focus; key_context: "BasConnections";
             size_full; px_5; py_4; text_size: ui::SMALL;
             flex; flex_col; gap_3;
             on_action: $cx.listener(|this, _: &AddConnection, window, cx| this.add(window, cx));
             on_action: $cx.listener(|this, _: &CancelEditing, window, cx| this.cancel(window, cx));
         } [
-            #div { id: "connections-toolbar"; test_support; flex; items_center; gap_2; flex_shrink_0; } [
-                #div { font_weight: FontWeight::SEMIBOLD; } [$crate::i18n::tr!("connections-list")],
-                #div { flex_1; text_color: $cx.theme().muted_foreground; } [$count.to_string()],
-                #ui::icon_action("connection-reload", IconName::RefreshCw, $(if editing {
-                    crate::i18n::tr!("connections-finish-edit")
-                } else { crate::i18n::tr!("connections-reload") })) {
+            .div { # "connections-toolbar"; test_support; flex; items_center; gap_2; flex_shrink_0; } [
+                .div { font_weight: FontWeight::SEMIBOLD; } [tr!("connections-list")],
+                .div { flex_1; text_color: $cx.theme().muted_foreground; } [$count.to_string()],
+                ("connection-reload", IconName::RefreshCw,
+                    @if (editing) tr!("connections-finish-edit") @else tr!("connections-reload") @end
+                ).ui::icon_action {
                     disabled: editing;
                     on_click: $cx.listener(|this, _, _, cx| this.reload(cx));
                 },
                 $self.add_menu(cx),
             ],
-            #div {
-                id: "connections-list"; test_support; flex_1; min_h_0;
+            .div {
+                # "connections-list"; test_support; flex_1; min_h_0;
                 overflow_y_scroll; track_scroll: $&self.scroll; flex; flex_col; gap_3;
             } [
                 ..error,
                 ..$self.discovery_view(cx),
-                ..$bool::then(adding, || el! { #div {
-                    border_1; border_color: $cx.theme().border; rounded_md;
-                    bg: $cx.theme().muted; p_3; flex_shrink_0;
-                } [$self.editor_view(cx)] }),
+                @if (adding)
+                    .div {
+                        border_1; border_color: $cx.theme().border; rounded_md;
+                        bg: $cx.theme().muted; p_3; flex_shrink_0;
+                    } [$self.editor_view(cx)],
+                @end,
                 ..cards,
             ],
         ] }

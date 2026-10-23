@@ -1,5 +1,7 @@
 //! Passive content-row layout. Only the controls supplied by callers are interactive.
 
+use crate::ui;
+use gds_uim::el;
 use gpui_kit::base::StyledExt;
 use gpui_kit::{
     AnyElement, App, ElementId, IntoElement, ParentElement, RenderOnce, StyleRefinement, Styled,
@@ -51,17 +53,17 @@ impl Styled for ContentRow {
 
 impl RenderOnce for ContentRow {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        gds_uim::el! {
-            #div {
-                id: $self.id; test_support; w_full; min_w_0;
+        el! {
+            .div {
+                # $self.id; test_support; w_full; min_w_0;
                 flex; items_center; gap_2; refine_style: $&self.style;
             } [
-                ..$self.icon.map(|icon| gds_uim::el! {
-                    Icon(icon) { with_size: crate::ui::ICON.px; flex_shrink_0; text_color: $cx.theme().muted_foreground; }
-                }),
-                #div { id: "content-row-body"; test_support; flex_1; min_w_0; } [$self.content],
-                #div {
-                    id: "content-row-actions"; test_support;
+                @if (let Some(icon) = self.icon)
+                    icon.Icon::new { with_size: ui::ICON.px; flex_shrink_0; text_color: $cx.theme().muted_foreground; },
+                @end,
+                .div { # "content-row-body"; test_support; flex_1; min_w_0; } [$self.content],
+                .div {
+                    # "content-row-actions"; test_support;
                     flex; items_center; gap_1; flex_shrink_0;
                 } [..$self.actions],
             ]

@@ -11,8 +11,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if !cx.global::<theme::Appearance>().auto_collapse_activity {
-            return gds_uim::el! {
-                #div { flex; flex_col; gap_1; } [
+            return el! {
+                .div { flex; flex_col; gap_1; } [
                     ..$self.render_activity_entries(items, index, cx),
                 ]
             }
@@ -47,7 +47,7 @@ impl Workspace {
             summary.push((
                 "thoughts",
                 IconName::Lightbulb,
-                crate::i18n::tr!("thought-count", thoughts = thoughts),
+                tr!("thought-count", thoughts = thoughts),
                 muted,
             ));
         }
@@ -55,7 +55,7 @@ impl Workspace {
             summary.push((
                 "tools",
                 IconName::Wrench,
-                crate::i18n::tr!("tool-count", tools = tools),
+                tr!("tool-count", tools = tools),
                 muted,
             ));
         }
@@ -63,7 +63,7 @@ impl Workspace {
             summary.push((
                 "running",
                 IconName::Loader,
-                crate::i18n::tr!("running-count", running = running),
+                tr!("running-count", running = running),
                 cx.theme().primary,
             ));
         }
@@ -71,7 +71,7 @@ impl Workspace {
             summary.push((
                 "failed",
                 IconName::CircleX,
-                crate::i18n::tr!("failed-count", failed = failed),
+                tr!("failed-count", failed = failed),
                 cx.theme().danger,
             ));
         }
@@ -82,18 +82,18 @@ impl Workspace {
             .collect::<Vec<_>>()
             .join(" · ");
         let summary = summary.into_iter().map(|(kind, icon, label, color)| {
-            gds_uim::el! {
-                #div {
-                    id: $SharedString::from(format!("activity-{kind}-{id}"));
+            el! {
+                .div {
+                    # format!("activity-{kind}-{id}").SharedString::from;
                     test_support;
-                    role: $gpui_kit::Role::Label;
-                    aria_label: $label.clone();
+                    role: gpui_kit::Role::Label;
+                    aria_label: ~label;
                     flex;
                     items_center;
                     gap_1;
                     text_size: $theme::content_font_size(cx);
                     line_height: $content_header::line_height(cx);
-                    text_color: $color;
+                    text_color: color;
                 } [
                     $status::activity_icon(
                         format!("activity-icon-{kind}-{id}"),
@@ -102,18 +102,18 @@ impl Workspace {
                         activity_running
                             && (kind == "running" || (kind == "thoughts" && running == 0)),
                     ),
-                    $label,
+                    label,
                 ]
             }
         });
-        let summary = gds_uim::el! {
-            #div {
-                    flex_1;
-                    min_w_0;
-                    flex;
-                    flex_wrap;
-                    gap_x_3;
-                    gap_y_1;
+        let summary = el! {
+            .div {
+                flex_1;
+                min_w_0;
+                flex;
+                flex_wrap;
+                gap_x_3;
+                gap_y_1;
             } [..summary]
         }
         .into_any_element();
@@ -121,24 +121,24 @@ impl Workspace {
             .disclosure_content(id, &label, expanded, index, summary, cx)
             .text_color(muted);
         let header = self.content_header(id, disclosure, None);
-        gds_uim::el! {
-            #content_header::frame(false, cx) [
-                $header,
-                ..$expanded.then(|| {
-                    let entries = self.render_activity_entries(items, index, cx);
-                    gds_uim::el! {
-                        #div {
-                            ml_2;
-                            pl_2;
-                            border_l_1;
-                            border_color: $cx.theme().border;
-                            flex;
-                            flex_col;
-                            pt_1;
-                            gap_1;
-                        } [..entries, $self.render_content_actions(id, id, index, cx)]
-                    }
-                }),
+        el! {
+            (false, cx).content_header::frame [
+                header,
+                @if (expanded)
+                    .div {
+                        ml_2;
+                        pl_2;
+                        border_l_1;
+                        border_color: $cx.theme().border;
+                        flex;
+                        flex_col;
+                        pt_1;
+                        gap_1;
+                    } [
+                        ..$self.render_activity_entries(items, index, cx),
+                        $self.render_content_actions(id, id, index, cx),
+                    ],
+                @end,
             ]
         }
         .into_any_element()
@@ -153,9 +153,9 @@ impl Workspace {
         items
             .iter()
             .map(|item| {
-                gds_uim::el! {
-                    #div {
-                        id: $SharedString::from(item.id());
+                el! {
+                    .div {
+                        # $(item.id()).SharedString::from;
                         test_support;
                     } [$self.render_entry(item, index, cx)]
                 }
@@ -189,39 +189,32 @@ impl Workspace {
             streaming,
         );
         let disclosure = self
-            .disclosure(
-                id,
-                crate::i18n::tr!("thought-title"),
-                expanded,
-                index,
-                Some(leading),
-                cx,
-            )
+            .disclosure(id, tr!("thought-title"), expanded, index, Some(leading), cx)
             .text_color(cx.theme().muted_foreground);
         let header = self.content_header(id, disclosure, None);
-        gds_uim::el! {
-            #content_header::frame(false, cx) {
+        el! {
+            (false, cx).content_header::frame {
                 text_color: $cx.theme().muted_foreground;
             } [
-                $header,
-                ..$expanded.then(|| {
-                    let blocks = message.content.iter().enumerate().map(|(block_index, block)| {
-                        self.render_block(format!("{id}-{block_index}"), block, index, cx)
-                    }).collect::<Vec<_>>();
-                    gds_uim::el! {
-                        #div {
-                            ml_1p5;
-                            pl_3p5;
-                            pt_1;
-                            pb_3;
-                            border_l_1;
-                            border_color: $cx.theme().border;
-                            flex;
-                            flex_col;
-                            gap_2;
-                        } [..blocks, $self.render_content_actions(id, id, index, cx)]
-                    }
-                }),
+                header,
+                @if (expanded)
+                    .div {
+                        ml_1p5;
+                        pl_3p5;
+                        pt_1;
+                        pb_3;
+                        border_l_1;
+                        border_color: $cx.theme().border;
+                        flex;
+                        flex_col;
+                        gap_2;
+                    } [
+                        ..$message.content.iter().enumerate().map(|(block_index, block)| {
+                            self.render_block(format!("{id}-{block_index}"), block, index, cx)
+                        }).collect::<Vec<_>>(),
+                        $self.render_content_actions(id, id, index, cx),
+                    ],
+                @end,
             ]
         }
         .into_any_element()

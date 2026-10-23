@@ -1,6 +1,11 @@
 use super::*;
-use crate::ui::{Button, icon_action, session_status, time};
+use crate::{
+    agents::icon::AgentIcon,
+    i18n::tr,
+    ui::{self, Button, feedback, icon_action, session_status, time},
+};
 use bas::model::Timestamp;
+use gds_uim::el;
 use gpui_kit::{
     AnyElement, Render, TestSupportExt,
     assets::IconName,
@@ -22,15 +27,15 @@ const AGENT_WIDTH: f32 = 184.;
 
 impl Browser {
     fn progress(&self, id: &'static str, message: &str, cx: &App) -> AnyElement {
-        gds_uim::el! { #div {
-            id: id; test_support; flex; items_center; gap_2; py_3;
+        el! { .div {
+            # id; test_support; flex; items_center; gap_2; py_3;
             role: gpui_kit::Role::Status; aria_label: $message.to_owned();
             text_color: $cx.theme().muted_foreground;
         } [
-            #div {
-                id: $format!("{id}-spinner"); test_support; flex; flex_shrink_0; size: crate::ui::ICON.px;
+            .div {
+                # format!("{id}-spinner"); test_support; flex; flex_shrink_0; size: ui::ICON.px;
             } [
-                Spinner { icon: IconName::LoaderCircle; with_size: crate::ui::ICON.px; color: $cx.theme().primary; },
+                .Spinner::new { icon: IconName::LoaderCircle; with_size: ui::ICON.px; color: $cx.theme().primary; },
             ],
             $message.to_owned(),
         ] }.into_any_element()
@@ -40,9 +45,9 @@ impl Browser {
         let artwork = crate::agents::metadata::entity(cx)
             .and_then(|metadata| metadata.read(cx).icon(&self.server, id))
             .unwrap_or_default();
-        gds_uim::el! {
-            crate::agents::icon::AgentIcon($format!("history-agent-icon-{id}"), artwork) {
-                size: crate::ui::ICON.px;
+        el! {
+            (format!("history-agent-icon-{id}"), artwork).AgentIcon::new {
+                size: ui::ICON.px;
             }
         }
         .into_any_element()
@@ -52,34 +57,34 @@ impl Browser {
         let agents = self.agents.iter().enumerate().map(|(index, agent)| {
             let id = agent.id.clone();
             let title = id.clone();
-            gds_uim::el! { Button($format!("agent-history-filter-{index}")) {
+            el! { format!("agent-history-filter-{index}").Button::new {
                 ghost; small; w_full; selected: $self.agent.as_ref() == Some(&id);
-                accessibility_label: $id.clone(); tooltip: $id.clone();
+                accessibility_label: ~id; tooltip: ~id;
                 on_click: $cx.listener(move |this, _, _, cx| this.select_agent(Some(id.clone()), cx));
             } [
                 $self.agent_icon(&title, cx),
-                #div { flex_1; min_w_0; text_left; truncate; text_size: $crate::ui::SMALL; } [$title],
+                .div { flex_1; min_w_0; text_left; truncate; text_size: ui::SMALL; } [title],
             ] }
         }).collect::<Vec<_>>();
-        gds_uim::el! { #div {
-            id: "agent-history-agents"; test_support; w: AGENT_WIDTH.px; h_full;
+        el! { .div {
+            # "agent-history-agents"; test_support; w: AGENT_WIDTH.px; h_full;
             flex; flex_col; flex_shrink_0; gap_1; p_3;
             bg: $cx.theme().sidebar; border_r_1; border_color: $cx.theme().border;
         } [
-            #div { text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground; pb_2; } [
-                $crate::i18n::tr!("agent-history-agent-filter"),
+            .div { text_size: ui::SMALL; text_color: $cx.theme().muted_foreground; pb_2; } [
+                tr!("agent-history-agent-filter"),
             ],
-            Button("agent-history-all-agents") {
+            "agent-history-all-agents".Button::new {
                 ghost; small; w_full;
-                accessibility_label: $crate::i18n::tr!("agent-history-all-agents"); selected: $self.agent.is_none();
+                accessibility_label: tr!("agent-history-all-agents"); selected: $self.agent.is_none();
                 on_click: $cx.listener(|this, _, _, cx| this.select_agent(None, cx));
             } [
-                Icon(IconName::Bot) { size: crate::ui::ICON.px; },
-                #div { flex_1; min_w_0; text_left; truncate; text_size: $crate::ui::SMALL; } [
-                    $crate::i18n::tr!("agent-history-all-agents"),
+                IconName::Bot.Icon::new { size: ui::ICON.px; },
+                .div { flex_1; min_w_0; text_left; truncate; text_size: ui::SMALL; } [
+                    tr!("agent-history-all-agents"),
                 ],
             ],
-            #div { id: "agent-history-agent-list"; flex_1; min_h_0; overflow_y_scroll; } [..agents],
+            .div { # "agent-history-agent-list"; flex_1; min_h_0; overflow_y_scroll; } [..agents],
         ] }.into_any_element()
     }
 
@@ -89,22 +94,22 @@ impl Browser {
         let hint = selected
             .as_ref()
             .map(|cwd| cwd.display().to_string())
-            .unwrap_or_else(|| crate::i18n::tr!("agent-history-all-workspaces").into());
+            .unwrap_or_else(|| tr!("agent-history-all-workspaces").into());
         let owner = cx.entity().downgrade();
         let label = hint.clone();
-        let button = gds_uim::el! { Button("agent-history-workspace-filter") {
+        let button = el! { "agent-history-workspace-filter".Button::new {
             small; ghost; w_full; min_w_0;
-            @$(selected.is_some()) => { icon: IconName::Folder; };
-            tooltip: hint; accessibility_label: $crate::i18n::tr!("agent-history-workspace-filter");
+            @if (selected.is_some()) icon: IconName::Folder; @end;
+            tooltip: hint; accessibility_label: tr!("agent-history-workspace-filter");
         } [
-            #div { flex_1; min_w_0; truncate; } [$label],
-            Icon(IconName::ChevronDown) { xsmall; },
+            .div { flex_1; min_w_0; truncate; } [label],
+            IconName::ChevronDown.Icon::new { xsmall; },
         ] };
-        gds_uim::el! { $button {
+        el! { button {
             dropdown_menu: $move |menu, _, _| {
                 let all_owner = owner.clone();
-                let mut menu = crate::ui::menu(menu).item(
-                    PopupMenuItem::new(crate::i18n::tr!("agent-history-all-workspaces"))
+                let mut menu = ui::menu(menu).item(
+                    PopupMenuItem::new(tr!("agent-history-all-workspaces"))
                         .checked(selected.is_none())
                         .on_click(move |_, _, cx| { let _ = all_owner.update(cx, |this, cx| this.select_workspace(None, cx)); }),
                 );
@@ -165,17 +170,17 @@ impl Browser {
                 let entries = rows.into_iter().enumerate().map(|(index, info)| {
                     self.row(format!("{agent_index}-{index}"), &agent.id, info, page.expect("rows have page"), cx)
                 }).collect::<Vec<_>>();
-                Some(gds_uim::el! { #div {
-                    id: $format!("agent-history-group-{agent_index}"); test_support; flex; flex_col; gap_2; mb_4;
+                Some(el! { .div {
+                    # format!("agent-history-group-{agent_index}"); test_support; flex; flex_col; gap_2; mb_4;
                 } [
-                    #div { flex; items_center; gap_2; py_2; } [
+                    .div { flex; items_center; gap_2; py_2; } [
                         $self.agent_icon(&agent.id, cx),
-                        #div { id: $format!("agent-history-group-name-{agent_index}"); test_support; min_w_0; truncate; } [$agent.id.clone()],
-                        #div { id: $format!("agent-history-group-count-{agent_index}"); test_support; text_color: $cx.theme().muted_foreground; } [$count.to_string()],
+                        .div { # format!("agent-history-group-name-{agent_index}"); test_support; min_w_0; truncate; } [~$(agent.id)],
+                        .div { # format!("agent-history-group-count-{agent_index}"); test_support; text_color: $cx.theme().muted_foreground; } [$count.to_string()],
                     ],
-                    ..$error.map(|error| crate::ui::feedback(
-                        format!("agent-history-error-{agent_index}"), error.clone(), cx.theme().danger,
-                    )),
+                    @if (let Some(error) = error)
+                        (format!("agent-history-error-{agent_index}"), ~error, $cx.theme().danger).feedback,
+                    @end,
                     ..entries,
                 ] }.into_any_element())
             }).collect()
@@ -204,11 +209,11 @@ impl Browser {
         let busy = self.operation.is_some() || self.connection_error.is_some();
         let primary = self.primary_action(agent, info);
         let open_label = if imported.is_some() {
-            crate::i18n::tr!("agent-history-open")
+            tr!("agent-history-open")
         } else if capabilities.load_session {
-            crate::i18n::tr!("agent-history-import")
+            tr!("agent-history-import")
         } else {
-            crate::i18n::tr!("agent-history-resume")
+            tr!("agent-history-resume")
         };
         let primary_target = target.clone();
         let close_target = target.clone();
@@ -223,19 +228,19 @@ impl Browser {
             PrimaryAction::Restart => (
                 "restart",
                 IconName::Play,
-                crate::i18n::tr!("agent-session-restart"),
+                tr!("agent-session-restart"),
                 if resumable {
-                    crate::i18n::tr!("agent-session-restart-help")
+                    tr!("agent-session-restart-help")
                 } else {
-                    crate::i18n::tr!("agent-history-cannot-import")
+                    tr!("agent-history-cannot-import")
                 },
                 resumable,
             ),
             PrimaryAction::Restore => (
                 "restore",
                 IconName::ArchiveRestore,
-                crate::i18n::tr!("agent-history-restore"),
-                crate::i18n::tr!("agent-history-restore-help"),
+                tr!("agent-history-restore"),
+                tr!("agent-history-restore-help"),
                 true,
             ),
         };
@@ -248,23 +253,23 @@ impl Browser {
             }
             _ => false,
         };
-        let close = active.then(|| gds_uim::el! {
-            #icon_action($format!("agent-history-close-{key}"), IconName::Square, $crate::i18n::tr!("agent-session-close")) {
+        let close = active.then(|| el! {
+            (format!("agent-history-close-{key}"), IconName::Square, tr!("agent-session-close")).icon_action {
                 disabled: busy;
                 on_click: $cx.listener(move |this, _, _, cx| this.close(close_target.clone(), cx));
             }
         });
-        let delete = capabilities.session_capabilities.delete.is_some().then(|| gds_uim::el! {
-            #icon_action($format!("agent-history-delete-{key}"), IconName::Trash, $crate::i18n::tr!("agent-history-delete")) {
+        let delete = capabilities.session_capabilities.delete.is_some().then(|| el! {
+            (format!("agent-history-delete-{key}"), IconName::Trash, tr!("agent-history-delete")).icon_action {
                 disabled: $busy || active;
-                tooltip: $crate::i18n::tr!("agent-history-delete-help");
+                tooltip: tr!("agent-history-delete-help");
                 on_click: $cx.listener(move |this, _, _, cx| this.delete(target.clone(), cx));
             }
         });
-        gds_uim::el! { #div {
-            id: $format!("agent-history-actions-{key}"); test_support; flex; items_center; gap_2; flex_shrink_0;
+        el! { .div {
+            # format!("agent-history-actions-{key}"); test_support; flex; items_center; gap_2; flex_shrink_0;
         } [
-            #icon_action($format!("agent-history-{suffix}-{key}"), icon, label) {
+            (format!("agent-history-{suffix}-{key}"), icon, label).icon_action {
                 tooltip: hint;
                 disabled: $busy || !allowed; loading: loading;
                 on_click: $cx.listener(move |this, _, _, cx| this.activate(primary_target.clone(), primary, cx));
@@ -281,13 +286,16 @@ impl Browser {
         cx: &App,
     ) -> Option<AnyElement> {
         self.imported(agent, info).map(|session| {
-            gds_uim::el! { #div { flex; items_center; flex_shrink_0; } [
+            el! { .div { flex; items_center; flex_shrink_0; } [
                 $session_status::Status::for_snapshot(session).render(
                     format!("agent-history-status-{key}"),
                     format!("agent-history-indicator-{key}"), cx,
                 ),
-                ..$session.meta.archived.then(|| session_status::archived(format!("agent-history-archived-{key}"))),
-            ] }.into_any_element()
+                @if (session.meta.archived)
+                    format!("agent-history-archived-{key}").session_status::archived,
+                @end,
+            ] }
+            .into_any_element()
         })
     }
 
@@ -306,50 +314,50 @@ impl Browser {
         let at = info.updated_at.as_deref().and_then(time::parse_rfc3339);
         let time = at
             .map(|at| time::recent_time(at, Timestamp::now()))
-            .unwrap_or_else(|| crate::i18n::tr!("time-unknown").into());
+            .unwrap_or_else(|| tr!("time-unknown").into());
         let raw_time = info
             .updated_at
             .clone()
-            .unwrap_or_else(|| crate::i18n::tr!("time-unknown").into());
+            .unwrap_or_else(|| tr!("time-unknown").into());
         let title = info
             .title
             .as_deref()
             .filter(|title| !title.trim().is_empty())
-            .unwrap_or(crate::i18n::tr!("agent-history-untitled"))
+            .unwrap_or(tr!("agent-history-untitled"))
             .to_owned();
         let roots_warning = (!info.additional_directories.is_empty())
-            .then(|| crate::i18n::tr!("agent-history-roots-unsupported"));
+            .then(|| tr!("agent-history-roots-unsupported"));
         let restore_warning = (!resumable && self.imported(agent, info).is_none())
-            .then(|| crate::i18n::tr!("agent-history-cannot-import"));
+            .then(|| tr!("agent-history-cannot-import"));
         let actions = self.row_actions(key.clone(), agent, info, page, cx);
-        gds_uim::el! { #div {
-            id: $format!("agent-history-row-{key}"); test_support;
+        el! { .div {
+            # format!("agent-history-row-{key}"); test_support;
             flex; flex_col; gap_2; p_3; rounded_md; border_1; border_color: $cx.theme().border;
         } [
-            #div { flex; items_center; gap_3; } [
-                #div { id: $format!("agent-history-title-{key}"); test_support; role: gpui_kit::Role::Label; aria_label: $title.clone(); flex_1; min_w_0; truncate; } [$title],
+            .div { flex; items_center; gap_3; } [
+                .div { # format!("agent-history-title-{key}"); test_support; role: gpui_kit::Role::Label; aria_label: ~title; flex_1; min_w_0; truncate; } [title],
                 ..status,
-                #div {
-                    id: $format!("agent-history-time-{key}"); test_support;
-                    text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
-                    hoverable_tooltip: $move |window, cx| crate::ui::tooltip::view(raw_time.clone(), window, cx);
-                } [$time],
+                .div {
+                    # format!("agent-history-time-{key}"); test_support;
+                    text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
+                    hoverable_tooltip: move (window, cx) => (~raw_time, window, cx).ui::tooltip::view;
+                } [time],
             ],
-            ..$roots_warning.map(|message| crate::ui::feedback(
+            ..$roots_warning.map(|message| feedback(
                 format!("agent-history-roots-warning-{key}"), message, cx.theme().foreground,
             )),
-            ..$restore_warning.map(|message| crate::ui::feedback(
+            ..$restore_warning.map(|message| feedback(
                 format!("agent-history-restore-warning-{key}"), message, cx.theme().foreground,
             )),
-            #div { flex; items_center; gap_2; } [
-                #div {
-                    id: $format!("agent-history-directory-{key}"); test_support;
-                    flex; items_center; gap_2; flex_1; min_w_0; text_size: $crate::ui::SMALL; text_color: $cx.theme().muted_foreground;
+            .div { flex; items_center; gap_2; } [
+                .div {
+                    # format!("agent-history-directory-{key}"); test_support;
+                    flex; items_center; gap_2; flex_1; min_w_0; text_size: ui::SMALL; text_color: $cx.theme().muted_foreground;
                 } [
-                    Icon(IconName::Folder) { xsmall; flex_shrink_0; },
-                    #div { min_w_0; truncate; } [$info.cwd.display().to_string()],
+                    IconName::Folder.Icon::new { xsmall; flex_shrink_0; },
+                    .div { min_w_0; truncate; } [$info.cwd.display().to_string()],
                 ],
-                $actions,
+                actions,
             ],
         ] }.into_any_element()
     }
@@ -361,44 +369,44 @@ impl Render for Browser {
         let empty =
             (groups.is_empty() && !self.loading() && self.connection_error.is_none()).then(|| {
                 if self.agents.is_empty() {
-                    crate::i18n::tr!("agent-history-no-agents")
+                    tr!("agent-history-no-agents")
                 } else {
-                    crate::i18n::tr!("agent-history-empty")
+                    tr!("agent-history-empty")
                 }
             });
         let pending = self
             .operation
             .as_ref()
-            .map(|_| crate::i18n::tr!("agent-history-operating"));
-        gds_uim::el! { #div {
-            id: "agent-history"; test_support; size_full; flex; text_size: $crate::ui::SMALL;
+            .map(|_| tr!("agent-history-operating"));
+        el! { .div {
+            # "agent-history"; test_support; size_full; flex; text_size: ui::SMALL;
         } [
             $self.agent_filters(cx),
-            #div { flex_1; min_w_0; min_h_0; flex; flex_col; p_4; gap_3; } [
-                #div { flex; items_center; gap_2; } [
-                    #div { flex_shrink_0; } [$crate::i18n::tr!("agent-history-workspace-filter")],
-                    #div { flex_1; min_w_0; } [$self.workspace_filter(cx)],
-                    #icon_action("agent-history-refresh", IconName::RefreshCw, $crate::i18n::tr!("agent-history-refresh")) {
+            .div { flex_1; min_w_0; min_h_0; flex; flex_col; p_4; gap_3; } [
+                .div { flex; items_center; gap_2; } [
+                    .div { flex_shrink_0; } [tr!("agent-history-workspace-filter")],
+                    .div { flex_1; min_w_0; } [$self.workspace_filter(cx)],
+                    ("agent-history-refresh", IconName::RefreshCw, tr!("agent-history-refresh")).icon_action {
                         disabled: $self.operation.is_some(); loading: $self.loading();
                         on_click: $cx.listener(|this, _, _, cx| this.reload(cx));
                     },
                 ],
-                $crate::ui::input::placeholder(&self.search, Input::new(&self.search).small().cleanable(true)),
-                #div { text_color: $cx.theme().muted_foreground; } [$crate::i18n::tr!("agent-history-help")],
+                $ui::input::placeholder(&self.search, Input::new(&self.search).small().cleanable(true)),
+                .div { text_color: $cx.theme().muted_foreground; } [tr!("agent-history-help")],
                 ..$pending.map(|message| self.progress(
                     "agent-history-pending", message, cx,
                 )),
-                ..$self.connection_error.as_ref().map(|error| crate::ui::feedback(
+                ..$self.connection_error.as_ref().map(|error| feedback(
                     "agent-history-connection-error", error.clone(), cx.theme().danger,
                 )),
-                ..$self.notice.clone().map(|message| crate::ui::feedback(
+                ..$self.notice.clone().map(|message| feedback(
                     "agent-history-notice", message, cx.theme().foreground,
                 )),
-                #div { id: "agent-history-rows"; flex_1; min_h_0; overflow_y_scroll; } [
-                    ..$self.loading().then(|| self.progress(
-                        "agent-history-loading", crate::i18n::tr!("agent-history-loading"), cx,
-                    )),
-                    ..$empty.map(|message| crate::ui::feedback("agent-history-empty", message, cx.theme().foreground)),
+                .div { # "agent-history-rows"; flex_1; min_h_0; overflow_y_scroll; } [
+                    @if (self.loading())
+                        $self.progress("agent-history-loading", tr!("agent-history-loading"), cx),
+                    @end,
+                    ..$empty.map(|message| feedback("agent-history-empty", message, cx.theme().foreground)),
                     ..groups,
                 ],
             ],
