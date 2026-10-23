@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use crate::{
     i18n::tr,
-    ui::{self, Button},
+    ui::{self, Button, action_button},
 };
 use gds_uim::el;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -22,6 +22,7 @@ mod agents;
 mod appearance;
 mod connections;
 mod form;
+mod search;
 pub(crate) mod window;
 
 const SAVE_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
@@ -36,11 +37,6 @@ fn feedback(
     color: gpui_kit::Hsla,
 ) -> crate::ui::Feedback {
     crate::ui::feedback(id, text, color).without_copy()
-}
-
-// Keep actions distinct from the ghost navigation items, using upstream state styling.
-fn action_button(id: impl Into<gpui_kit::ElementId>) -> Button {
-    crate::ui::action_button(id)
 }
 
 fn navigation_button(
@@ -68,8 +64,9 @@ fn navigation_button(
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 enum Category {
+    #[default]
     Appearance,
     Sessions,
     Connections,
@@ -124,64 +121,69 @@ impl Category {
     }
 
     fn title(self) -> &'static str {
+        self.section().title()
+    }
+
+    fn section(self) -> search::Section {
+        use search::Section;
         match self {
-            Self::Appearance => crate::i18n::tr!("settings-appearance"),
-            Self::Sessions => crate::i18n::tr!("settings-sessions"),
-            Self::Connections => crate::i18n::tr!("settings-connections"),
-            Self::Agents => crate::i18n::tr!("settings-agents"),
-            Self::SessionManagement => crate::i18n::tr!("settings-session-management"),
+            Self::Appearance => Section::heading("settings-appearance"),
+            Self::Sessions => Section::new("settings-sessions", "settings-sessions-help"),
+            Self::Connections => Section::new("settings-connections", "connections-description"),
+            Self::Agents => Section::new("settings-agents", "settings-backend-description"),
+            Self::SessionManagement => {
+                Section::new("settings-session-management", "acp-policy-description")
+            }
         }
     }
 
-    fn for_query(query: &str) -> Self {
-        let query = query.trim().to_lowercase();
-        if query == "acp"
-            || [
-                "session management",
-                "会话管理",
-                "pool",
-                "idle",
-                "池",
-                "回收",
-                "预热",
-            ]
-            .iter()
-            .any(|word| query.contains(word))
-        {
-            return Self::SessionManagement;
-        }
-        if !query.is_empty() && appearance::AppearancePage::matches_session_query(&query) {
-            return Self::Sessions;
-        }
-        if ["connection", "server", "连接", "服务器", "端点"]
-            .iter()
-            .any(|word| query.contains(word))
-        {
-            return Self::Connections;
-        }
-        let agents = query.split_whitespace().any(|word| {
-            matches!(
-                word,
-                "agent" | "agents" | "acp" | "codex" | "opencode" | "pi"
-            )
-        }) || [
-            "智能体",
-            "服务",
-            "后端",
-            "命令",
-            "参数",
-            "service",
-            "backend",
-            "command",
-            "arguments",
+    fn score(self, query: &search::Query) -> Option<search::Match> {
+        let fields = match self {
+            Self::Appearance => appearance::AppearancePage::search(query),
+            Self::Sessions => appearance::AppearancePage::search_sessions(query),
+            Self::Connections => connections::search(query),
+            Self::Agents => agents::search(query),
+            Self::SessionManagement => acp::search(query),
+        };
+        self.section().score(query).max(fields)
+    }
+
+    fn for_query(query: &search::Query) -> Option<Self> {
+        // Exact titles beat title fragments, which beat help text. Equal matches retain
+        // the established policy → conversation → connection → agent → appearance order.
+        [
+            Self::SessionManagement,
+            Self::Sessions,
+            Self::Connections,
+            Self::Agents,
+            Self::Appearance,
         ]
-        .iter()
-        .any(|word| query.contains(word));
-        if agents {
-            Self::Agents
-        } else {
-            Self::Appearance
+        .into_iter()
+        .filter_map(|category| category.score(query).map(|score| (category, score)))
+        .fold(None, |best, candidate| match best {
+            Some((_, score)) if score >= candidate.1 => best,
+            _ => Some(candidate),
+        })
+        .map(|(category, _)| category)
+    }
+
+    fn searched(self, query: &search::Query, agent_match: Option<search::Match>) -> Self {
+        if query.is_empty() {
+            return self;
         }
+        let category = Self::for_query(query);
+        // Actual agent names can beat mentions in help, but not a stronger setting
+        // title. Static metadata wins ties, so ACP continues to open session policy.
+        if agent_match > category.and_then(|category| category.score(query)) {
+            return Self::Agents;
+        }
+        category.unwrap_or_else(|| {
+            if self == Self::Agents {
+                self
+            } else {
+                Self::default()
+            }
+        })
     }
 }
 
@@ -238,7 +240,7 @@ impl Settings {
             acp,
             _acp_subscription: acp_subscription,
             connection_message: String::new(),
-            category: Category::Appearance,
+            category: Category::default(),
             appearance_group: None,
             agent_section: None,
             expanded: Scope::ALL
@@ -258,16 +260,11 @@ impl Settings {
     ) {
         if matches!(event, InputEvent::Change) {
             let query = self.search.read(cx).value().to_string();
-            if !query.trim().is_empty() {
-                let category = Category::for_query(&query);
-                if self.category != Category::Agents
-                    || matches!(
-                        category,
-                        Category::Sessions | Category::Connections | Category::SessionManagement
-                    )
-                {
-                    self.category = category;
-                }
+            let search = search::Query::new(&query);
+            if !search.is_empty() {
+                self.category = self
+                    .category
+                    .searched(&search, self.agents.read(cx).search_entries(&search));
                 self.expanded.insert(self.category);
                 if self.category == Category::SessionManagement {
                     self.acp
@@ -486,7 +483,7 @@ impl Settings {
                     @case (Category::Appearance | Category::Sessions)
                         tr!("settings-frontend-description") { to_owned },
                     @case (Category::Connections)
-                        tr!("connections-description") { to_owned },
+                        $Category::Connections.section().help().to_owned(),
                     @case (Category::Agents | Category::SessionManagement)
                         tr!("connections-switch-description") { to_owned },
                     @end,
@@ -639,7 +636,7 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let expanded = self.expanded.contains(&category);
-        let searching = !self.search.read(cx).value().is_empty();
+        let searching = !self.search.read(cx).value().trim().is_empty();
         let selected = self.category == category;
         let pointing_at_section = match category {
             Category::Appearance => self.appearance_group.is_some(),

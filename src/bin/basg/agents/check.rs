@@ -1,7 +1,7 @@
-//! The local daemon, not the GUI's PATH, determines backend availability.
+//! The selected daemon, not the GUI's PATH, determines backend availability.
 
 use bas::service::tls::ConnectionOptions as Target;
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 use bas::{
     config::AgentSpec,
@@ -49,17 +49,13 @@ impl Service {
         &self,
         spec: AgentSpec,
         connect: bool,
-        settings_path: PathBuf,
     ) -> impl Future<Output = Status> + use<> {
         let server = self.server.clone();
         let (send, receive) = futures::channel::oneshot::channel();
         let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
-            let result = tokio::time::timeout(
-                REQUEST_TIMEOUT,
-                request(server, spec, connect, settings_path),
-            )
-            .await
-            .unwrap_or_else(|_| Err(crate::i18n::tr!("agent-check-timeout").into()));
+            let result = tokio::time::timeout(REQUEST_TIMEOUT, request(server, spec, connect))
+                .await
+                .unwrap_or_else(|_| Err(crate::i18n::tr!("agent-check-timeout").into()));
             let _ = send.send(result.unwrap_or_else(Status::Failed));
         }));
         async move {
@@ -72,11 +68,8 @@ impl Service {
 }
 
 /// # Errors
-/// Rejects incompatible daemons and transport failures; RPCs validate the expected saved spec.
-pub(crate) async fn verified_client(
-    server: Target,
-    _settings_path: &std::path::Path,
-) -> Result<Client, String> {
+/// Reports connection failures; request RPCs validate compatibility and the expected saved spec.
+pub(crate) async fn connect_client(server: Target) -> Result<Client, String> {
     let client = Client::connect_options(&server)
         .await
         .map_err(|_| crate::i18n::tr!("service-connect-failed", server = (server).to_string()))?;
@@ -84,14 +77,9 @@ pub(crate) async fn verified_client(
 }
 
 /// # Errors
-/// Rejects mismatched daemon settings, stale specs and ACP transport failures.
-async fn request(
-    server: Target,
-    spec: AgentSpec,
-    connect: bool,
-    settings_path: PathBuf,
-) -> Result<Status, String> {
-    let mut client = verified_client(server, &settings_path).await?;
+/// Rejects stale specs, incompatible daemons and ACP transport failures.
+async fn request(server: Target, spec: AgentSpec, connect: bool) -> Result<Status, String> {
+    let mut client = connect_client(server).await?;
     let expected_spec_json = serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
     for attempt in 0..RELOAD_ATTEMPTS {
         let result = client
@@ -111,7 +99,7 @@ async fn request(
                     tonic::Code::FailedPrecondition | tonic::Code::NotFound
                 ) && attempt + 1 < RELOAD_ATTEMPTS =>
             {
-                // Give the daemon's configuration watcher time to apply a just-saved path.
+                // Give the daemon's configuration watcher time to apply a just-saved registration.
                 tokio::time::sleep(RELOAD_INTERVAL).await;
             }
             Err(error) => {

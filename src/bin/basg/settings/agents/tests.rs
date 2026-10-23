@@ -6,6 +6,73 @@ pub(super) fn init(cx: &mut App) {
     crate::theme::init_default(cx);
 }
 
+#[test]
+fn form_projection_preserves_command_boundaries_and_unedited_metadata() {
+    let mut spec = AgentSpec::acp(
+        "custom",
+        Command::new(
+            "/agent with spaces",
+            ["", "two words", "a\"b", "c\\d"].map(str::to_owned),
+        ),
+    );
+    spec.description = "  keep this note\n".into();
+    spec.cancellation_grace = Duration::from_millis(1234);
+    let form = Form::from_spec(&spec);
+    assert_eq!(form.id, "custom");
+    assert_eq!(form.program, "/agent with spaces");
+    assert_eq!(form.args, r#"["","two words","a\"b","c\\d"]"#);
+    assert_eq!(form.description, spec.description);
+    assert_eq!(form.grace, "1234");
+
+    let embedded = AgentSpec::embedded();
+    let form = Form::from_spec(&embedded);
+    assert_eq!(form.id, embedded.id.to_string());
+    assert!(form.program.is_empty());
+    assert_eq!(form.args, "[]");
+    assert_eq!(form.description, embedded.description);
+    assert_eq!(
+        form.grace,
+        embedded.cancellation_grace.as_millis().to_string()
+    );
+}
+
+#[gpui_kit::test]
+fn settings_search_uses_configured_agent_display_metadata(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("settings");
+    let store = Store::at(directory.path().join("settings.json"));
+    let mut spec = AgentSpec::acp("company-assistant", Command::new("/fixture/agent", []));
+    spec.description = "Private research assistant".into();
+    let mut document = store.load().expect("document");
+    store
+        .save_agents(&mut document, vec![spec.into()])
+        .expect("saved agent");
+    cx.update(init);
+    let window = cx.open_window(size(px(760.), px(680.)), |window, cx| {
+        let agents = cx.new(|cx| Agents::new(store, window, cx));
+        let page = agents.read(cx);
+        assert!(
+            page.sections()
+                .iter()
+                .any(|section| section.title == "company-assistant")
+        );
+        assert_eq!(
+            page.search_entries(&search::Query::new("COMPANY-ASSISTANT")),
+            Some(search::Match::ExactTitle),
+        );
+        assert_eq!(
+            page.search_entries(&search::Query::new("private research")),
+            Some(search::Match::Help),
+        );
+        assert_eq!(
+            page.search_entries(&search::Query::new("unknown-brand")),
+            None
+        );
+        gpui_kit::component::Root::new(agents, window, cx)
+    });
+    cx.update_window(window.into(), |_, window, cx| window.render_frame(cx))
+        .expect("agent settings page");
+}
+
 #[gpui_kit::test]
 fn configuration_requests_disable_conflicting_editor_actions(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().expect("settings");

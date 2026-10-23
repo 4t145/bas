@@ -12,6 +12,8 @@ pub(super) enum Field {
 }
 
 impl Field {
+    pub(super) const ALL: [Self; 3] = [Self::Ca, Self::Certificate, Self::Key];
+
     pub(super) fn id(self) -> &'static str {
         match self {
             Self::Ca => "connection-tls-ca",
@@ -21,10 +23,14 @@ impl Field {
     }
 
     pub(super) fn label(self) -> &'static str {
+        self.section().title()
+    }
+
+    pub(super) fn section(self) -> Section {
         match self {
-            Self::Ca => crate::i18n::tr!("connections-tls-ca"),
-            Self::Certificate => crate::i18n::tr!("connections-tls-certificate"),
-            Self::Key => crate::i18n::tr!("connections-tls-key"),
+            Self::Ca => Section::heading("connections-tls-ca"),
+            Self::Certificate => Section::heading("connections-tls-certificate"),
+            Self::Key => Section::heading("connections-tls-key"),
         }
     }
 

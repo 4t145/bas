@@ -48,6 +48,17 @@ impl Catalog {
         Self { bundle, labels }
     }
 
+    fn text<'a>(&'a self, fallback: &'a Self, id: &'static str) -> &'a str {
+        self.labels
+            .get(id)
+            .or_else(|| fallback.labels.get(id))
+            .map(String::as_str)
+            .unwrap_or_else(|| {
+                tracing::error!(id, "missing interface label");
+                id
+            })
+    }
+
     fn format(&self, id: &str, args: &FluentArgs<'_>) -> Option<String> {
         let pattern = self.bundle.get_message(id)?.value()?;
         let mut errors = Vec::new();
@@ -91,15 +102,11 @@ fn catalog(language: Language) -> &'static Catalog {
 }
 
 pub(crate) fn text(id: &'static str) -> &'static str {
-    catalog(language())
-        .labels
-        .get(id)
-        .or_else(|| ZH.labels.get(id))
-        .map(String::as_str)
-        .unwrap_or_else(|| {
-            tracing::error!(id, "missing interface label");
-            id
-        })
+    text_in(language(), id)
+}
+
+pub(crate) fn text_in(language: Language, id: &'static str) -> &'static str {
+    catalog(language).text(&ZH, id)
 }
 
 pub(crate) fn format(id: &'static str, args: FluentArgs<'_>) -> String {

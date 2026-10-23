@@ -1,5 +1,26 @@
 # 原版 UI 依赖基线
 
+## 上游约束：TextView 图片引用与资源归属
+
+`gpui-base 0.6.6` 的公开 TextView API 只能提供源文本，不能枚举当前已经解析、
+实际显示的图片。其私有 HTML 规范化会改变 `img src`，而 `data:` 图片直接成为
+`ImageSource::Image`，不经过应用的 `ImageCache::load`。Bas 当前保留原始引用与
+规范化引用，是为了覆盖实际渲染请求；不能仅删除这段兼容处理。
+
+使用原版 TextView 和记录请求的 ImageCache，实际 headless 渲染复现：
+
+- `images/shot  one.png` 的两个空格被改成一个空格，请求了不同的资源。
+- HTML 实体引用被再次解码，实际请求并不总是源 HTML 一次解析后的地址。
+- `data:` PNG 实际占据图片布局并进入原生 asset cache，但应用 ImageCache
+  没有收到该图片请求；因此仅跟踪 load 不能建立完整的文档资源归属。
+
+上游来源为 [gpui-kit 的固定发布提交](https://github.com/longbridge/gpui-kit/tree/9765ae2c9a5eccfa13891248a445991e6f6a09d8/crates/base)。
+彻底移除 Bas 的镜像解析需要上游公开当前已解析内容的真实图片来源（包括内嵌
+Image，而不只是 URI），并保持 HTML 属性原有语义。修改显示源文本以注入私有 URI
+会影响复制与选区，不能作为无行为变化的替代。
+该项保留为上游阻塞，不修改 vendor/cache、不削弱原断言，也不将临时复现的失败
+断言改成要求维持错误行为的回归测试。
+
 ## 完整回合导航与标记书签
 
 用户复现：首次打开长会话时，侧边标记只包含已加载的最近正文，必须向上翻页才能知道
@@ -877,6 +898,16 @@ Agent 的 Form / URL Elicitation。会话内只提供设置页入口，用户需
 按进程结果与重新检查结果判断完成。参考 Zed v1.23.2 的交互行为，第一方实现
 使用公开 ACP / GPUI API，不复制 Zed GPL 组件。回归覆盖原始字段、历史参数、
 未知方法、交互取消、URL 完成及迟到回执。
+
+认证兼容规则不应依赖 Agent 自报的名字、版本或认证方法 ID。Qwen 的
+[`v0.25.0`](https://github.com/QwenLM/qwen-code/blob/v0.25.0/packages/cli/src/acp-integration/authMethods.ts)
+与[后续提交](https://github.com/QwenLM/qwen-code/blob/24dd6ddfd4b21e290a8fe23bbfc8d8b4a0ac715c/packages/cli/src/acp-integration/authMethods.ts)
+仍使用相同的 `_meta.type = "terminal"` 结构；精确版本门禁会把同一描述格式误判为不可用。
+Bas 将该历史格式作为明确的兼容契约解析：`args` 替换应用参数、`env` 按字面合并，
+格式不能指定另一个 `command`；未知类型和非法参数保持不可执行，标准顶层 `type`
+不会被 `_meta.type` 覆盖。既有 `_meta["terminal-auth"]` 与同 ID 错误描述的
+完整命令关联规则保持不变。此格式并非标准 ACP，允许解析也不授予启动权限：daemon 仍须从当前
+托管安装记录验证 launcher/application 边界，自定义包装命令不能继承该权限。
 
 实现使用共享原始 JSON 正规化层和 daemon 双向认证流，标准 Agent／Terminal、完整
 历史终端命令及经过验证的 Qwen 0.25.0 应用参数分别处理。未知类型保留描述并禁用，

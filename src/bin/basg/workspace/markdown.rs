@@ -14,6 +14,22 @@ pub(super) struct Document {
     _subscription: Subscription,
 }
 
+impl Document {
+    fn set_source(&mut self, text: String, cx: &mut App) {
+        if self.source == text {
+            return;
+        }
+        self.state.update(cx, |state, cx| {
+            if let Some(suffix) = text.strip_prefix(&self.source) {
+                state.push_str(suffix, cx);
+            } else {
+                state.set_text(&text, cx);
+            }
+        });
+        self.source = text;
+    }
+}
+
 impl Workspace {
     pub(super) fn markdown(
         &self,
@@ -48,16 +64,7 @@ impl Workspace {
                 _subscription: subscription,
             }
         });
-        if document.source != text {
-            document.state.update(cx, |state, cx| {
-                if let Some(suffix) = text.strip_prefix(&document.source) {
-                    state.push_str(suffix, cx);
-                } else {
-                    state.set_text(&text, cx);
-                }
-            });
-            document.source = text;
-        }
+        document.set_source(text, cx);
         images::wrap(
             &id,
             &images,
@@ -68,6 +75,19 @@ impl Workspace {
             cx,
         )
     }
+}
+
+/// Keep literal tool output inside one fenced block, even if it contains fences.
+pub(super) fn code_block(language: &str, text: &str) -> String {
+    let fence = "~".repeat(
+        text.split(|ch| ch != '~')
+            .map(str::len)
+            .max()
+            .unwrap_or(0)
+            .max(2)
+            + 1,
+    );
+    format!("{fence}{language}\n{text}\n{fence}")
 }
 
 #[derive(IntoElement)]

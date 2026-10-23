@@ -13,7 +13,33 @@ mod check;
 mod discovery;
 mod transport;
 mod view;
+use super::search::{Match, Query, Section};
 use transport::Transport;
+
+const NAME: Section = Section::heading("connections-name");
+const NOTE: Section = Section::heading("connections-note");
+const TYPE: Section = Section::heading("connections-type");
+const SERVER_NAME: Section = Section::heading("connections-tls-server-name");
+const LIST: Section = Section::heading("connections-list");
+const DISCOVERY: Section = Section::new("connections-discover", "connections-discovery-scope");
+
+pub(super) fn search(query: &Query) -> Option<Match> {
+    [NAME, NOTE, TYPE, SERVER_NAME, LIST, DISCOVERY]
+        .into_iter()
+        .chain(
+            Transport::AVAILABLE
+                .iter()
+                .map(|kind| kind.address_section()),
+        )
+        .chain(certificates::Field::ALL.map(|field| field.section()))
+        .filter_map(|section| section.score_under(query, &[super::Category::Connections.section()]))
+        .chain(
+            Transport::AVAILABLE
+                .iter()
+                .filter_map(|kind| query.score(kind.label(), "")),
+        )
+        .max()
+}
 
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;

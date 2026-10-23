@@ -9,7 +9,6 @@ async fn unreachable_tcp_daemon_reports_connection_failure_not_local_only_capabi
         address.to_string().parse().expect("TCP target"),
         AgentSpec::embedded(),
         false,
-        "/not/a/client/settings/file".into(),
     )
     .await
     .expect_err("connection failure");

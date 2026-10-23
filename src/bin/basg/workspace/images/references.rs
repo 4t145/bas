@@ -65,6 +65,8 @@ fn html_sources(source: &str) -> Vec<String> {
 }
 
 fn retain_minified_source(source: &str, references: &mut HashSet<Resource>) {
+    // TODO: Consume TextView's canonical image references once exposed; these
+    // private minifier rules must otherwise be checked when gpui-base changes.
     // gpui-base's private HTML minifier trims attributes, collapses ASCII
     // whitespace runs, and may emit unquoted values. Retain both the original
     // DOM value and that spelling; parse unquoted values with HTML5, including

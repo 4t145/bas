@@ -85,3 +85,26 @@ fn values_are_data_and_keep_bidi_isolation() {
     assert!(result.contains('\u{2068}'));
     assert!(result.contains('\u{2069}'));
 }
+
+#[test]
+fn static_labels_prefer_requested_catalog_then_chinese_then_message_id() {
+    let requested = Catalog::new("en-US", "shared = Requested\n");
+    let fallback = Catalog::new("zh-CN", "shared = 回退\nonly-fallback = 备用\n");
+    assert_eq!(requested.text(&fallback, "shared"), "Requested");
+    assert_eq!(requested.text(&fallback, "only-fallback"), "备用");
+    assert_eq!(requested.text(&fallback, "unknown-label"), "unknown-label");
+}
+
+#[test]
+fn explicit_locale_labels_do_not_depend_on_the_ui_locale() {
+    assert_eq!(
+        text_in(Language::English, "settings-appearance"),
+        "Appearance"
+    );
+    assert_eq!(text_in(Language::Chinese, "settings-appearance"), "外观");
+    assert_eq!(
+        text_in(Language::English, "settings-appearance"),
+        "Appearance"
+    );
+    assert_eq!(text_in(Language::Chinese, "unknown-label"), "unknown-label");
+}

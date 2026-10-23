@@ -3,6 +3,12 @@
 mod controls;
 mod form;
 mod sessions;
+#[cfg(test)]
+mod tests;
+use super::{
+    Category,
+    search::{Match, Query, Section},
+};
 use crate::{
     i18n::tr,
     theme::{self, preferences::Preferences},
@@ -18,7 +24,7 @@ use gpui_kit::{
     px,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Group {
     Theme,
     Fonts,
@@ -26,19 +32,18 @@ pub(super) enum Group {
 }
 impl Group {
     pub const ALL: [Self; 3] = [Self::Theme, Self::Fonts, Self::Layout];
-    pub fn title(self) -> &'static str {
+    fn section(self) -> Section {
         match self {
-            Self::Theme => crate::i18n::tr!("appearance-theme"),
-            Self::Fonts => crate::i18n::tr!("appearance-fonts"),
-            Self::Layout => crate::i18n::tr!("appearance-layout"),
+            Self::Theme => Section::new("appearance-theme", "appearance-theme-help"),
+            Self::Fonts => Section::new("appearance-fonts", "appearance-fonts-help"),
+            Self::Layout => Section::new("appearance-layout", "appearance-layout-help"),
         }
     }
+    pub fn title(self) -> &'static str {
+        self.section().title()
+    }
     pub fn help(self) -> &'static str {
-        match self {
-            Self::Theme => crate::i18n::tr!("appearance-theme-help"),
-            Self::Fonts => crate::i18n::tr!("appearance-fonts-help"),
-            Self::Layout => crate::i18n::tr!("appearance-layout-help"),
-        }
+        self.section().help()
     }
     /// Navigation entry in the settings sidebar.
     pub fn id(self) -> &'static str {
@@ -65,7 +70,7 @@ impl Group {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Field {
     Language,
     Source,
@@ -112,41 +117,34 @@ impl Field {
             Self::ComposerEnter => "appearance-composer-enter",
         }
     }
+    fn section(self) -> Section {
+        let help = match self {
+            Self::Language => "appearance-language-help",
+            Self::Source => "appearance-source-help",
+            Self::Mode => "appearance-mode-help",
+            Self::Background => "appearance-background-help",
+            Self::ThemeFile => "appearance-theme-file-help",
+            Self::UiFont => "appearance-ui-font-help",
+            Self::MonoFont => "appearance-mono-font-help",
+            Self::Fallbacks => "appearance-fallbacks-help",
+            Self::UiSize => "appearance-size-help",
+            Self::ContentSize => "appearance-content-size-help",
+            Self::LineHeight => "appearance-line-height-help",
+            Self::Opacity => "appearance-opacity-help",
+            Self::ComposerEnter => "appearance-enter-help",
+        };
+        let title = if self == Self::ComposerEnter {
+            "appearance-enter"
+        } else {
+            self.id()
+        };
+        Section::new(title, help)
+    }
     fn label(self) -> &'static str {
-        match self {
-            Self::Language => crate::i18n::tr!("appearance-language"),
-            Self::Source => crate::i18n::tr!("appearance-source"),
-            Self::Mode => crate::i18n::tr!("appearance-mode"),
-            Self::Background => crate::i18n::tr!("appearance-background"),
-            Self::ThemeFile => crate::i18n::tr!("appearance-theme-file"),
-            Self::UiFont => crate::i18n::tr!("appearance-ui-font"),
-            Self::MonoFont => crate::i18n::tr!("appearance-mono-font"),
-            Self::Fallbacks => crate::i18n::tr!("appearance-fallbacks"),
-            Self::UiSize => crate::i18n::tr!("appearance-ui-size"),
-            Self::ContentSize => crate::i18n::tr!("appearance-content-size"),
-            Self::LineHeight => crate::i18n::tr!("appearance-line-height"),
-            Self::Opacity => crate::i18n::tr!("appearance-opacity"),
-            Self::ComposerEnter => crate::i18n::tr!("appearance-enter"),
-        }
+        self.section().title()
     }
     fn help(self) -> &'static str {
-        match self {
-            Self::Language => crate::i18n::tr!("appearance-language-help"),
-            Self::Source => crate::i18n::tr!("appearance-source-help"),
-            Self::Mode => crate::i18n::tr!("appearance-mode-help"),
-            Self::Background => crate::i18n::tr!("appearance-background-help"),
-            Self::ThemeFile => crate::i18n::tr!("appearance-theme-file-help"),
-            Self::UiFont => crate::i18n::tr!("appearance-ui-font-help"),
-            Self::MonoFont => crate::i18n::tr!("appearance-mono-font-help"),
-            Self::Fallbacks => crate::i18n::tr!("appearance-fallbacks-help"),
-            Self::UiSize => crate::i18n::tr!("appearance-size-help"),
-            Self::ContentSize => crate::i18n::tr!("appearance-content-size-help"),
-            Self::LineHeight => crate::i18n::tr!("appearance-line-height-help"),
-            Self::Opacity => crate::i18n::tr!("appearance-opacity-help"),
-            Self::ComposerEnter => {
-                crate::i18n::tr!("appearance-enter-help")
-            }
-        }
+        self.section().help()
     }
     fn group(self) -> Group {
         match self {
@@ -158,19 +156,24 @@ impl Field {
             Self::LineHeight | Self::Opacity | Self::ComposerEnter => Group::Layout,
         }
     }
-    fn matches(self, query: &str) -> bool {
-        if matches!(self, Self::UiFont) && Self::UiSize.matches(query) {
-            return true;
-        }
-        format!(
-            "{} {} {} {}",
-            crate::i18n::tr!("settings-appearance"),
-            self.group().title(),
-            self.label(),
-            self.help()
+    fn score(self, query: &Query) -> Option<Match> {
+        let parents = [Category::Appearance.section(), self.group().section()];
+        self.section().score_under(query, &parents).max(
+            (self == Self::UiFont)
+                .then(|| Self::UiSize.section().score_under(query, &parents))
+                .flatten(),
         )
-        .to_lowercase()
-        .contains(query)
+    }
+
+    fn matches(self, query: &Query) -> bool {
+        query.is_empty()
+            || Category::Appearance.section().score(query).is_some()
+            || self
+                .group()
+                .section()
+                .score_under(query, &[Category::Appearance.section()])
+                .is_some()
+            || self.score(query).is_some()
     }
 }
 
@@ -506,18 +509,37 @@ impl AppearancePage {
 
     /// Sections rendered for the current search, in page order.
     fn sections(&self) -> Vec<(Group, Vec<Field>)> {
-        let query = self.query.trim().to_lowercase();
+        Self::matching_sections(&Query::new(&self.query))
+    }
+
+    fn matching_sections(query: &Query) -> Vec<(Group, Vec<Field>)> {
         Group::ALL
             .into_iter()
             .filter_map(|group| {
                 let fields: Vec<_> = Field::ALL
                     .into_iter()
                     .filter(|field| field.group() == group)
-                    .filter(|field| query.is_empty() || field.matches(&query))
+                    .filter(|field| field.matches(query))
                     .collect();
                 (!fields.is_empty()).then_some((group, fields))
             })
             .collect()
+    }
+
+    pub(super) fn search(query: &Query) -> Option<Match> {
+        Group::ALL
+            .into_iter()
+            .filter_map(|group| {
+                group
+                    .section()
+                    .score_under(query, &[Category::Appearance.section()])
+            })
+            .chain(
+                Field::ALL
+                    .into_iter()
+                    .filter_map(|field| field.score(query)),
+            )
+            .max()
     }
 }
 
@@ -536,7 +558,7 @@ impl Render for AppearancePage {
             .div { px_5; py_3; flex_shrink_0; flex; flex_col; gap_2; } [
                 .div { flex; items_center; justify_between; gap_3; } [
                     .div { text_size: ui::HEADING; } [
-                        tr!("settings-appearance")
+                        $Category::Appearance.title()
                     ],
                     ("settings-reset").super::action_button {
                         label: tr!("appearance-reset-all");

@@ -49,6 +49,26 @@ struct Saved {
 }
 
 impl Saved {
+    fn merge_reads(&mut self, seen: &HashMap<SessionId, u64>) -> bool {
+        let mut changed = false;
+        for (&id, &cursor) in seen {
+            if cursor > self.seen_replies.get(&id).copied().unwrap_or(0) {
+                self.seen_replies.insert(id, cursor);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn forget_reads(&mut self, removed: &[SessionId]) -> bool {
+        let mut changed = false;
+        for id in removed {
+            changed |= self.seen_replies.remove(id).is_some();
+            changed |= self.marker_bookmarks.remove(id).is_some();
+        }
+        changed
+    }
+
     fn set_marker_bookmarked(&mut self, session: SessionId, cursor: u64, bookmarked: bool) -> bool {
         if bookmarked {
             self.marker_bookmarks
@@ -240,14 +260,7 @@ impl Store {
         }
         let _lock = self.lock()?;
         let mut saved = self.latest()?;
-        let mut changed = false;
-        for (&id, &cursor) in seen {
-            if cursor > saved.seen_replies.get(&id).copied().unwrap_or(0) {
-                saved.seen_replies.insert(id, cursor);
-                changed = true;
-            }
-        }
-        if changed {
+        if saved.merge_reads(seen) {
             self.write(saved)
         } else {
             self.saved = saved;
@@ -264,12 +277,7 @@ impl Store {
         }
         let _lock = self.lock()?;
         let mut saved = self.latest()?;
-        let mut changed = false;
-        for id in removed {
-            changed |= saved.seen_replies.remove(id).is_some();
-            changed |= saved.marker_bookmarks.remove(id).is_some();
-        }
-        if changed {
+        if saved.forget_reads(removed) {
             self.write(saved)
         } else {
             self.saved = saved;
@@ -286,10 +294,7 @@ impl Store {
         if removed.is_empty() {
             return;
         }
-        for id in removed {
-            self.saved.seen_replies.remove(id);
-            self.saved.marker_bookmarks.remove(id);
-        }
+        self.saved.forget_reads(removed);
         let path = self.path.clone();
         let removed = removed.to_vec();
         enqueue(pending, executor, move || {
@@ -350,12 +355,7 @@ impl Store {
             changed |= saved.thread != thread;
             saved.thread = thread;
         }
-        for (&id, &cursor) in seen {
-            if cursor > saved.seen_replies.get(&id).copied().unwrap_or(0) {
-                saved.seen_replies.insert(id, cursor);
-                changed = true;
-            }
-        }
+        changed |= saved.merge_reads(seen);
         if changed { self.write(saved) } else { Ok(()) }
     }
 
@@ -502,8 +502,8 @@ impl Workspace {
             .store
             .as_ref()
             .and_then(Store::thread);
-        // The catalog is newest first. A removed thread (or a first launch after
-        // upgrading) falls back to the most recent live session before creating one.
+        // The catalog is newest first. Missing selections fall back to the most
+        // recent live session before creating one.
         let thread = saved
             .filter(|id| {
                 self.sessions

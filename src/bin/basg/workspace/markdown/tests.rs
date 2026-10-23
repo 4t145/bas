@@ -5,6 +5,27 @@ use std::sync::{Arc, Mutex};
 type CodeRegions = Arc<Mutex<HashMap<&'static str, Bounds<Pixels>>>>;
 
 #[test]
+fn literal_code_blocks_keep_fences_and_unicode_inside_one_block() {
+    for (text, fence) in [
+        ("", "~~~"),
+        ("plain text", "~~~"),
+        ("~~~\ninside\n~~~~", "~~~~~"),
+        ("前缀~中间~~结尾\n```rust\ncode\n```", "~~~"),
+    ] {
+        let source = code_block("text", text);
+        assert_eq!(source, format!("{fence}text\n{text}\n{fence}"));
+        let parsed = ::markdown::to_mdast(&source, &::markdown::ParseOptions::gfm())
+            .expect("generated fenced block");
+        let children = parsed.children().expect("document children");
+        let [::markdown::mdast::Node::Code(block)] = children.as_slice() else {
+            panic!("literal content must remain a single code block: {parsed:?}");
+        };
+        assert_eq!(block.lang.as_deref(), Some("text"));
+        assert_eq!(block.value, text);
+    }
+}
+
+#[test]
 fn upstream_text_style_preserves_component_theme() {
     let mut app = gpui_kit::TestApp::new();
     app.update(|cx| {

@@ -1,6 +1,9 @@
 use super::*;
 use crate::ui::{self, Button};
-use crate::{i18n::tr, settings::feedback};
+use crate::{
+    i18n::tr,
+    settings::{Category, feedback},
+};
 use gds_uim::el;
 use gpui_kit::{
     AnyElement, FontWeight, Render, TestSupportExt,
@@ -79,17 +82,11 @@ impl Page {
         } }.into_any_element()
     }
 
-    fn field(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        help: &'static str,
-        input: &Entity<InputState>,
-    ) -> AnyElement {
+    fn field(&self, id: &'static str, section: Section, input: &Entity<InputState>) -> AnyElement {
         super::super::form::Row {
             id: id.into(),
-            label,
-            help,
+            label: section.title(),
+            help: section.help(),
             last: true,
             reset: None,
             control: el! { .div { # id; test_support; w: 140.0.px; } [
@@ -106,8 +103,8 @@ impl Render for Page {
         let error = self.error(cx);
         let default_agent = super::super::form::Row {
             id: "acp-policy-default".into(),
-            label: crate::i18n::tr!("acp-policy-default"),
-            help: crate::i18n::tr!("acp-policy-default-help"),
+            label: DEFAULT_AGENT.title(),
+            help: DEFAULT_AGENT.help(),
             control: self.default_menu(cx),
             reset: None,
             last: false,
@@ -120,33 +117,31 @@ impl Render for Page {
             .div { flex; flex_col; gap_2; flex_shrink_0; } [
                 .div {
                     # "session-management-title"; test_support;
-                    role: gpui_kit::Role::Heading; aria_label: tr!("settings-session-management");
+                    role: gpui_kit::Role::Heading; aria_label: $Category::SessionManagement.title();
                     text_size: ui::HEADING;
-                } [tr!("settings-session-management")],
+                } [$Category::SessionManagement.title()],
                 .div { text_size: ui::SMALL; text_color: $cx.theme().muted_foreground; } [
-                    tr!("acp-policy-description")
+                    $Category::SessionManagement.section().help()
                 ],
             ],
             .div { # "session-management-retirement"; test_support; flex; flex_col; gap_2; flex_shrink_0; } [
-                .div { text_size: ui::HEADING; } [tr!("session-management-retirement")],
+                .div { text_size: ui::HEADING; } [$RETIREMENT.title()],
                 .div { border_t_1; border_color: $cx.theme().border; } [
-                    $self.field("acp-policy-idle", tr!("acp-policy-idle"),
-                        tr!("acp-policy-idle-help"), &self.idle),
+                    $self.field("acp-policy-idle", IDLE, &self.idle),
                 ],
             ],
             .div { # "session-management-prewarming"; test_support; flex; flex_col; gap_2; flex_shrink_0; } [
-                .div { text_size: ui::HEADING; } [tr!("session-management-prewarming")],
+                .div { text_size: ui::HEADING; } [$PREWARMING.title()],
                 .div { border_t_1; border_color: $cx.theme().border; flex; flex_col; } [
                     default_agent,
-                    $self.field("acp-policy-size", tr!("acp-policy-size"),
-                        tr!("acp-policy-size-help"), &self.size),
+                    $self.field("acp-policy-size", SIZE, &self.size),
                 ],
                 .div { flex; items_center; justify_between; gap_3; } [
-                    .div { font_weight: FontWeight::SEMIBOLD; } [tr!("acp-policy-pools")],
+                    .div { font_weight: FontWeight::SEMIBOLD; } [$POOLS.title()],
                     $self.add_pool_button(window, cx),
                 ],
                 .div { text_size: ui::SMALL; text_color: $cx.theme().muted_foreground; } [
-                    tr!("acp-policy-pools-help")
+                    $POOLS.help()
                 ],
                 @if (self.pools.is_empty())
                     .div {

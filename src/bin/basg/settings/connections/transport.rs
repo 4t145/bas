@@ -65,10 +65,15 @@ impl Transport {
     }
 
     pub(super) fn address_label(self) -> &'static str {
+        self.address_section().title()
+    }
+
+    pub(super) fn address_section(self) -> super::Section {
+        use super::Section;
         match self {
-            Self::Local | Self::Tcp | Self::Mtls => crate::i18n::tr!("connections-address"),
-            Self::Unix => crate::i18n::tr!("connections-socket-path"),
-            Self::Pipe => crate::i18n::tr!("connections-pipe-name"),
+            Self::Local | Self::Tcp | Self::Mtls => Section::heading("connections-address"),
+            Self::Unix => Section::heading("connections-socket-path"),
+            Self::Pipe => Section::heading("connections-pipe-name"),
         }
     }
 

@@ -1,6 +1,4 @@
 //! Owns the daemon authentication stream; dropping it cancels its ACP process.
-use std::path::PathBuf;
-
 use bas::{
     authentication::{Invocation, Method, elicitation::Request},
     config::AgentSpec,
@@ -125,17 +123,12 @@ pub(super) struct Stream {
     pub task: AbortOnDropHandle<()>,
 }
 
-pub(super) fn start(
-    service: check::Service,
-    spec: AgentSpec,
-    method: Method,
-    path: PathBuf,
-) -> Stream {
+pub(super) fn start(service: check::Service, spec: AgentSpec, method: Method) -> Stream {
     let (input, receive) = mpsc::unbounded_channel();
     let (events, receiver) = futures_mpsc::unbounded();
     let runtime = service.runtime();
     let task = AbortOnDropHandle::new(runtime.spawn(async move {
-        let result = run(service, spec, method, path, receive, events.clone()).await;
+        let result = run(service, spec, method, receive, events.clone()).await;
         if let Err(error) = result {
             let _ = events.unbounded_send(Err(error));
         }
@@ -151,11 +144,10 @@ async fn run(
     service: check::Service,
     spec: AgentSpec,
     method: Method,
-    path: PathBuf,
     mut input: mpsc::UnboundedReceiver<Control>,
     events: futures_mpsc::UnboundedSender<Result<Event, Failure>>,
 ) -> Result<(), Failure> {
-    let mut client = check::verified_client(service.address(), &path)
+    let mut client = check::connect_client(service.address())
         .await
         .map_err(Failure::External)?;
     let request = start_input(&spec, &method)?;

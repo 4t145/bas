@@ -60,7 +60,6 @@ impl Agents {
                 crate::authentication::Authentication::new(
                     spec.clone(),
                     status.clone(),
-                    self.store.path().to_owned(),
                     window.window_handle(),
                     self.check_service.clone(),
                 )

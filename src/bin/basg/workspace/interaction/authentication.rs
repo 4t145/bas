@@ -97,7 +97,6 @@ impl Workspace {
         let catalog =
             crate::agents::catalog::Service::new(self.backend.server.clone(), runtime.clone());
         let service = crate::agents::check::Service::new(self.backend.server.clone(), runtime);
-        let path = crate::configuration::store(cx).path().to_owned();
         let epoch = self.selected.epoch;
         self.window.output_open = true;
         self.selected.authentication.load = Some(cx.spawn_in(window, async move |view, cx| {
@@ -109,7 +108,7 @@ impl Workspace {
                     .find(|entry| entry.id == agent)
                     .and_then(|entry| entry.spec)
                     .ok_or_else(|| crate::i18n::tr!("agent-catalog-missing").to_owned())?;
-                let status = service.request(spec.clone(), true, path.clone()).await;
+                let status = service.request(spec.clone(), true).await;
                 Ok::<_, String>((spec, status))
             }
             .await;
@@ -131,7 +130,6 @@ impl Workspace {
                             crate::authentication::Authentication::new(
                                 spec,
                                 status,
-                                path,
                                 window.window_handle(),
                                 Some(service.clone()),
                             )

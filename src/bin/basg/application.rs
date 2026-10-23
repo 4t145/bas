@@ -94,18 +94,7 @@ pub(crate) fn open_confirmation(
     on_confirm: impl FnOnce(&mut App) + 'static,
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<Root>> {
-    open_host(
-        Host {
-            kind: InfoWindow::Confirmation,
-            title: request.title,
-            message: request.message,
-            confirm_label: request.confirm_label,
-            destructive: request.destructive,
-            on_confirm: Some(Box::new(on_confirm)),
-            skip_delete_reminder: None,
-        },
-        cx,
-    )
+    Host::confirmation(request, on_confirm).open(cx)
 }
 
 /// # Errors
@@ -119,19 +108,9 @@ pub(crate) fn open_delete_confirmation(
         on_confirm(cx);
         return Ok(());
     }
-    open_host(
-        Host {
-            kind: InfoWindow::Confirmation,
-            title: request.title,
-            message: request.message,
-            confirm_label: request.confirm_label,
-            destructive: request.destructive,
-            on_confirm: Some(Box::new(on_confirm)),
-            skip_delete_reminder: Some(false),
-        },
-        cx,
-    )
-    .map(|_| ())
+    let mut host = Host::confirmation(request, on_confirm);
+    host.skip_delete_reminder = Some(false);
+    host.open(cx).map(|_| ())
 }
 
 /// Opens the release page for manual inspection; no version comparison is performed.
@@ -142,13 +121,13 @@ pub(crate) fn open_releases(cx: &mut App) {
 /// # Errors
 /// Returns a platform error if the About window cannot be created.
 pub(crate) fn open_about(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
-    open_host(Host::new(InfoWindow::About), cx)
+    Host::new(InfoWindow::About).open(cx)
 }
 
 /// # Errors
 /// Returns a platform error if the quit confirmation window cannot be created.
 pub(crate) fn open_quit(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
-    open_host(Host::new(InfoWindow::Quit), cx)
+    Host::new(InfoWindow::Quit).open(cx)
 }
 
 impl InfoWindow {
@@ -162,8 +141,6 @@ impl InfoWindow {
 
     fn title(self) -> &'static str {
         match self {
-            // [!todo] here we have product name `BasG`, witch should be a static value and easy to replace with
-            // other name
             Self::About => tr!("app-about"),
             Self::Quit => tr!("app-quit-title"),
             Self::Confirmation => tr!("app-confirm"),
@@ -177,50 +154,6 @@ impl InfoWindow {
             Self::Confirmation => &mut windows.confirmation,
         }
     }
-}
-
-/// # Errors
-/// Returns a platform error when opening a native window fails.
-fn open_host(host: Host, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
-    let kind = host.kind;
-    let height = if matches!(kind, InfoWindow::About) {
-        ABOUT_HEIGHT
-    } else {
-        HEIGHT
-    };
-    if !cx.has_global::<OpenWindows>() {
-        cx.set_global(OpenWindows::default());
-    }
-    if let Some(handle) = *kind.slot(cx.global_mut::<OpenWindows>())
-        && handle
-            .update(cx, |_, window, _| window.activate_window())
-            .is_ok()
-    {
-        return Ok(handle);
-    }
-    let handle = cx.open_window(
-        WindowOptions {
-            kind: kind.window_kind(),
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                None,
-                size(px(WIDTH), px(height)),
-                cx,
-            ))),
-            window_min_size: Some(size(px(WIDTH), px(height))),
-            window_decorations: Some(WindowDecorations::Client),
-            window_background: cx.global::<theme::Appearance>().background,
-            app_id: Some("org.bas.Gui".into()),
-            ..TitleBar::window_options()
-        },
-        |window, cx| {
-            window.set_window_title(&host.title);
-            let host = cx.new(|_| host);
-            window.activate_window();
-            cx.new(|cx| theme::window_root(host, window, cx))
-        },
-    )?;
-    *kind.slot(cx.global_mut::<OpenWindows>()) = Some(handle);
-    Ok(handle)
 }
 
 type ConfirmCallback = Box<dyn FnOnce(&mut App)>;
@@ -246,6 +179,62 @@ impl Host {
             on_confirm: None,
             skip_delete_reminder: None,
         }
+    }
+
+    fn confirmation(request: Confirmation, on_confirm: impl FnOnce(&mut App) + 'static) -> Self {
+        Self {
+            kind: InfoWindow::Confirmation,
+            title: request.title,
+            message: request.message,
+            confirm_label: request.confirm_label,
+            destructive: request.destructive,
+            on_confirm: Some(Box::new(on_confirm)),
+            skip_delete_reminder: None,
+        }
+    }
+
+    /// # Errors
+    /// Returns a platform error when opening a native window fails.
+    fn open(self, cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
+        let kind = self.kind;
+        let height = if matches!(kind, InfoWindow::About) {
+            ABOUT_HEIGHT
+        } else {
+            HEIGHT
+        };
+        if !cx.has_global::<OpenWindows>() {
+            cx.set_global(OpenWindows::default());
+        }
+        if let Some(handle) = *kind.slot(cx.global_mut::<OpenWindows>())
+            && handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+        {
+            return Ok(handle);
+        }
+        let handle = cx.open_window(
+            WindowOptions {
+                kind: kind.window_kind(),
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(WIDTH), px(height)),
+                    cx,
+                ))),
+                window_min_size: Some(size(px(WIDTH), px(height))),
+                window_decorations: Some(WindowDecorations::Client),
+                window_background: cx.global::<theme::Appearance>().background,
+                app_id: Some("org.bas.Gui".into()),
+                ..TitleBar::window_options()
+            },
+            |window, cx| {
+                window.set_window_title(&self.title);
+                let host = cx.new(|_| self);
+                window.activate_window();
+                cx.new(|cx| theme::window_root(host, window, cx))
+            },
+        )?;
+        *kind.slot(cx.global_mut::<OpenWindows>()) = Some(handle);
+        Ok(handle)
     }
 
     fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -17,6 +17,23 @@ use pools::PoolRow;
 #[cfg(all(test, feature = "gui-tests"))]
 mod tests;
 mod view;
+use super::search::{Match, Query, Section};
+
+const RETIREMENT: Section = Section::heading("session-management-retirement");
+const PREWARMING: Section = Section::heading("session-management-prewarming");
+const IDLE: Section = Section::new("acp-policy-idle", "acp-policy-idle-help");
+const DEFAULT_AGENT: Section = Section::new("acp-policy-default", "acp-policy-default-help");
+const SIZE: Section = Section::new("acp-policy-size", "acp-policy-size-help");
+const POOLS: Section = Section::new("acp-policy-pools", "acp-policy-pools-help");
+
+pub(super) fn search(query: &Query) -> Option<Match> {
+    [RETIREMENT, PREWARMING, IDLE, DEFAULT_AGENT, SIZE, POOLS]
+        .into_iter()
+        .filter_map(|section| {
+            section.score_under(query, &[super::Category::SessionManagement.section()])
+        })
+        .max()
+}
 
 #[derive(Default)]
 struct Pages(std::collections::HashMap<Option<bas::service::tls::ConnectionOptions>, Entity<Page>>);

@@ -1,6 +1,49 @@
 use super::*;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod marker_bookmarks;
+
+#[test]
+fn saved_reads_advance_monotonically_and_ignore_zero_cursors() {
+    let first = SessionId::new();
+    let second = SessionId::new();
+    let unread = SessionId::new();
+    let mut saved = Saved::default();
+    assert!(saved.merge_reads(&HashMap::from([(first, 9), (second, 2)])));
+    assert!(saved.merge_reads(&HashMap::from([(first, 4), (second, 7), (unread, 0)])));
+    assert_eq!(
+        saved.seen_replies,
+        BTreeMap::from([(first, 9), (second, 7)])
+    );
+    assert!(!saved.merge_reads(&HashMap::from([(first, 9), (second, 1), (unread, 0)])));
+}
+
+#[test]
+fn saved_read_removal_clears_all_target_markers_but_keeps_other_sections() {
+    let first = SessionId::new();
+    let marker_only = SessionId::new();
+    let retained = SessionId::new();
+    let mut saved = Saved {
+        thread: Some(first),
+        pinned: [first].into(),
+        bookmarks: [first].into(),
+        ..Default::default()
+    };
+    saved.merge_reads(&HashMap::from([(first, 9), (retained, 7)]));
+    for session in [first, marker_only, retained] {
+        saved.set_marker_bookmarked(session, 3, true);
+    }
+    assert!(saved.forget_reads(&[first, marker_only]));
+    assert!(!saved.forget_reads(&[first, marker_only]));
+    assert_eq!(saved.seen_replies, BTreeMap::from([(retained, 7)]));
+    assert_eq!(
+        saved.marker_bookmarks,
+        BTreeMap::from([(retained, BTreeSet::from([3]))])
+    );
+    assert_eq!(saved.thread, Some(first));
+    assert_eq!(saved.pinned, BTreeSet::from([first]));
+    assert_eq!(saved.bookmarks, BTreeSet::from([first]));
+}
 
 #[cfg(feature = "gui-tests")]
 #[gpui_kit::test]

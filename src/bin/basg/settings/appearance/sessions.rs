@@ -3,21 +3,32 @@
 use super::*;
 use crate::settings::form::Row;
 
+const DEFAULT_AGENT: Section =
+    Section::new("settings-default-agent", "settings-default-agent-help");
+const AUTO_COLLAPSE: Section = Section::new(
+    "settings-auto-collapse-activity",
+    "settings-auto-collapse-activity-help",
+);
+const CONFIRM_DELETE: Section =
+    Section::new("settings-confirm-delete", "settings-confirm-delete-help");
+
 impl AppearancePage {
-    pub(in crate::settings) fn matches_session_query(query: &str) -> bool {
-        let query = query.trim().to_lowercase();
+    pub(in crate::settings) fn search_sessions(query: &Query) -> Option<Match> {
         [
-            crate::i18n::tr!("settings-sessions"),
-            crate::i18n::tr!("settings-sessions-help"),
-            crate::i18n::tr!("settings-confirm-delete"),
-            crate::i18n::tr!("settings-default-agent"),
-            crate::i18n::tr!("settings-auto-collapse-activity"),
-            crate::i18n::tr!("settings-auto-collapse-activity-help"),
-            Field::ComposerEnter.label(),
-            Field::ComposerEnter.help(),
+            Category::Sessions.section(),
+            DEFAULT_AGENT,
+            AUTO_COLLAPSE,
+            CONFIRM_DELETE,
+            Field::ComposerEnter.section(),
         ]
-        .iter()
-        .any(|text| text.to_lowercase().contains(&query))
+        .into_iter()
+        .filter_map(|section| section.score_under(query, &[Category::Sessions.section()]))
+        .max()
+    }
+
+    pub(in crate::settings) fn matches_session_query(query: &str) -> bool {
+        let query = Query::new(query);
+        query.is_empty() || Self::search_sessions(&query).is_some()
     }
 
     pub(in crate::settings) fn render_sessions(
@@ -53,8 +64,8 @@ impl AppearancePage {
         }
         let default_agent = Row {
             id: "settings-default-agent".into(),
-            label: crate::i18n::tr!("settings-default-agent"),
-            help: crate::i18n::tr!("settings-default-agent-help"),
+            label: DEFAULT_AGENT.title(),
+            help: DEFAULT_AGENT.help(),
             control: el! { .div { # "settings-default-agent"; test_support; flex_1; min_w_0; } [
                 ($&self.form.default_agent).Select::new { small; w_full; cursor_pointer; disabled: $self.document.is_none(); },
             ] }.into_any_element(),
@@ -63,11 +74,11 @@ impl AppearancePage {
         };
         let auto_collapse_activity = Row {
             id: "settings-auto-collapse-activity".into(),
-            label: crate::i18n::tr!("settings-auto-collapse-activity"),
-            help: crate::i18n::tr!("settings-auto-collapse-activity-help"),
+            label: AUTO_COLLAPSE.title(),
+            help: AUTO_COLLAPSE.help(),
             control: el! {
                 ("settings-auto-collapse-activity").ui::checkbox {
-                    accessibility_label: tr!("settings-auto-collapse-activity");
+                    accessibility_label: $AUTO_COLLAPSE.title();
                     checked: $self.form.auto_collapse_activity.unwrap_or(true);
                     disabled: $self.document.is_none();
                     on_click: $cx.listener(|this, checked: &bool, window, cx| {
@@ -82,11 +93,11 @@ impl AppearancePage {
         };
         let confirm_delete = Row {
             id: "settings-confirm-delete".into(),
-            label: crate::i18n::tr!("settings-confirm-delete"),
-            help: crate::i18n::tr!("settings-confirm-delete-help"),
+            label: CONFIRM_DELETE.title(),
+            help: CONFIRM_DELETE.help(),
             control: el! {
                 ("settings-confirm-delete").ui::checkbox {
-                    accessibility_label: tr!("settings-confirm-delete");
+                    accessibility_label: $CONFIRM_DELETE.title();
                     checked: $!self.form.confirm_delete.unwrap_or(true);
                     disabled: $self.document.is_none();
                     on_click: $cx.listener(|this, checked: &bool, window, cx| {
@@ -104,9 +115,9 @@ impl AppearancePage {
             size_full; overflow_y_scroll; p_5; flex; flex_col; gap_2;
         } [
             .div { flex; flex_col; gap_2; } [
-                .div { text_size: ui::HEADING; } [tr!("settings-sessions")],
+                .div { text_size: ui::HEADING; } [$Category::Sessions.title()],
                 .div { text_size: ui::SMALL; text_color: $cx.theme().muted_foreground; } [
-                    tr!("settings-sessions-help"),
+                    $Category::Sessions.section().help(),
                 ],
             ],
             @if (Self::matches_session_query(&self.query))

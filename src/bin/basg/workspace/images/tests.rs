@@ -476,18 +476,18 @@ fn markdown_ownership_uses_the_parser_not_uri_substrings() {
 
 [reference]: referenced.png
 "#;
-    let references = markdown_references(source).expect("GFM references");
+    let references = references::markdown(source).expect("GFM references");
     assert_eq!(
         references,
         HashSet::from_iter(["image(one).png", "image.png"].map(|uri| Resource::Uri(uri.into())))
     );
     assert!(
-        markdown_references("images removed")
+        references::markdown("images removed")
             .expect("plain text")
             .is_empty()
     );
     assert_eq!(
-        markdown_references("<img src=\"image.png\">").expect("HTML image"),
+        references::markdown("<img src=\"image.png\">").expect("HTML image"),
         HashSet::from_iter([Resource::Uri("image.png".into())])
     );
 }

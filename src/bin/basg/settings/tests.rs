@@ -53,14 +53,17 @@ fn settings_group_by_owner_and_keep_conversation_behavior_out_of_appearance_rese
     );
     assert_eq!(saved.settings.appearance.ui_font_size, None);
     assert!(matches!(
-        Category::for_query("会话管理"),
-        Category::SessionManagement
+        Category::for_query(&search::Query::new("会话管理")),
+        Some(Category::SessionManagement)
     ));
     assert!(matches!(
-        Category::for_query("预热"),
-        Category::SessionManagement
+        Category::for_query(&search::Query::new("预热")),
+        Some(Category::SessionManagement)
     ));
-    assert!(matches!(Category::for_query("Enter"), Category::Sessions));
+    assert!(matches!(
+        Category::for_query(&search::Query::new("Enter")),
+        Some(Category::Sessions)
+    ));
 }
 
 fn check_footer_without_copy(cx: &mut TestAppContext, message: String) {
@@ -113,6 +116,62 @@ fn settings_footer_preserves_feedback_without_copy_action(cx: &mut TestAppContex
 #[gpui_kit::test]
 fn empty_settings_footer_has_no_orphan_copy_button(cx: &mut TestAppContext) {
     check_footer_without_copy(cx, String::new());
+}
+
+#[gpui_kit::test]
+fn search_events_route_and_filter_with_the_same_metadata(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().expect("settings directory");
+    let path = directory.path().join("settings.json");
+    std::fs::write(&path, "{}").expect("settings fixture");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::configuration::init(Some(path), cx);
+        crate::theme::init(None, cx);
+        crate::application::init(cx);
+    });
+    let mut entity = None;
+    let window = cx.open_window(size(px(960.), px(720.)), |window, cx| {
+        let settings = cx.new(|cx| Settings::new(window, cx));
+        entity = Some(settings.clone());
+        Root::new(settings, window, cx)
+    });
+    let entity = entity.expect("settings entity");
+    cx.update_window(window.into(), |_, window, cx| {
+        for (current, query, expected) in [
+            (Category::Agents, "Fonts", Category::Appearance),
+            (Category::Appearance, "Enter", Category::Sessions),
+            (Category::Sessions, " \t ", Category::Sessions),
+            (
+                Category::Connections,
+                "no-such-setting-123",
+                Category::Appearance,
+            ),
+            (Category::Agents, "no-such-setting-123", Category::Agents),
+        ] {
+            entity.update(cx, |settings, cx| {
+                settings.category = current;
+                let input = settings.search.clone();
+                input.update(cx, |input, cx| input.set_value(query, window, cx));
+                settings.on_search(&input, &InputEvent::Change, window, cx);
+                assert_eq!(settings.category, expected, "{query}");
+                assert_eq!(settings.appearance.read(cx).query, query);
+                assert_eq!(settings.agents.read(cx).query, query);
+            });
+            window.render_frame(cx);
+            match query {
+                "Fonts" => {
+                    assert!(window.find("appearance-fonts-card").visible());
+                    assert!(window.try_find("appearance-theme-card").is_none());
+                }
+                "Enter" => assert!(window.find("appearance-composer-enter").visible()),
+                "no-such-setting-123" if expected == Category::Appearance => {
+                    assert!(window.find("settings-no-results").visible());
+                }
+                _ => {}
+            }
+        }
+    })
+    .expect("search navigation and page filtering");
 }
 
 #[gpui_kit::test]

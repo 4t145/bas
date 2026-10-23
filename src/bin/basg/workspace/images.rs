@@ -72,6 +72,57 @@ impl Cache {
         cache
     }
 
+    /// Resolves image addresses using the conversation's captured working directory.
+    ///
+    /// # Errors
+    /// Returns an error for unsupported addresses or paths without a valid base directory.
+    fn resolve(&self, resource: &Resource) -> Result<Resource, ImageCacheError> {
+        let Resource::Uri(uri) = resource else {
+            return Ok(resource.clone());
+        };
+        #[cfg(target_os = "windows")]
+        if std::path::Path::new(uri.as_ref()).is_absolute() {
+            return Ok(Resource::from(PathBuf::from(uri.as_ref())));
+        }
+        match url::Url::parse(uri.as_ref()) {
+            Ok(mut url) if matches!(url.scheme(), "http" | "https") => {
+                url.set_fragment(None);
+                Ok(Resource::Uri(url.as_str().to_owned().into()))
+            }
+            Ok(url) if url.scheme() == "file" => url
+                .to_file_path()
+                .map(Resource::from)
+                .map_err(|_| ImageCacheError::Asset(crate::i18n::tr!("image-local-path").into())),
+            Ok(_) => Err(ImageCacheError::Asset(
+                crate::i18n::tr!("image-protocol").into(),
+            )),
+            Err(url::ParseError::RelativeUrlWithoutBase) => {
+                let path = std::path::Path::new(uri.as_ref());
+                let base = if path.is_absolute() {
+                    std::path::Path::new("/")
+                } else {
+                    self.directory.as_deref().ok_or_else(|| {
+                        ImageCacheError::Asset(crate::i18n::tr!("image-no-directory").into())
+                    })?
+                };
+                let url = url::Url::from_directory_path(base)
+                    .map_err(|_| {
+                        ImageCacheError::Asset(crate::i18n::tr!("image-directory-relative").into())
+                    })?
+                    .join(uri.as_ref())
+                    .map_err(|_| {
+                        ImageCacheError::Asset(crate::i18n::tr!("image-invalid-address").into())
+                    })?;
+                url.to_file_path().map(Resource::from).map_err(|_| {
+                    ImageCacheError::Asset(crate::i18n::tr!("image-invalid-path").into())
+                })
+            }
+            Err(_) => Err(ImageCacheError::Asset(
+                crate::i18n::tr!("image-invalid-address").into(),
+            )),
+        }
+    }
+
     fn load_inline(
         &mut self,
         uri: &SharedUri,
@@ -125,7 +176,7 @@ impl Cache {
         let resources: HashSet<_> = references
             .iter()
             .filter(|resource| !matches!(resource, Resource::Uri(uri) if uri.starts_with("data:")))
-            .filter_map(|resource| resolve(resource, self.directory.as_deref()).ok())
+            .filter_map(|resource| self.resolve(resource).ok())
             .collect();
         self.resources.retain(|resource, entry| {
             if resources.contains(resource) {
@@ -161,7 +212,7 @@ impl Cache {
         let content = gpui_kit::hash(&source);
         if self.content != Some(content) {
             self.content = Some(content);
-            if let Some(references) = markdown_references(source) {
+            if let Some(references) = references::markdown(source) {
                 self.embedded
                     .update(&references, self.owner.entity_id(), cx);
                 self.retain(references, window, cx);
@@ -214,7 +265,7 @@ impl ImageCache for Cache {
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         let result = match resource {
             Resource::Uri(uri) if uri.starts_with("data:") => self.load_inline(uri, window, cx),
-            _ => match resolve(resource, self.directory.as_deref()) {
+            _ => match self.resolve(resource) {
                 Ok(source) => self
                     .resources
                     .entry(source.clone())
@@ -337,64 +388,6 @@ pub(super) fn acp_image(
         }
     }
     .into_any_element()
-}
-
-fn markdown_references(source: &str) -> Option<HashSet<Resource>> {
-    references::markdown(source)
-}
-
-/// Resolves image addresses using the conversation's captured working directory.
-///
-/// # Errors
-/// Returns an error for unsupported addresses or paths without a valid base directory.
-fn resolve(
-    resource: &Resource,
-    directory: Option<&std::path::Path>,
-) -> Result<Resource, ImageCacheError> {
-    let Resource::Uri(uri) = resource else {
-        return Ok(resource.clone());
-    };
-    #[cfg(target_os = "windows")]
-    if std::path::Path::new(uri.as_ref()).is_absolute() {
-        return Ok(Resource::from(PathBuf::from(uri.as_ref())));
-    }
-    match url::Url::parse(uri.as_ref()) {
-        Ok(mut url) if matches!(url.scheme(), "http" | "https") => {
-            url.set_fragment(None);
-            Ok(Resource::Uri(url.as_str().to_owned().into()))
-        }
-        Ok(url) if url.scheme() == "file" => url
-            .to_file_path()
-            .map(Resource::from)
-            .map_err(|_| ImageCacheError::Asset(crate::i18n::tr!("image-local-path").into())),
-        Ok(_) => Err(ImageCacheError::Asset(
-            crate::i18n::tr!("image-protocol").into(),
-        )),
-        Err(url::ParseError::RelativeUrlWithoutBase) => {
-            let path = std::path::Path::new(uri.as_ref());
-            let base = if path.is_absolute() {
-                std::path::Path::new("/")
-            } else {
-                directory.ok_or_else(|| {
-                    ImageCacheError::Asset(crate::i18n::tr!("image-no-directory").into())
-                })?
-            };
-            let url = url::Url::from_directory_path(base)
-                .map_err(|_| {
-                    ImageCacheError::Asset(crate::i18n::tr!("image-directory-relative").into())
-                })?
-                .join(uri.as_ref())
-                .map_err(|_| {
-                    ImageCacheError::Asset(crate::i18n::tr!("image-invalid-address").into())
-                })?;
-            url.to_file_path()
-                .map(Resource::from)
-                .map_err(|_| ImageCacheError::Asset(crate::i18n::tr!("image-invalid-path").into()))
-        }
-        Err(_) => Err(ImageCacheError::Asset(
-            crate::i18n::tr!("image-invalid-address").into(),
-        )),
-    }
 }
 
 /// Decodes an embedded image into its original encoded bytes.

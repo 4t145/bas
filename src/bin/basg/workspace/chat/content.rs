@@ -1,7 +1,7 @@
 use bas::acp;
 use bas::model::{ContentBlock, Role, ToolCall, ToolCallStatus};
 
-use super::super::*;
+use super::super::{markdown::code_block, *};
 
 pub(in crate::workspace) fn message_block_id(
     message: &bas::model::Message,
@@ -589,18 +589,6 @@ fn json_block(value: &serde_json::Value) -> String {
         "json",
         &serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
     )
-}
-
-fn code_block(language: &str, text: &str) -> String {
-    let fence = "~".repeat(
-        text.split(|ch| ch != '~')
-            .map(str::len)
-            .max()
-            .unwrap_or(0)
-            .max(2)
-            + 1,
-    );
-    format!("{fence}{language}\n{text}\n{fence}")
 }
 
 pub(in crate::workspace) fn block_source(block: &ContentBlock) -> Option<String> {

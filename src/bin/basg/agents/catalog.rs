@@ -217,13 +217,12 @@ impl Service {
     pub(crate) fn logout(
         &self,
         spec: AgentSpec,
-        settings_path: std::path::PathBuf,
     ) -> impl Future<Output = Result<(), String>> + use<> {
         let server = self.server.clone();
         let (send, receive) = oneshot::channel();
         let task = AbortOnDropHandle::new(self.runtime.spawn(async move {
             let result = tokio::time::timeout(CATALOG_TIMEOUT, async {
-                let mut client = super::check::verified_client(server, &settings_path).await?;
+                let mut client = super::check::connect_client(server).await?;
                 let expected_spec_json =
                     serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
                 client

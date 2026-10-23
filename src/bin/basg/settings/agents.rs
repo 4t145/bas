@@ -1,6 +1,6 @@
 //! Agent configuration and shared operations for the independent installation window.
 
-use super::action_button as button;
+use super::{Category, action_button as button, search};
 use crate::{
     i18n::tr,
     settings,
@@ -81,6 +81,22 @@ struct Form<T> {
     grace: T,
 }
 
+const FIELDS: Form<search::Section> = Form {
+    id: search::Section::heading("agent-id"),
+    program: search::Section::heading("agent-program-label"),
+    args: search::Section::heading("agent-args-label"),
+    description: search::Section::heading("agent-description"),
+    grace: search::Section::heading("agent-grace"),
+};
+
+pub(super) fn search(query: &search::Query) -> Option<search::Match> {
+    FIELDS
+        .fields()
+        .into_iter()
+        .filter_map(|field| field.score_under(query, &[Category::Agents.section()]))
+        .max()
+}
+
 impl<T> Form<T> {
     fn fields(&self) -> [&T; 5] {
         [
@@ -122,49 +138,43 @@ impl Form<Entity<InputState>> {
         embedded: bool,
         connected: bool,
     ) -> Vec<(&'static str, &'static str, &Entity<InputState>)> {
-        let mut rows = vec![("agents-id", "Agent ID", &self.id)];
+        let mut rows = vec![("agents-id", FIELDS.id.title(), &self.id)];
         if !embedded {
-            rows.push((
-                "agents-program",
-                crate::i18n::tr!("agent-program-label"),
-                &self.program,
-            ));
-            rows.push((
-                "agents-args",
-                crate::i18n::tr!("agent-args-label"),
-                &self.args,
-            ));
+            rows.push(("agents-program", FIELDS.program.title(), &self.program));
+            rows.push(("agents-args", FIELDS.args.title(), &self.args));
             rows.push((
                 "agents-description",
-                crate::i18n::tr!("agent-description"),
+                FIELDS.description.title(),
                 &self.description,
             ));
         }
         if connected {
-            rows.push(("agents-grace", crate::i18n::tr!("agent-grace"), &self.grace));
+            rows.push(("agents-grace", FIELDS.grace.title(), &self.grace));
         }
         rows
     }
 }
 
-fn values(spec: &AgentSpec) -> Form<String> {
-    Form {
-        id: spec.id.to_string(),
-        program: spec
-            .command
-            .as_ref()
-            .map(|command| command.program.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        args: serde_json::to_string(
-            &spec
+impl Form<String> {
+    fn from_spec(spec: &AgentSpec) -> Self {
+        Self {
+            id: spec.id.to_string(),
+            program: spec
                 .command
                 .as_ref()
-                .map(|command| command.args.as_slice())
+                .map(|command| command.program.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-        )
-        .expect("string arrays serialize"),
-        description: spec.description.clone(),
-        grace: spec.cancellation_grace.as_millis().to_string(),
+            args: serde_json::to_string(
+                &spec
+                    .command
+                    .as_ref()
+                    .map(|command| command.args.as_slice())
+                    .unwrap_or_default(),
+            )
+            .expect("string arrays serialize"),
+            description: spec.description.clone(),
+            grace: spec.cancellation_grace.as_millis().to_string(),
+        }
     }
 }
 
@@ -732,7 +742,7 @@ impl Agents {
             return;
         };
         self.authentications.remove(&spec.id);
-        let request = service.request(spec.clone(), connect, self.store.path().to_owned());
+        let request = service.request(spec.clone(), connect);
         let expected = spec.clone();
         let task = cx.spawn(async move |page, cx| {
             let result = request.await;
@@ -832,7 +842,7 @@ impl Agents {
             return true;
         }
         self.checks.get(&draft.id).is_some_and(|check| {
-            let checked = values(&check.spec);
+            let checked = Form::from_spec(&check.spec);
             let form = self.form.values(cx);
             check.status.connected()
                 && checked.id == form.id
@@ -854,11 +864,18 @@ impl Agents {
             .collect()
     }
 
+    pub(super) fn search_entries(&self, query: &search::Query) -> Option<search::Match> {
+        self.configuration_entries()
+            .iter()
+            .filter_map(|entry| search_entry(entry, query))
+            .max()
+    }
+
     fn dirty(&self, cx: &App) -> bool {
         self.editor.spec().is_some_and(|draft| {
             matches!(self.editor, Editor::Add(_))
                 || self.editor.deleting()
-                || self.form.values(cx) != values(draft)
+                || self.form.values(cx) != Form::from_spec(draft)
         })
     }
 
@@ -921,7 +938,7 @@ impl Agents {
             self.message = crate::i18n::tr!("agent-save-before-switch").into();
         } else {
             self.saved = None;
-            let form = values(&spec);
+            let form = Form::from_spec(&spec);
             for (input, value) in self.form.fields().into_iter().zip(form.fields()) {
                 input.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
             }
@@ -988,7 +1005,7 @@ impl Agents {
                 let args = serde_json::from_str::<Vec<String>>(&form.args)
                     .map_err(DraftError::Arguments)?;
                 // Preserve non-UTF8 paths when the user has not edited the displayed program.
-                if values(&spec).program != program {
+                if Form::from_spec(&spec).program != program {
                     spec.command = Some(Command::new(program, args));
                 } else if let Some(command) = spec.command.as_mut() {
                     command.args = args;
@@ -1081,6 +1098,12 @@ fn summary(spec: &AgentSpec) -> String {
         }
         _ => spec.description.clone(),
     }
+}
+
+fn search_entry(entry: &bas::management::Entry, query: &search::Query) -> Option<search::Match> {
+    query
+        .score(&entry.id, &entry.description)
+        .max(query.score(&entry.name, &entry.description))
 }
 
 impl Agents {
@@ -1358,7 +1381,7 @@ impl Agents {
                     flex; items_center; justify_between; gap_3;
                 } [
                     .div { text_size: ui::HEADING; } [
-                        tr!("settings-agents")
+                        $Category::Agents.title()
                     ],
                     .div {
                         # "agents-configuration-actions"; test_support;
@@ -1416,6 +1439,11 @@ impl Agents {
         let heading = el! {
             .div { p_5; flex_shrink_0; flex; flex_col; gap_2; } [
                 header,
+                @if (page == Page::Configuration)
+                    .div { text_size: ui::SMALL; text_color: $cx.theme().muted_foreground; } [
+                        $Category::Agents.section().help(),
+                    ],
+                @end,
                 @if (dirty)
                     ("agents-dirty", tr!("settings-unsaved"), $cx.theme().foreground).settings::feedback,
                 @end,

@@ -54,7 +54,6 @@ fn empty_panel(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<Root>, Entity
                     program: String::new(),
                     methods: Vec::new(),
                 },
-                "/fixture/settings.json".into(),
                 window.window_handle(),
                 None,
             )
@@ -86,7 +85,6 @@ fn authentication_keeps_its_service_after_management_switches(cx: &mut TestAppCo
         let panel = Authentication::new(
             AgentSpec::embedded(),
             Status::Installed(String::new()),
-            "/fixture/settings.json".into(),
             window.window_handle(),
             cx.try_global::<check::Service>().cloned(),
         );
@@ -107,7 +105,12 @@ fn cancelled_terminal_attempt_cannot_answer_a_later_authentication_stream(cx: &m
     cx.update_window(window.into(), |_, _, cx| {
         panel.update(cx, |panel, cx| {
             let old = panel.generation;
+            panel._task = Some(cx.spawn(async |_, _| std::future::pending::<()>().await));
+            panel._terminal = Some(cx.spawn(async |_, _| std::future::pending::<()>().await));
             panel.cancel(cx);
+            assert_eq!(panel.generation, old + 1);
+            assert!(panel._task.is_none());
+            assert!(panel._terminal.is_none());
             panel.input = Some(input);
             panel.terminal_completed(old, Ok(0), cx);
             assert!(receive.try_recv().is_err());
@@ -120,6 +123,62 @@ fn cancelled_terminal_attempt_cannot_answer_a_later_authentication_stream(cx: &m
         });
     })
     .expect("terminal attempt guard");
+}
+
+#[gpui_kit::test]
+fn terminal_events_release_interaction_without_cancelling_delivery(cx: &mut TestAppContext) {
+    let (window, panel) = empty_panel(cx);
+    cx.update_window(window.into(), |_, window, cx| {
+        panel.update(cx, |panel, cx| {
+            for failed in [false, true] {
+                let (input, mut receive) = mpsc::unbounded_channel();
+                panel.input = Some(input);
+                panel.status = Status::Authenticating;
+                panel._task = Some(cx.spawn(async |_, _| std::future::pending::<()>().await));
+                panel._terminal = Some(cx.spawn(async |_, _| std::future::pending::<()>().await));
+                let raw = json!({
+                    "mode":"url", "message":"Sign in", "url":"https://example.com/login",
+                    "elicitationId":"login", "requestId":"authentication"
+                });
+                panel.event(
+                    Ok(service::Event::Elicitation {
+                        request_id: "pending".into(),
+                        request: Ok(bas::authentication::elicitation::parse_request(&raw)
+                            .expect("URL request")),
+                    }),
+                    window,
+                    cx,
+                );
+                assert_eq!(panel.forms.len(), 1);
+                assert_eq!(panel._subscriptions.len(), 1);
+                let generation = panel.generation;
+                let event = if failed {
+                    Err(service::Failure::StreamEnded)
+                } else {
+                    Ok(service::Event::Check(Status::Connected("agent".into())))
+                };
+                panel.event(event, window, cx);
+                assert!(panel.input.is_none());
+                assert!(matches!(
+                    receive.try_recv(),
+                    Err(mpsc::error::TryRecvError::Disconnected)
+                ));
+                assert!(panel.forms.is_empty());
+                assert!(panel._subscriptions.is_empty());
+                assert!(panel._terminal.is_none());
+                assert!(panel._task.is_some());
+                assert_eq!(panel.generation, generation);
+                if failed {
+                    assert!(matches!(panel.status, Status::Failed(_)));
+                    assert_eq!(panel.message, tr!("auth-disconnected"));
+                } else {
+                    assert!(panel.status.connected());
+                    assert_eq!(panel.message, tr!("auth-complete"));
+                }
+            }
+        });
+    })
+    .expect("authentication terminal events");
 }
 
 #[gpui_kit::test]

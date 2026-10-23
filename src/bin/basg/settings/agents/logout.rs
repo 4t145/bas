@@ -61,7 +61,7 @@ impl Agents {
         let Some(service) = self.catalog_service.clone() else {
             return;
         };
-        let request = service.logout(spec.clone(), self.store.path().to_owned());
+        let request = service.logout(spec.clone());
         let expected = spec.clone();
         let task = cx.spawn(async move |page, cx| {
             let result = request.await;

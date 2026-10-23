@@ -30,7 +30,7 @@ impl Page {
                     .on_click(move |_, window, cx| {
                         let _ = manual.update(cx, |this, cx| this.add(window, cx));
                     }))
-                .item(PopupMenuItem::new(tr!("connections-discover"))
+                .item(PopupMenuItem::new(DISCOVERY.title())
                     .on_click(move |_, window, cx| {
                         let _ = discover.update(cx, |this, cx| this.discover(window, cx));
                     }))
@@ -80,12 +80,12 @@ impl Page {
             border_color: $cx.theme().border; flex_shrink_0;
         } [
             .div { flex; items_center; gap_2; } [
-                .div { flex_1; font_weight: FontWeight::SEMIBOLD; } [tr!("connections-discover")],
+                .div { flex_1; font_weight: FontWeight::SEMIBOLD; } [$DISCOVERY.title()],
                 ("connection-discovery-cancel", IconName::X, tr!("connections-cancel")).ui::icon_action {
                     on_click: $cx.listener(|this, _, window, cx| this.cancel(window, cx));
                 },
             ],
-            .div { text_color: $cx.theme().muted_foreground; } [tr!("connections-discovery-scope")],
+            .div { text_color: $cx.theme().muted_foreground; } [$DISCOVERY.help()],
             ..found,
             @match (state)
             @case (State::Loading)
@@ -111,7 +111,7 @@ impl Page {
         let selected = self.transport;
         let button = el! { ("connection-type").Button::new {
             small; w_full; min_w_0;
-            accessibility_label: tr!("connections-type");
+            accessibility_label: $TYPE.title();
         } [
             $(selected.icon()) { size: ui::ICON.px; },
             .div { flex_1; min_w_0; text_left; truncate; } [$selected.label()],
@@ -170,14 +170,10 @@ impl Page {
         let fields = [
             Self::field(
                 "connection-name",
-                crate::i18n::tr!("connections-name"),
+                NAME.title(),
                 Input::new(&self.name).small().w_full().into_any_element(),
             ),
-            Self::field(
-                "connection-kind",
-                crate::i18n::tr!("connections-type"),
-                self.transport_menu(cx),
-            ),
+            Self::field("connection-kind", TYPE.title(), self.transport_menu(cx)),
         ];
         let address = (self.transport != Transport::Local).then(|| {
             Self::field(
@@ -189,19 +185,18 @@ impl Page {
         });
         let tls: Vec<_> = if self.transport == Transport::Mtls {
             use certificates::Field;
-            vec![
-                self.certificate_field(Field::Ca, cx),
-                self.certificate_field(Field::Certificate, cx),
-                self.certificate_field(Field::Key, cx),
-                Self::field(
+            Field::ALL
+                .into_iter()
+                .map(|field| self.certificate_field(field, cx))
+                .chain(std::iter::once(Self::field(
                     "connection-tls-server-name",
-                    crate::i18n::tr!("connections-tls-server-name"),
+                    SERVER_NAME.title(),
                     Input::new(&self.tls_server_name)
                         .small()
                         .w_full()
                         .into_any_element(),
-                ),
-            ]
+                )))
+                .collect()
         } else {
             Vec::new()
         };
@@ -222,7 +217,7 @@ impl Page {
                 ..fields,
                 ..address,
                 ..tls,
-                $Self::field("connection-note", tr!("connections-note"),
+                $Self::field("connection-note", NOTE.title(),
                     Input::new(&self.note).small().w_full().into_any_element()),
             ],
             ..$self.error_view(cx),
@@ -376,7 +371,7 @@ impl Render for Page {
             on_action: $cx.listener(|this, _: &CancelEditing, window, cx| this.cancel(window, cx));
         } [
             .div { # "connections-toolbar"; test_support; flex; items_center; gap_2; flex_shrink_0; } [
-                .div { font_weight: FontWeight::SEMIBOLD; } [tr!("connections-list")],
+                .div { font_weight: FontWeight::SEMIBOLD; } [$LIST.title()],
                 .div { flex_1; text_color: $cx.theme().muted_foreground; } [$count.to_string()],
                 ("connection-reload", IconName::RefreshCw,
                     @if (editing) tr!("connections-finish-edit") @else tr!("connections-reload") @end

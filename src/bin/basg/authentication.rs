@@ -1,6 +1,6 @@
 //! Agent-owned authentication UI, shared by the workspace and Agent settings.
 use gpui_kit::component::*;
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use bas::{
     authentication::{Execution, Method},
@@ -26,7 +26,6 @@ pub(crate) struct Completed(pub Status);
 pub(crate) struct Authentication {
     service: Option<check::Service>,
     spec: AgentSpec,
-    settings_path: PathBuf,
     window: AnyWindowHandle,
     methods: Vec<Method>,
     status: Status,
@@ -49,7 +48,6 @@ impl Authentication {
     pub(crate) fn new(
         spec: AgentSpec,
         status: Status,
-        settings_path: PathBuf,
         window: AnyWindowHandle,
         service: Option<check::Service>,
     ) -> Self {
@@ -64,7 +62,6 @@ impl Authentication {
         Self {
             service,
             spec,
-            settings_path,
             window,
             methods,
             status,
@@ -96,12 +93,7 @@ impl Authentication {
             input,
             mut events,
             task,
-        } = service::start(
-            service,
-            self.spec.clone(),
-            method,
-            self.settings_path.clone(),
-        );
+        } = service::start(service, self.spec.clone(), method);
         self.generation += 1;
         let generation = self.generation;
         self._terminal.take();
@@ -143,10 +135,7 @@ impl Authentication {
         use service::Event;
         match event {
             Err(error) => {
-                self.input = None;
-                self.forms.clear();
-                self._subscriptions.clear();
-                self._terminal.take();
+                self.clear_interaction();
                 self.message = error.presentation();
                 self.status = Status::Failed(self.message.clone());
                 cx.emit(Completed(self.status.clone()));
@@ -154,17 +143,13 @@ impl Authentication {
             Ok(event) => match event {
                 Event::Progress(message) => self.message = message,
                 Event::Check(status) => {
-                    self.input = None;
-                    self.forms.clear();
-                    self._subscriptions.clear();
-                    self._terminal.take();
+                    self.clear_interaction();
                     self.status = status;
                     if let Status::AuthenticationRequired { methods, .. } = &self.status {
                         self.methods = methods.clone();
                     }
                     if self.status.connected() {
                         self.message = tr!("auth-complete").into();
-                        self.forms.clear();
                     } else {
                         self.message = match &self.status {
                             Status::Failed(message) | Status::Missing(message) => message.clone(),
@@ -277,13 +262,18 @@ impl Authentication {
         cx.notify();
     }
 
-    fn cancel(&mut self, cx: &mut Context<Self>) {
-        self.generation += 1;
-        self._task.take();
-        self._terminal.take();
+    /// Release interaction state without dropping the task delivering the final status.
+    fn clear_interaction(&mut self) {
         self.input = None;
         self.forms.clear();
         self._subscriptions.clear();
+        self._terminal.take();
+    }
+
+    fn cancel(&mut self, cx: &mut Context<Self>) {
+        self.generation += 1;
+        self._task.take();
+        self.clear_interaction();
         self.status = Status::AuthenticationRequired {
             program: String::new(),
             methods: self.methods.clone(),
