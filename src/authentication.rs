@@ -49,7 +49,7 @@ pub struct Terminal {
 pub enum Arguments {
     /// Standard ACP: append to the complete configured invocation.
     Append,
-    /// Verified legacy application descriptor: retain the launcher and replace application arguments.
+    /// Legacy `_meta.type = "terminal"`: retain the trusted launcher and replace application arguments.
     ReplaceApplication,
     /// Complete legacy command descriptor: its args include the complete invocation.
     ReplaceInvocation,

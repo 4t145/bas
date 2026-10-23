@@ -111,7 +111,63 @@ impl Field {
     /// Returns an error for an incorrect type, invalid enum selection, or a value
     /// outside the declared constraints.
     pub fn validate(&self, value: &Value) -> Result<(), Error> {
-        validate_field(self, value).map_err(|reason| response(format!("{}：{reason}", self.title)))
+        self.validate_value(value)
+            .map_err(|reason| response(format!("{}：{reason}", self.title)))
+    }
+
+    /// # Errors
+    /// Returns a field-local reason for invalid schema, type, selection, or constraints.
+    fn validate_value(&self, value: &Value) -> Result<(), String> {
+        let schema = self
+            .raw
+            .as_object()
+            .ok_or_else(|| "字段 schema 无效".to_owned())?;
+        match &self.kind {
+            Kind::String | Kind::Enum { .. } => {
+                let value = value.as_str().ok_or_else(|| "请输入文本".to_owned())?;
+                validate_string(schema, value)?;
+                if let Kind::Enum { options } = &self.kind
+                    && !options.iter().any(|choice| choice.value == value)
+                {
+                    return Err("请选择已提供的选项".into());
+                }
+            }
+            Kind::Number => {
+                let value = value.as_f64().ok_or_else(|| "请输入数字".to_owned())?;
+                validate_number(schema, value)?;
+            }
+            Kind::Integer => {
+                let value = value.as_i64().ok_or_else(|| "请输入整数".to_owned())?;
+                if schema
+                    .get("minimum")
+                    .and_then(Value::as_i64)
+                    .is_some_and(|min| value < min)
+                    || schema
+                        .get("maximum")
+                        .and_then(Value::as_i64)
+                        .is_some_and(|max| value > max)
+                {
+                    return Err("数值超出允许范围".into());
+                }
+            }
+            Kind::Boolean if !value.is_boolean() => return Err("请选择开关状态".into()),
+            Kind::Boolean => {}
+            Kind::MultiSelect { options } => {
+                let values = value
+                    .as_array()
+                    .ok_or_else(|| "请选择多个选项".to_owned())?;
+                let mut unique = BTreeSet::new();
+                for value in values {
+                    let value = value.as_str().ok_or_else(|| "选项必须是文本".to_owned())?;
+                    if !options.iter().any(|choice| choice.value == value) || !unique.insert(value)
+                    {
+                        return Err("请选择互不重复的已提供选项".into());
+                    }
+                }
+                validate_count(schema, "minItems", "maxItems", values.len() as u64)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -294,8 +350,6 @@ fn parse_field(name: &str, raw: &Value, required: bool) -> Result<Field, Error> 
                     "oneOf",
                 ],
             )?;
-            unsigned_bound(schema, "minLength")?;
-            unsigned_bound(schema, "maxLength")?;
             ordered_unsigned(schema, "minLength", "maxLength")?;
             if let Some(pattern) = optional_string(schema, "pattern")? {
                 Regex::new(pattern)
@@ -338,8 +392,6 @@ fn parse_field(name: &str, raw: &Value, required: bool) -> Result<Field, Error> 
             {
                 return Err(elicitation("uniqueItems 必须是布尔值"));
             }
-            unsigned_bound(schema, "minItems")?;
-            unsigned_bound(schema, "maxItems")?;
             ordered_unsigned(schema, "minItems", "maxItems")?;
             let items = schema
                 .get("items")
@@ -514,58 +566,6 @@ fn applicable_constraints(schema: &Map<String, Value>, supported: &[&str]) -> Re
         .find(|key| schema.contains_key(**key) && !supported.contains(key))
     {
         return Err(elicitation(format!("此字段类型暂不支持约束 {key}")));
-    }
-    Ok(())
-}
-
-fn validate_field(field: &Field, value: &Value) -> Result<(), String> {
-    let schema = field
-        .raw
-        .as_object()
-        .ok_or_else(|| "字段 schema 无效".to_owned())?;
-    match &field.kind {
-        Kind::String | Kind::Enum { .. } => {
-            let value = value.as_str().ok_or_else(|| "请输入文本".to_owned())?;
-            validate_string(schema, value)?;
-            if let Kind::Enum { options } = &field.kind
-                && !options.iter().any(|choice| choice.value == value)
-            {
-                return Err("请选择已提供的选项".into());
-            }
-        }
-        Kind::Number => {
-            let value = value.as_f64().ok_or_else(|| "请输入数字".to_owned())?;
-            validate_number(schema, value)?;
-        }
-        Kind::Integer => {
-            let value = value.as_i64().ok_or_else(|| "请输入整数".to_owned())?;
-            if schema
-                .get("minimum")
-                .and_then(Value::as_i64)
-                .is_some_and(|min| value < min)
-                || schema
-                    .get("maximum")
-                    .and_then(Value::as_i64)
-                    .is_some_and(|max| value > max)
-            {
-                return Err("数值超出允许范围".into());
-            }
-        }
-        Kind::Boolean if !value.is_boolean() => return Err("请选择开关状态".into()),
-        Kind::Boolean => {}
-        Kind::MultiSelect { options } => {
-            let values = value
-                .as_array()
-                .ok_or_else(|| "请选择多个选项".to_owned())?;
-            let mut unique = BTreeSet::new();
-            for value in values {
-                let value = value.as_str().ok_or_else(|| "选项必须是文本".to_owned())?;
-                if !options.iter().any(|choice| choice.value == value) || !unique.insert(value) {
-                    return Err("请选择互不重复的已提供选项".into());
-                }
-            }
-            validate_count(schema, "minItems", "maxItems", values.len() as u64)?;
-        }
     }
     Ok(())
 }

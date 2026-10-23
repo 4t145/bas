@@ -64,10 +64,28 @@ impl LaunchBoundary {
 
     fn matches(&self, spec: &AgentSpec) -> bool {
         spec.command().is_some_and(|command| {
-            let mut args = self.bootstrap_args.clone();
-            args.extend(self.application_args.clone());
-            command.program == self.program && command.args == args
+            command.program == self.program
+                && command
+                    .args
+                    .iter()
+                    .eq(self.bootstrap_args.iter().chain(&self.application_args))
         })
+    }
+
+    /// # Errors
+    /// Rejects edited or inconsistent installation boundaries.
+    fn checked(record: &Record, spec: &AgentSpec) -> Result<Self, Error> {
+        let boundary = Self::from_record(record)
+            .filter(|boundary| boundary.matches(spec))
+            .ok_or(Error::UnknownBoundary)?;
+        if record
+            .launch
+            .as_ref()
+            .is_some_and(|stored| stored != &boundary)
+        {
+            return Err(Error::UnknownBoundary);
+        }
+        Ok(boundary)
     }
 }
 
@@ -121,7 +139,7 @@ fn build(
         Arguments::Append => command.args.clone(),
         Arguments::ReplaceApplication => {
             if let Some(record) = record {
-                boundary(record, spec)?.bootstrap_args
+                LaunchBoundary::checked(record, spec)?.bootstrap_args
             } else {
                 return Err(Error::UnknownBoundary.into());
             }
@@ -129,7 +147,7 @@ fn build(
         Arguments::ReplaceInvocation => {
             let declared = terminal.command.as_deref().ok_or(Error::CommandMismatch)?;
             if let Some(record) = record {
-                let boundary = boundary(record, spec)?;
+                let boundary = LaunchBoundary::checked(record, spec)?;
                 if same_application(declared, program, &spec.env) {
                     if !terminal.args.starts_with(&boundary.bootstrap_args) {
                         return Err(Error::CommandMismatch.into());
@@ -163,22 +181,6 @@ fn build(
         args,
         env,
     })
-}
-
-/// # Errors
-/// Rejects edited or inconsistent installation boundaries.
-fn boundary(record: &Record, spec: &AgentSpec) -> Result<LaunchBoundary, Error> {
-    let boundary = LaunchBoundary::from_record(record)
-        .filter(|boundary| boundary.matches(spec))
-        .ok_or(Error::UnknownBoundary)?;
-    if record
-        .launch
-        .as_ref()
-        .is_some_and(|stored| stored != &boundary)
-    {
-        return Err(Error::UnknownBoundary);
-    }
-    Ok(boundary)
 }
 
 fn same_application(declared: &str, application: &Path, env: &BTreeMap<String, String>) -> bool {

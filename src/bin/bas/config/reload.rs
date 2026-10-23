@@ -78,8 +78,7 @@ impl CatalogSource {
             }
             None => {}
         }
-        bas::config::validate_registrations(&daemon.agents)?;
-        daemon.acp.validate(&daemon.agents)?;
+        daemon.validate()?;
         Ok(daemon)
     }
 

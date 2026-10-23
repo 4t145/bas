@@ -36,7 +36,7 @@ pub fn methods(initialization: &Value, error: Option<&Value>) -> Result<Vec<Meth
     };
     let mut methods = active
         .iter()
-        .map(|raw| normalize(raw, &source, initial, initialization))
+        .map(|raw| normalize(raw, &source, initial))
         .collect::<Vec<_>>();
     let mut ids = BTreeSet::new();
     let duplicates = methods
@@ -59,19 +59,14 @@ fn list(raw: Option<&Value>) -> Result<&[Value], Error> {
     }
 }
 
-fn normalize(
-    raw: &Value,
-    source: &Source,
-    initial: &[Value],
-    initialization: &Map<String, Value>,
-) -> Method {
+fn normalize(raw: &Value, source: &Source, initial: &[Value]) -> Method {
     let id = raw.get("id").and_then(Value::as_str).unwrap_or_default();
     let name = raw
         .get("name")
         .and_then(Value::as_str)
         .filter(|name| !name.is_empty())
         .unwrap_or(if id.is_empty() { "认证方式" } else { id });
-    let execution = match descriptor_execution(raw, source, initial, initialization) {
+    let execution = match descriptor_execution(raw, source, initial) {
         Ok(execution) => execution,
         Err(reason) => unsupported(reason),
     };
@@ -92,7 +87,6 @@ fn descriptor_execution(
     raw: &Value,
     source: &Source,
     initial: &[Value],
-    initialization: &Map<String, Value>,
 ) -> Result<Execution, String> {
     let object = raw
         .as_object()
@@ -115,47 +109,32 @@ fn descriptor_execution(
         }
         Some(Value::String(kind)) => Err(format!("暂不支持认证类型 {kind}")),
         Some(_) => Err("认证类型 type 必须是字符串".into()),
-        None => omitted_type(object, initialization),
+        None => omitted_type(object),
     }
 }
 
-fn omitted_type(
-    object: &Map<String, Value>,
-    initialization: &Map<String, Value>,
-) -> Result<Execution, String> {
-    if let Some(legacy) = object
-        .get("_meta")
-        .and_then(|meta| meta.get("terminal-auth"))
-    {
-        return legacy_terminal(legacy).map(Execution::Terminal);
-    }
+/// # Errors
+/// Rejects unsupported or malformed legacy execution descriptors.
+fn omitted_type(object: &Map<String, Value>) -> Result<Execution, String> {
     let Some(meta) = object.get("_meta").and_then(Value::as_object) else {
         return Ok(Execution::Agent);
     };
-    if meta.get("type").and_then(Value::as_str) != Some("terminal") {
-        return Ok(Execution::Agent);
+    if let Some(legacy) = meta.get("terminal-auth") {
+        return legacy_terminal(legacy).map(Execution::Terminal);
     }
-    // This nonstandard payload is verified against Qwen Code 0.25.0. Its args
-    // target the interactive application, not the existing ACP-mode invocation.
-    // https://github.com/QwenLM/qwen-code/blob/v0.25.0/packages/cli/src/acp-integration/authMethods.ts
-    let info = initialization.get("agentInfo");
-    if info
-        .and_then(|info| info.get("name"))
-        .and_then(Value::as_str)
-        != Some("qwen-code")
-        || info
-            .and_then(|info| info.get("version"))
-            .and_then(Value::as_str)
-            != Some("0.25.0")
-        || object.get("id").and_then(Value::as_str) != Some("openai")
-    {
-        return Err("此旧版终端认证描述尚未验证，请使用 Agent 的配置入口".into());
+    match meta.get("type") {
+        None => Ok(Execution::Agent),
+        Some(Value::String(kind)) if kind == "terminal" => {
+            if meta.contains_key("command") {
+                return Err("应用参数认证描述不能指定 command，请使用完整命令描述".into());
+            }
+            // This dialect describes application args, not a complete invocation.
+            // The daemon must still prove the launch boundary before replacing them.
+            terminal(meta, Arguments::ReplaceApplication, None).map(Execution::Terminal)
+        }
+        Some(Value::String(kind)) => Err(format!("暂不支持旧版认证类型 {kind}")),
+        Some(_) => Err("旧版认证类型 type 必须是字符串".into()),
     }
-    let descriptor = terminal(meta, Arguments::ReplaceApplication, None)?;
-    if descriptor.args != ["--auth-type=openai"] || !descriptor.env.is_empty() {
-        return Err("旧版终端认证参数与已验证的协议描述不一致".into());
-    }
-    Ok(Execution::Terminal(descriptor))
 }
 
 fn matching_legacy(raw: &Value, initial: &[Value]) -> Option<Terminal> {

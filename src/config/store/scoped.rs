@@ -130,15 +130,10 @@ impl Store {
                     .validate()
                     .map_err(|e| invalid(&self.path, e))
             }
-            Scope::Daemon => {
-                validate_registrations(&settings.daemon.agents)
-                    .map_err(|e| invalid(&self.path, e))?;
-                settings
-                    .daemon
-                    .acp
-                    .validate(&settings.daemon.agents)
-                    .map_err(|e| invalid(&self.path, e))
-            }
+            Scope::Daemon => settings
+                .daemon
+                .validate()
+                .map_err(|e| invalid(&self.path, e)),
         }
     }
 

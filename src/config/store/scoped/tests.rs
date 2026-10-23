@@ -201,3 +201,53 @@ fn typed_stores_keep_section_conflicts_and_policy_edits() {
         .expect("merge unrelated policy");
     assert_eq!(first.settings.acp.pool_size, 3);
 }
+
+#[test]
+fn unified_and_daemon_stores_share_validation_order_and_errors() {
+    let directory = tempfile::tempdir().expect("configuration");
+    let path = directory.path().join("settings.json");
+    for (daemon, expected) in [
+        (
+            serde_json::json!({"agents":[],"acp":{"default_agent":"missing"}}),
+            "agents must not be empty",
+        ),
+        (
+            serde_json::json!({
+                "agents":[{"id":"broken","kind":"acp"}],
+                "acp":{"default_agent":"missing"}
+            }),
+            "agent broken requires a command",
+        ),
+        (
+            serde_json::json!({"acp":{"default_agent":"missing"}}),
+            "ACP policy references unknown agent missing",
+        ),
+        (
+            serde_json::json!({"acp":{"default_agent":"embedded"}}),
+            "ACP policy agent embedded must be ACP",
+        ),
+    ] {
+        fs::write(&path, serde_json::json!({"daemon":daemon}).to_string()).expect("settings");
+        for error in [
+            Store::at(path.clone())
+                .load()
+                .expect_err("invalid unified settings"),
+            DaemonStore::at(path.clone())
+                .load()
+                .expect_err("invalid daemon settings"),
+        ] {
+            let Error::Invalid {
+                path: actual,
+                reason,
+            } = error
+            else {
+                panic!("expected domain validation error")
+            };
+            assert_eq!(actual, path);
+            assert_eq!(reason, expected);
+        }
+        FrontendStore::at(path.clone())
+            .load()
+            .expect("frontend does not validate daemon-owned rules");
+    }
+}

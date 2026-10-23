@@ -129,10 +129,7 @@ impl Bas for Service {
                 "The first authentication message must be start",
             ));
         };
-        let expected: AgentSpec =
-            serde_json::from_slice(&start.expected_spec_json).map_err(|_| {
-                Status::invalid_argument("expected_spec_json must contain a saved AgentSpec")
-            })?;
+        let expected = expected_spec(&start.expected_spec_json)?;
         let catalog = self.registry.catalog();
         let spec = catalog
             .spec(&start.agent.clone().into())
@@ -190,7 +187,9 @@ impl Bas for Service {
                 }
                 Ok(pb::AuthenticationEvent {
                     kind: Some(pb::authentication_event::Kind::Check(authentication_check(
-                        result, &program,
+                        result,
+                        &program,
+                        "Agent setup completed; readiness checked",
                     ))),
                 })
             });
@@ -303,10 +302,7 @@ impl Bas for Service {
         request: Request<pb::LogoutAgentRequest>,
     ) -> Result<Response<pb::LogoutAgentResponse>, Status> {
         let request = request.into_inner();
-        let expected: AgentSpec =
-            serde_json::from_slice(&request.expected_spec_json).map_err(|_| {
-                Status::invalid_argument("expected_spec_json must contain a saved AgentSpec")
-            })?;
+        let expected = expected_spec(&request.expected_spec_json)?;
         let catalog = self.registry.catalog();
         let spec = catalog
             .spec(&request.agent.into())
@@ -334,10 +330,7 @@ impl Bas for Service {
         request: Request<pb::AuthenticateAgentRequest>,
     ) -> Result<Response<pb::AuthenticateAgentResponse>, Status> {
         let request = request.into_inner();
-        let expected: AgentSpec =
-            serde_json::from_slice(&request.expected_spec_json).map_err(|_| {
-                Status::invalid_argument("expected_spec_json must contain a saved AgentSpec")
-            })?;
+        let expected = expected_spec(&request.expected_spec_json)?;
         let catalog = self.registry.catalog();
         let spec = catalog
             .spec(&request.agent.into())
@@ -374,24 +367,12 @@ impl Bas for Service {
                 "Agent catalog changed during authentication; retry",
             ));
         }
-        let (status, initialized, authentication_error) = match result {
-            crate::agent::acp::CheckResult::Connected(initialized) => {
-                (pb::AgentCheckStatus::Connected, initialized, None)
-            }
-            crate::agent::acp::CheckResult::AuthenticationRequired(initialized, error) => (
-                pb::AgentCheckStatus::AuthenticationRequired,
-                initialized,
-                Some((&error).into()),
-            ),
-        };
         Ok(Response::new(pb::AuthenticateAgentResponse {
-            check: Some(pb::CheckAgentResponse {
-                status: status.into(),
-                message: "Authentication flow completed; session readiness checked".into(),
-                resolved_program: program.to_string_lossy().into_owned(),
-                initialization: Some((&initialized).into()),
-                authentication_error,
-            }),
+            check: Some(authentication_check(
+                result,
+                &program,
+                "Authentication flow completed; session readiness checked",
+            )),
         }))
     }
 
@@ -424,10 +405,7 @@ impl Bas for Service {
         use crate::agent::{Kind, acp};
         use pb::AgentCheckStatus as Check;
         let request = request.into_inner();
-        let expected: AgentSpec =
-            serde_json::from_slice(&request.expected_spec_json).map_err(|_| {
-                Status::invalid_argument("expected_spec_json must contain a saved AgentSpec")
-            })?;
+        let expected = expected_spec(&request.expected_spec_json)?;
         let catalog = self.registry.catalog();
         let id = request.agent.into();
         let spec = catalog
@@ -1167,6 +1145,7 @@ fn encode_history_window(
 fn authentication_check(
     result: crate::agent::acp::CheckResult,
     program: &std::path::Path,
+    message: &str,
 ) -> pb::CheckAgentResponse {
     let (status, initialized, authentication_error) = match result {
         crate::agent::acp::CheckResult::Connected(initialized) => {
@@ -1180,11 +1159,18 @@ fn authentication_check(
     };
     pb::CheckAgentResponse {
         status: status.into(),
-        message: "Agent setup completed; readiness checked".into(),
+        message: message.into(),
         resolved_program: program.to_string_lossy().into_owned(),
         initialization: Some((&initialized).into()),
         authentication_error,
     }
+}
+
+/// # Errors
+/// Rejects requests without a serialized saved agent specification.
+fn expected_spec(bytes: &[u8]) -> Result<AgentSpec, Status> {
+    serde_json::from_slice(bytes)
+        .map_err(|_| Status::invalid_argument("expected_spec_json must contain a saved AgentSpec"))
 }
 
 fn submission_response(

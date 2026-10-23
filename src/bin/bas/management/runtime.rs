@@ -232,6 +232,9 @@ pub async fn install(
     let runtime = ensure(client, root, progress).await?;
     let name = registry::pinned_package(&npm.package, &manifest.version)?;
     let mut dependencies = BTreeMap::from([(name.to_owned(), manifest.version.clone())]);
+    // TODO: Remove this bootstrap once pi-acp declares/resolves its Pi npm dependency.
+    // pi-acp 0.0.34 and the registry omit it; latest makes reinstalls time-dependent.
+    // https://github.com/svkozak/pi-acp/blob/b0581c9c1d675e634234674484247008b03d69b4/package.json
     if manifest.id == "pi-acp" {
         let metadata: Package = get_json(
             client,

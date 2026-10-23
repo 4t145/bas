@@ -105,3 +105,95 @@ fn cancellation_ignores_form_values_and_accept_still_requires_conforming_content
     assert!(validate_response(&request, &json!({"action":"accept"})).is_err());
     assert!(validate_response(&request, &json!({"action":"accept","content":null})).is_err());
 }
+
+#[test]
+fn length_and_selection_bounds_share_shape_and_order_validation() {
+    for (property, min, max) in [
+        (json!({"type":"string"}), "minLength", "maxLength"),
+        (
+            json!({"type":"array","items":{"type":"string","enum":["a","b"]}}),
+            "minItems",
+            "maxItems",
+        ),
+    ] {
+        for (minimum, maximum, expected) in [
+            (json!(null), json!(null), None),
+            (json!(0), json!(null), None),
+            (json!(null), json!(2), None),
+            (json!(2), json!(2), None),
+            (json!(3), json!(2), Some(format!("{min} 大于 {max}"))),
+            (
+                json!(-1),
+                json!("invalid"),
+                Some(format!("{min} 必须是非负整数")),
+            ),
+            (
+                json!(null),
+                json!(1.5),
+                Some(format!("{max} 必须是非负整数")),
+            ),
+            (
+                json!(null),
+                json!("2"),
+                Some(format!("{max} 必须是非负整数")),
+            ),
+        ] {
+            let mut property = property.clone();
+            property[min] = minimum;
+            property[max] = maximum;
+            let result = parse_request(&form(json!({"properties":{"value":property}})));
+            match expected {
+                Some(expected) => {
+                    let Error::Elicitation(reason) = result.expect_err("invalid bounds") else {
+                        panic!("expected schema error")
+                    };
+                    assert_eq!(reason, expected);
+                }
+                None => {
+                    result.expect("valid bounds");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn defaults_and_submitted_fields_use_the_same_validation() {
+    let request = parse_request(&form(json!({"properties":{
+        "name":{"type":"string","title":"Name","minLength":2,"default":"a"},
+        "tools":{"type":"array","title":"Tools","items":{"enum":["rust"]},"default":["rust","rust"]},
+        "count":{"type":"integer","default":2}
+    }})))
+    .expect("invalid defaults do not invalidate the schema");
+    let Mode::Form(form) = &request.mode else {
+        panic!("form expected")
+    };
+    assert_eq!(
+        form.defaults(),
+        json!({"count":2}).as_object().expect("object").clone()
+    );
+    for (name, value, expected) in [
+        ("name", json!("a"), "Name：长度或选择数量超出允许范围"),
+        (
+            "tools",
+            json!(["rust", "rust"]),
+            "Tools：请选择互不重复的已提供选项",
+        ),
+    ] {
+        let field = form
+            .fields
+            .iter()
+            .find(|field| field.name == name)
+            .expect("field");
+        let Error::Response(reason) = field.validate(&value).expect_err("invalid field") else {
+            panic!("expected response error")
+        };
+        assert_eq!(reason, expected);
+        let mut content = Map::new();
+        content.insert(name.into(), value);
+        let Error::Response(reason) = form.validate(&content).expect_err("invalid form") else {
+            panic!("expected response error")
+        };
+        assert_eq!(reason, expected);
+    }
+}

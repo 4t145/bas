@@ -37,6 +37,17 @@ pub struct Daemon {
     pub agents: Vec<AgentRegistration>,
     pub acp: AcpLifecycle,
 }
+impl Daemon {
+    /// Validates registrations and their ACP policy without reading installations.
+    ///
+    /// # Errors
+    /// Rejects invalid registrations before checking policy references and reserves.
+    pub fn validate(&self) -> Result<(), RegistrationError> {
+        validate_registrations(&self.agents)?;
+        self.acp.validate(&self.agents)?;
+        Ok(())
+    }
+}
 impl Default for Daemon {
     fn default() -> Self {
         Self {

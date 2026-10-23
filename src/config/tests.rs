@@ -96,3 +96,28 @@ fn sections_merge_and_conflict() {
         Err(Error::Conflict { .. })
     ));
 }
+
+#[test]
+fn daemon_validation_does_not_resolve_managed_installations() {
+    let directory = tempfile::tempdir().expect("installation parent");
+    let path = directory.path().join(INSTALLATION_FILE);
+    let daemon = Daemon {
+        agents: vec![AgentRegistration::Managed(ManagedAgent {
+            id: "managed".into(),
+            installation: InstallationRef::from_bytes(path.clone(), b"not read by validation")
+                .expect("valid reference shape"),
+        })],
+        acp: AcpLifecycle {
+            default_agent: Some("managed".into()),
+            ..AcpLifecycle::default()
+        },
+    };
+    daemon
+        .validate()
+        .expect("missing installation does not block settings validation");
+    assert!(!path.exists());
+    assert!(
+        daemon.agents[0].resolve().is_err(),
+        "resolution still requires the manifest"
+    );
+}

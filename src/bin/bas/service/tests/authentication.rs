@@ -123,6 +123,151 @@ async fn grpc_interactive_authentication_routes_a_form_and_final_check() {
 }
 
 #[tokio::test]
+async fn unary_and_interactive_authentication_preserve_readiness_details() {
+    for (mode, status) in [
+        ("agent_auth", pb::AgentCheckStatus::Connected),
+        (
+            "agent_auth_still_required",
+            pb::AgentCheckStatus::AuthenticationRequired,
+        ),
+    ] {
+        let directory = tempfile::tempdir().expect("fixture directory");
+        let mut spec = spec(&directory);
+        spec.env.insert("BAS_FIXTURE_MODE".into(), mode.into());
+        let (registry, mut client, server) = server(spec.clone()).await;
+        let Some(pb::authentication_input::Kind::Start(request)) = start(&spec).kind else {
+            panic!("start request");
+        };
+        let unary =
+            tokio::time::timeout(Duration::from_secs(5), client.authenticate_agent(request))
+                .await
+                .expect("unary authentication deadline")
+                .expect("unary authentication")
+                .into_inner()
+                .check
+                .expect("unary check");
+
+        let (controls, input) = tokio::sync::mpsc::channel(8);
+        controls.send(start(&spec)).await.expect("start");
+        let mut output = client
+            .authenticate_agent_interactive(ReceiverStream::new(input))
+            .await
+            .expect("interactive RPC")
+            .into_inner();
+        let event = tokio::time::timeout(Duration::from_secs(5), output.message())
+            .await
+            .expect("interactive authentication deadline")
+            .expect("RPC event")
+            .expect("check");
+        let Some(pb::authentication_event::Kind::Check(interactive)) = event.kind else {
+            panic!("expected check");
+        };
+        assert_eq!(unary.status(), status);
+        assert_eq!(interactive.status(), status);
+        assert_eq!(
+            unary.message,
+            "Authentication flow completed; session readiness checked"
+        );
+        assert_eq!(
+            interactive.message,
+            "Agent setup completed; readiness checked"
+        );
+        assert!(!unary.resolved_program.is_empty());
+        assert_eq!(unary.resolved_program, interactive.resolved_program);
+        assert!(unary.initialization.is_some());
+        assert_eq!(unary.initialization, interactive.initialization);
+        assert_eq!(
+            unary.authentication_error.is_some(),
+            status == pb::AgentCheckStatus::AuthenticationRequired
+        );
+        assert_eq!(unary.authentication_error, interactive.authentication_error);
+        assert!(registry.list().await.is_empty());
+        assert!(!directory.path().join("pid.prompt").exists());
+        drop(output);
+        drop(controls);
+        registry.shutdown().await;
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn agent_operations_reject_invalid_or_stale_expected_specs_before_launch() {
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let spec = spec(&directory);
+    let (registry, mut client, server) = server(spec.clone()).await;
+    let mut stale = spec.clone();
+    stale.env.insert("CHANGED".into(), "value".into());
+    for (bytes, code, message) in [
+        (
+            b"not-json".to_vec(),
+            tonic::Code::InvalidArgument,
+            "expected_spec_json must contain a saved AgentSpec",
+        ),
+        (
+            b"null".to_vec(),
+            tonic::Code::InvalidArgument,
+            "expected_spec_json must contain a saved AgentSpec",
+        ),
+        (
+            serde_json::to_vec(&stale).expect("stale spec"),
+            tonic::Code::FailedPrecondition,
+            "Agent configuration changed; retry",
+        ),
+    ] {
+        let error = client
+            .check_agent(pb::CheckAgentRequest {
+                agent: spec.id.to_string(),
+                expected_spec_json: bytes.clone(),
+                connect: true,
+            })
+            .await
+            .expect_err("check rejects invalid or stale spec");
+        assert_eq!(error.code(), code);
+        assert_eq!(
+            error.message(),
+            if code == tonic::Code::FailedPrecondition {
+                "Agent configuration changed; save and retry"
+            } else {
+                message
+            }
+        );
+        let error = client
+            .logout_agent(pb::LogoutAgentRequest {
+                agent: spec.id.to_string(),
+                expected_spec_json: bytes.clone(),
+            })
+            .await
+            .expect_err("logout rejects invalid or stale spec");
+        assert_eq!(error.code(), code);
+        assert_eq!(error.message(), message);
+        let request = pb::AuthenticateAgentRequest {
+            agent: spec.id.to_string(),
+            expected_spec_json: bytes,
+            method_id: "login".into(),
+            expected_method_json: Vec::new(),
+        };
+        let error = client
+            .authenticate_agent(request.clone())
+            .await
+            .expect_err("authentication rejects invalid or stale spec");
+        assert_eq!(error.code(), code);
+        assert_eq!(error.message(), message);
+        let error = client
+            .authenticate_agent_interactive(tokio_stream::iter([pb::AuthenticationInput {
+                kind: Some(pb::authentication_input::Kind::Start(request)),
+            }]))
+            .await
+            .expect_err("interactive authentication rejects invalid or stale spec");
+        assert_eq!(error.code(), code);
+        assert_eq!(error.message(), message);
+    }
+    assert!(!directory.path().join("pid").exists());
+    assert!(registry.list().await.is_empty());
+    registry.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
 async fn grpc_authentication_failures_preserve_stages_and_protocol_reasons() {
     for (mode, stage, code, reason, authenticated) in [
         (

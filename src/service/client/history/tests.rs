@@ -43,7 +43,7 @@ fn window(id: SessionId) -> pb::LoadHistoryWindowResponse {
 fn window_preserves_payloads_context_and_snapshot() {
     let id = SessionId::new();
     let wire = window(id);
-    let decoded = decode_window(id, None, wire.clone()).expect("safe window");
+    let decoded = HistoryWindow::decode(id, None, wire.clone()).expect("safe window");
     assert_eq!(
         decoded
             .events
@@ -80,7 +80,7 @@ fn older_window_ends_before_request_not_at_latest_revision() {
     wire.events = events(id, 5..=7);
     wire.context = events(id, [2]);
     wire.before = Some(5);
-    let decoded = decode_window(id, Some(8), wire).expect("older window");
+    let decoded = HistoryWindow::decode(id, Some(8), wire).expect("older window");
     assert_eq!(decoded.cursor, 10);
     assert_eq!(decoded.events.last().expect("event").cursor.raw(), 7);
 }
@@ -128,7 +128,7 @@ fn malformed_windows_are_rejected() {
     cases.push(wire);
     for wire in cases {
         assert_eq!(
-            decode_window(id, None, wire)
+            HistoryWindow::decode(id, None, wire)
                 .expect_err("invalid response")
                 .code(),
             tonic::Code::DataLoss
@@ -237,7 +237,7 @@ fn overview_validates_identity_order_bounds_and_preview_size() {
             })
             .collect(),
     };
-    let overview = decode_overview(id, original.clone()).expect("complete catalog");
+    let overview = HistoryOverview::decode(id, original.clone()).expect("complete catalog");
     assert_eq!(overview.entries.len(), 3);
     assert_eq!(overview.entries[0].cursor, 2);
     assert_eq!(overview.entries[0].timestamp_millis, 1234);
@@ -271,7 +271,7 @@ fn overview_validates_identity_order_bounds_and_preview_size() {
     cases.push(wire);
     for wire in cases {
         assert_eq!(
-            decode_overview(id, wire)
+            HistoryOverview::decode(id, wire)
                 .expect_err("invalid overview")
                 .code(),
             tonic::Code::DataLoss
@@ -290,7 +290,7 @@ fn directly_addressed_windows_validate_containment_and_forward_boundary() {
         window: Some(raw),
         after: Some(8),
     };
-    let location = decode_location(id, 6, wire.clone()).expect("containing turn");
+    let location = HistoryLocation::decode(id, 6, wire.clone()).expect("containing turn");
     assert_eq!(location.window.events.len(), 3);
     assert_eq!(location.window.cursor, 10);
     assert_eq!(location.after, Some(8));
@@ -301,7 +301,7 @@ fn directly_addressed_windows_validate_containment_and_forward_boundary() {
     );
     for cursor in [0, 4, 8, 11] {
         assert_eq!(
-            decode_location(id, cursor, wire.clone())
+            HistoryLocation::decode(id, cursor, wire.clone())
                 .expect_err("not contained")
                 .code(),
             tonic::Code::DataLoss
@@ -311,7 +311,7 @@ fn directly_addressed_windows_validate_containment_and_forward_boundary() {
         let mut invalid = wire.clone();
         invalid.after = after;
         assert_eq!(
-            decode_location(id, 6, invalid)
+            HistoryLocation::decode(id, 6, invalid)
                 .expect_err("bad next boundary")
                 .code(),
             tonic::Code::DataLoss
@@ -319,9 +319,9 @@ fn directly_addressed_windows_validate_containment_and_forward_boundary() {
     }
     let mut invalid = wire.clone();
     invalid.window.as_mut().expect("window").before = None;
-    assert!(decode_location(id, 6, invalid).is_err());
+    assert!(HistoryLocation::decode(id, 6, invalid).is_err());
     assert!(
-        decode_location(
+        HistoryLocation::decode(
             id,
             6,
             pb::LoadHistoryWindowAtResponse {
@@ -332,7 +332,7 @@ fn directly_addressed_windows_validate_containment_and_forward_boundary() {
         .is_err()
     );
     assert!(
-        decode_location(
+        HistoryLocation::decode(
             id,
             9,
             pb::LoadHistoryWindowAtResponse {

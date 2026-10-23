@@ -69,7 +69,7 @@ impl Client {
         .await
         .map_err(|_| deadline())??
         .into_inner();
-        decode_overview(session, response)
+        HistoryOverview::decode(session, response)
     }
 
     /// Loads the complete logical page containing `cursor` directly.
@@ -99,7 +99,7 @@ impl Client {
         .await
         .map_err(|_| deadline())??
         .into_inner();
-        decode_location(session, cursor, response)
+        HistoryLocation::decode(session, cursor, response)
     }
 
     /// Loads `limit` complete user turns, newest first in chronological order.
@@ -138,7 +138,7 @@ impl Client {
         let rpc_ms = started.elapsed().as_millis();
         let protobuf_bytes = response.encoded_len();
         let decoding = Instant::now();
-        let window = decode_window(session, before, response)?;
+        let window = HistoryWindow::decode(session, before, response)?;
         tracing::debug!(
             %session, ?before, requested_turns = limit,
             events = window.events.len(), protobuf_bytes, rpc_ms,
@@ -153,78 +153,83 @@ fn deadline() -> Status {
     Status::deadline_exceeded("history RPC timed out")
 }
 
-fn decode_overview(
-    id: SessionId,
-    response: pb::LoadHistoryOverviewResponse,
-) -> Result<HistoryOverview, Status> {
-    if response.session.parse::<SessionId>().ok() != Some(id) {
-        return Err(Status::data_loss(
-            "history overview belongs to another session",
-        ));
-    }
-    let mut previous = 0;
-    let mut entries = Vec::with_capacity(response.entries.len());
-    for entry in response.entries {
-        if entry.cursor <= previous
-            || entry.cursor > response.cursor
-            || entry.timestamp_millis < 0
-            || entry.preview.chars().count() > crate::model::history::PROMPT_PREVIEW_CHARS
-        {
-            return Err(Status::data_loss("invalid history overview entry"));
+impl HistoryOverview {
+    /// # Errors
+    /// Rejects foreign sessions, unordered cursors, and invalid overview entries.
+    fn decode(id: SessionId, response: pb::LoadHistoryOverviewResponse) -> Result<Self, Status> {
+        if response.session.parse::<SessionId>().ok() != Some(id) {
+            return Err(Status::data_loss(
+                "history overview belongs to another session",
+            ));
         }
-        previous = entry.cursor;
-        entries.push(HistoryOverviewEntry {
-            cursor: entry.cursor,
-            timestamp_millis: entry.timestamp_millis,
-            preview: entry.preview,
-        });
+        let mut previous = 0;
+        let mut entries = Vec::with_capacity(response.entries.len());
+        for entry in response.entries {
+            if entry.cursor <= previous
+                || entry.cursor > response.cursor
+                || entry.timestamp_millis < 0
+                || entry.preview.chars().count() > crate::model::history::PROMPT_PREVIEW_CHARS
+            {
+                return Err(Status::data_loss("invalid history overview entry"));
+            }
+            previous = entry.cursor;
+            entries.push(HistoryOverviewEntry {
+                cursor: entry.cursor,
+                timestamp_millis: entry.timestamp_millis,
+                preview: entry.preview,
+            });
+        }
+        Ok(Self {
+            session: id,
+            cursor: response.cursor,
+            entries,
+        })
     }
-    Ok(HistoryOverview {
-        session: id,
-        cursor: response.cursor,
-        entries,
-    })
 }
 
-fn decode_location(
-    id: SessionId,
-    requested: u64,
-    response: pb::LoadHistoryWindowAtResponse,
-) -> Result<HistoryLocation, Status> {
-    let raw = response
-        .window
-        .ok_or_else(|| Status::data_loss("missing history window"))?;
-    if response
-        .after
-        .is_some_and(|after| after <= requested || after > raw.cursor)
-    {
-        return Err(Status::data_loss("invalid next history page cursor"));
-    }
-    let window = decode_window(id, response.after, raw)?;
-    if requested == 0
-        || window
-            .events
-            .first()
-            .is_none_or(|event| event.cursor.raw() > requested)
-        || window
-            .events
-            .last()
-            .is_none_or(|event| event.cursor.raw() < requested)
-        || window.before
-            != window
+impl HistoryLocation {
+    /// # Errors
+    /// Rejects malformed windows or navigation bounds that exclude the requested turn.
+    fn decode(
+        id: SessionId,
+        requested: u64,
+        response: pb::LoadHistoryWindowAtResponse,
+    ) -> Result<Self, Status> {
+        let raw = response
+            .window
+            .ok_or_else(|| Status::data_loss("missing history window"))?;
+        if response
+            .after
+            .is_some_and(|after| after <= requested || after > raw.cursor)
+        {
+            return Err(Status::data_loss("invalid next history page cursor"));
+        }
+        let window = HistoryWindow::decode(id, response.after, raw)?;
+        if requested == 0
+            || window
                 .events
                 .first()
-                .filter(|event| event.cursor.raw() > 1)
-                .map(|event| event.cursor.raw())
-    {
-        return Err(Status::data_loss(
-            "history window does not contain requested cursor",
-        ));
+                .is_none_or(|event| event.cursor.raw() > requested)
+            || window
+                .events
+                .last()
+                .is_none_or(|event| event.cursor.raw() < requested)
+            || window.before
+                != window
+                    .events
+                    .first()
+                    .filter(|event| event.cursor.raw() > 1)
+                    .map(|event| event.cursor.raw())
+        {
+            return Err(Status::data_loss(
+                "history window does not contain requested cursor",
+            ));
+        }
+        Ok(Self {
+            window,
+            after: response.after,
+        })
     }
-    Ok(HistoryLocation {
-        window,
-        after: response.after,
-    })
 }
 
 fn decode_session(id: SessionId, session: Option<pb::Session>) -> Result<SessionSnapshot, Status> {
@@ -271,51 +276,55 @@ fn decode_events(
         .collect()
 }
 
-fn decode_window(
-    id: SessionId,
-    requested_before: Option<u64>,
-    response: pb::LoadHistoryWindowResponse,
-) -> Result<HistoryWindow, Status> {
-    let session = decode_session(id, response.session)?;
-    if response.cursor != session.meta.revision.raw() {
-        return Err(Status::data_loss("history cursor disagrees with snapshot"));
+impl HistoryWindow {
+    /// # Errors
+    /// Rejects malformed snapshots, events, dependencies, or inconsistent page bounds.
+    fn decode(
+        id: SessionId,
+        requested_before: Option<u64>,
+        response: pb::LoadHistoryWindowResponse,
+    ) -> Result<Self, Status> {
+        let session = decode_session(id, response.session)?;
+        if response.cursor != session.meta.revision.raw() {
+            return Err(Status::data_loss("history cursor disagrees with snapshot"));
+        }
+        let events = decode_events(id, response.events, true)?;
+        let context = decode_events(id, response.context, false)?;
+        let upper = requested_before.map_or(response.cursor, |before| before.saturating_sub(1));
+        if requested_before.is_some_and(|before| before > response.cursor.saturating_add(1))
+            || events
+                .last()
+                .is_some_and(|event| event.cursor.raw() != upper)
+            || (events.is_empty() && upper != 0)
+        {
+            return Err(Status::data_loss(
+                "history window does not end at its requested cursor",
+            ));
+        }
+        if let Some(before) = response.before
+            && (before <= 1
+                || events.first().map(|event| event.cursor.raw()) != Some(before)
+                || requested_before.is_some_and(|requested| before >= requested))
+        {
+            return Err(Status::data_loss(
+                "history returned an invalid older cursor",
+            ));
+        }
+        if context.last().is_some_and(|event| {
+            event.cursor.raw() >= events.first().map_or(0, |event| event.cursor.raw())
+        }) {
+            return Err(Status::data_loss(
+                "history context overlaps the event window",
+            ));
+        }
+        Ok(Self {
+            session,
+            events,
+            context,
+            before: response.before,
+            cursor: response.cursor,
+        })
     }
-    let events = decode_events(id, response.events, true)?;
-    let context = decode_events(id, response.context, false)?;
-    let upper = requested_before.map_or(response.cursor, |before| before.saturating_sub(1));
-    if requested_before.is_some_and(|before| before > response.cursor.saturating_add(1))
-        || events
-            .last()
-            .is_some_and(|event| event.cursor.raw() != upper)
-        || (events.is_empty() && upper != 0)
-    {
-        return Err(Status::data_loss(
-            "history window does not end at its requested cursor",
-        ));
-    }
-    if let Some(before) = response.before
-        && (before <= 1
-            || events.first().map(|event| event.cursor.raw()) != Some(before)
-            || requested_before.is_some_and(|requested| before >= requested))
-    {
-        return Err(Status::data_loss(
-            "history returned an invalid older cursor",
-        ));
-    }
-    if context.last().is_some_and(|event| {
-        event.cursor.raw() >= events.first().map_or(0, |event| event.cursor.raw())
-    }) {
-        return Err(Status::data_loss(
-            "history context overlaps the event window",
-        ));
-    }
-    Ok(HistoryWindow {
-        session,
-        events,
-        context,
-        before: response.before,
-        cursor: response.cursor,
-    })
 }
 
 #[cfg(test)]

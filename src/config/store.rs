@@ -1,7 +1,4 @@
-use super::{
-    AgentRegistration, AgentSpec, Appearance, Frontend, Settings, validate_agents,
-    validate_registrations,
-};
+use super::{AgentRegistration, AgentSpec, Appearance, Frontend, Settings, validate_agents};
 use serde::de::DeserializeOwned;
 use std::{
     fs::{self, OpenOptions},
@@ -323,12 +320,7 @@ fn validate(path: &Path, settings: &Settings) -> Result<(), Error> {
         .appearance
         .validate()
         .map_err(|e| invalid(path, e))?;
-    validate_registrations(&settings.daemon.agents).map_err(|e| invalid(path, e))?;
-    settings
-        .daemon
-        .acp
-        .validate(&settings.daemon.agents)
-        .map_err(|e| invalid(path, e))?;
+    settings.daemon.validate().map_err(|e| invalid(path, e))?;
     settings.frontend.validate().map_err(|e| invalid(path, e))
 }
 fn reject_links(path: &Path) -> Result<(), Error> {
