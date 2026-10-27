@@ -111,7 +111,7 @@ BasG 现可在空闲会话中管理副目录，能力协商后以原 ID 和 cwd 
 | 功能 | 当前差距 | 依据 |
 | --- | --- | --- |
 | Subagent 子会话 | 已声明 v1 subagents，接入父子关联、嵌套路由、事件持久化与工作状态浮层。仍缺独立子会话全文界面、单独取消和真实 Agent 互操作验收；不会把普通工具调用冒充子 Agent。 | [官方提案](https://agentclientprotocol.com/rfds/subagents)、[当前后台任务边界](gui.md#前台交互与后台任务) |
-| 会话分支 `session/fork` | 没有将现有上下文复制为新会话的 RPC 或 GUI 入口。提案用于不污染原对话地尝试其他路线；不能把它解释成已经提供“从任意历史消息位置分叉”。 | [官方提案](https://agentclientprotocol.com/rfds/session-fork)、[当前会话 RPC](../proto/bas/v1/bas.proto#L26-L65) |
+| 会话分支 `session/fork` | 没有将现有上下文复制为新会话的 RPC 或 GUI 入口。提案用于不污染原对话地尝试其他路线；不能把它解释成已经提供“从任意历史消息位置分叉”。 | [官方提案](https://agentclientprotocol.com/rfds/session-fork)、[当前会话 RPC](../crates/client/proto/bas/v1/bas.proto#L26-L65) |
 | 原生 ACP v2 | 握手固定 v1；部分 v2 状态和终端展示处理已实现，但 prompt 插入确认／前台状态生命周期、整条消息 upsert、工具内容 chunk、结构化多文件 diff 和原生终端事件尚未端到端接入。 | [官方迁移说明](https://agentclientprotocol.com/protocol/v2/migration)、[握手](../src/bin/bas/agent/acp.rs#L293-L295)、[已有展示处理](../src/bin/basg/conversation/protocol.rs#L57-L130) |
 | 远程 ACP transport | 当前通过本地子进程 stdio 连接，没有 ACP-over-HTTP／WebSocket。BasG 的 `--server` 是 Bas 的 gRPC 地址，不是远程 ACP Agent 地址。 | [官方提案](https://agentclientprotocol.com/rfds/streamable-http-websocket-transport)、[子进程传输构造](../src/bin/bas/agent/acp/convert.rs#L6-L16) |
 

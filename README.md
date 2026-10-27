@@ -55,7 +55,7 @@ QEMU/NixOS 系统测试目前不在仓库中，后续统一补全。
 
 ```text
 🦀Cargo.toml
-  +--📄proto/bas/v1/bas.proto        gRPC 接口定义（bas.v1.Bas）
+  +--📄crates/client/proto/bas/v1/bas.proto        gRPC 接口定义（bas.v1.Bas）
   +--🦀build.rs                      protoc-bin-vendored + tonic-prost-build 生成代码
   +--🦀src/lib.rs                    公共库：领域模型与客户端协议支持
   |   +--🦀model.rs                  会话生命周期、事件信封与 ACP 类型导出

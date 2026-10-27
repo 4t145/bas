@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{AgentSpec, Settings, Store, agent::Command};
+use crate::config::{AgentSpec, Daemon, agent::Command};
 
 fn agents() -> Vec<AgentRegistration> {
     vec![
@@ -19,10 +19,10 @@ fn omissions_and_roundtrip_match_rust_defaults() {
     assert_eq!(defaults.pool_size, 1);
     assert!(defaults.default_agent.is_none());
     assert!(defaults.pools.is_empty());
-    for json in ["{}", r#"{"daemon":{}}"#, r#"{"daemon":{"acp":{}}}"#] {
+    for json in ["{}", r#"{"acp":{}}"#] {
         assert_eq!(
-            serde_json::from_str::<Settings>(json).expect("settings"),
-            Settings::default()
+            serde_json::from_str::<Daemon>(json).expect("settings"),
+            Daemon::default()
         );
     }
     let policy: AcpLifecycle = serde_json::from_str(
@@ -130,54 +130,4 @@ fn validates_ids_and_worst_case_reserve_without_overflow() {
     assert!(policy.validate(&agents()).is_ok(), "explicit target wins");
     policy.pools.insert("b".into(), usize::MAX);
     assert!(policy.validate(&agents()).is_err(), "overflow is rejected");
-}
-
-#[test]
-fn scoped_saves_preserve_lifecycle_and_missing_managed_installations() {
-    let dir = tempfile::tempdir().expect("settings directory");
-    let path = dir.path().join("settings.json");
-    let mut settings = Settings::default();
-    settings.daemon.agents = agents();
-    settings.daemon.acp = AcpLifecycle {
-        default_agent: Some("a".into()),
-        pool_size: 1,
-        ..Default::default()
-    };
-    settings
-        .daemon
-        .agents
-        .push(AgentRegistration::Managed(crate::config::ManagedAgent {
-            id: "managed".into(),
-            installation: crate::config::InstallationRef {
-                path: dir.path().join(crate::config::INSTALLATION_FILE),
-                sha256: "0".repeat(64),
-            },
-        }));
-    settings.daemon.acp.pools.insert("managed".into(), 1);
-    std::fs::write(&path, serde_json::to_vec(&settings).expect("settings JSON")).expect("write");
-    let store = Store::at(path);
-    let mut document = store
-        .load()
-        .expect("missing installation does not block reading");
-    store
-        .save_appearance(&mut document, Default::default())
-        .expect("appearance save");
-    store
-        .save_frontend(&mut document, Default::default())
-        .expect("frontend save");
-    store
-        .save_agents(&mut document, settings.daemon.agents.clone())
-        .expect("agents save");
-    let original = std::fs::read(store.path()).expect("saved settings");
-    assert!(
-        store
-            .save_agents(&mut document, vec![AgentSpec::embedded().into()])
-            .is_err(),
-        "removing policy targets must not save an invalid combined configuration"
-    );
-    assert_eq!(std::fs::read(store.path()).expect("unchanged"), original);
-    assert_eq!(
-        store.load().expect("reload").settings.daemon.acp,
-        settings.daemon.acp
-    );
 }

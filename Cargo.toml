@@ -5,6 +5,10 @@ edition = "2024"
 description = "Bas — Basic Agent Service"
 license = "MIT"
 
+[workspace]
+members = ["crates/client"]
+resolver = "3"
+
 [lib]
 name = "bas"
 path = "src/lib.rs"
@@ -49,6 +53,7 @@ gui = [
 gui-tests = ["gui", "gpui-kit/test-support"]
 
 [dependencies]
+bas-client = { path = "crates/client", features = ["server"] }
 agent-client-protocol = { version = "=3.3.0", features = ["process", "schemars", "unstable", "unstable_protocol_v2"] }
 anyhow = "1"
 async-trait = "0.1"
@@ -121,10 +126,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 which = "8"
 zbus = { version = "5", default-features = false, features = ["tokio"] }
-
-[build-dependencies]
-protoc-bin-vendored = "3"
-tonic-prost-build = "0.14"
 
 [dev-dependencies]
 # MIT/Apache-2.0; runtime-generated test certificates, never fixture keys.

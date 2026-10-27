@@ -1,13 +1,21 @@
 //! Same-user Unix sockets. The persistent lockfile serializes crash recovery.
 
 use std::{
-    fs::{self, DirBuilder, File, Metadata, OpenOptions, Permissions, TryLockError},
+    fs::{self, DirBuilder, Metadata},
     io,
-    os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt},
     path::{Component, Path, PathBuf},
 };
 
-use nix::{libc, unistd::geteuid};
+#[cfg(feature = "server")]
+use nix::libc;
+use nix::unistd::geteuid;
+#[cfg(feature = "server")]
+use std::{
+    fs::{File, OpenOptions, Permissions, TryLockError},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+};
+#[cfg(feature = "server")]
 use tokio::net::UnixListener;
 
 use crate::service::Target;
@@ -132,12 +140,14 @@ pub(super) async fn connect(target: &Target) -> io::Result<Stream> {
     Ok(stream)
 }
 
+#[cfg(feature = "server")]
 #[derive(Clone, Copy)]
 struct Identity {
     device: u64,
     inode: u64,
 }
 
+#[cfg(feature = "server")]
 impl Identity {
     fn of(metadata: &Metadata) -> Self {
         Self {
@@ -151,6 +161,7 @@ impl Identity {
     }
 }
 
+#[cfg(feature = "server")]
 fn lock_endpoint(path: &Path) -> io::Result<File> {
     let mut name = path.as_os_str().to_owned();
     name.push(".lock");
@@ -184,11 +195,13 @@ fn lock_endpoint(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
+#[cfg(feature = "server")]
 struct SocketGuard {
     path: PathBuf,
     identity: Identity,
 }
 
+#[cfg(feature = "server")]
 impl Drop for SocketGuard {
     fn drop(&mut self) {
         if let Ok(metadata) = fs::symlink_metadata(&self.path)
@@ -200,6 +213,7 @@ impl Drop for SocketGuard {
     }
 }
 
+#[cfg(feature = "server")]
 pub(super) struct Listener {
     listener: UnixListener,
     target: Target,
@@ -208,6 +222,7 @@ pub(super) struct Listener {
     _lock: File,
 }
 
+#[cfg(feature = "server")]
 impl Listener {
     /// Bind a private endpoint, recovering only a verified stale socket.
     ///
@@ -271,5 +286,5 @@ impl Listener {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests;

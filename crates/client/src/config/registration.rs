@@ -1,16 +1,21 @@
-use super::agent::{AgentSpec, Kind, ValidationError, validate_agents};
+#[cfg(feature = "server")]
+use super::agent::Kind;
+use super::agent::{AgentSpec, ValidationError, validate_agents};
 use crate::model::AgentId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
-    fs,
-    io::{self, Read},
+    io,
     path::{Component, PathBuf},
 };
 
+#[cfg(feature = "server")]
+use std::{fs, io::Read};
+
 pub const INSTALLATION_FILE: &str = "bas-installation.json";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+#[cfg(feature = "server")]
 const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -80,6 +85,7 @@ impl AgentRegistration {
 
     /// # Errors
     /// Rejects invalid custom specs and unreadable, changed or invalid installations.
+    #[cfg(feature = "server")]
     pub fn resolve(&self) -> Result<AgentSpec, RegistrationError> {
         match self {
             Self::Custom(spec) => {
@@ -144,6 +150,7 @@ impl InstallationRef {
         Ok(())
     }
 
+    #[cfg(feature = "server")]
     fn io_error(&self, source: io::Error) -> RegistrationError {
         RegistrationError::Io {
             path: self.path.clone(),
@@ -151,6 +158,7 @@ impl InstallationRef {
         }
     }
 
+    #[cfg(feature = "server")]
     fn reject_links(&self) -> Result<(), RegistrationError> {
         for ancestor in self.path.ancestors() {
             let metadata = fs::symlink_metadata(ancestor).map_err(|e| self.io_error(e))?;
@@ -166,6 +174,7 @@ impl InstallationRef {
 
     /// # Errors
     /// Rejects malformed references, links, non-files, oversized or changed bytes and I/O failures.
+    #[cfg(feature = "server")]
     pub fn read(&self) -> Result<Vec<u8>, RegistrationError> {
         self.validate()?;
         self.reject_links()?;
@@ -190,15 +199,18 @@ impl InstallationRef {
 }
 
 // Metadata belongs to the daemon; shared config only interprets the launch contract.
+#[cfg(feature = "server")]
 #[derive(Deserialize)]
 struct LaunchProjection {
     schema_version: u32,
     spec: AgentSpec,
 }
 
+#[cfg(feature = "server")]
 impl ManagedAgent {
     /// # Errors
     /// Rejects missing or changed manifests, unsupported schemas, mismatched IDs and invalid ACP specs.
+    #[cfg(feature = "server")]
     pub fn resolve(&self) -> Result<AgentSpec, RegistrationError> {
         let bytes = self.installation.read()?;
         let manifest: LaunchProjection = serde_json::from_slice(&bytes)?;
@@ -243,10 +255,11 @@ pub fn validate_registrations(agents: &[AgentRegistration]) -> Result<(), Regist
 
 /// # Errors
 /// Rejects invalid registrations or any installation that cannot be resolved safely.
+#[cfg(feature = "server")]
 pub fn resolve_agents(agents: &[AgentRegistration]) -> Result<Vec<AgentSpec>, RegistrationError> {
     validate_registrations(agents)?;
     agents.iter().map(AgentRegistration::resolve).collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests;

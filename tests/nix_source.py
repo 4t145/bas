@@ -104,7 +104,7 @@ class NixSourceTests(unittest.TestCase):
             shutil.copyfile(ROOT / "scripts/nix-source", script)
             kept = [
                 "src/untracked.rs",
-                "src/service/target/tests.rs",
+                "crates/client/src/service/target/tests.rs",
                 "acp-test-agent/Cargo.toml",
                 "acp-test-agent/src/lib.rs",
                 "acp-test-agent/src/target/tests.rs",

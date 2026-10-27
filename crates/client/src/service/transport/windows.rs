@@ -39,7 +39,7 @@ use windows_sys::Win32::{
 
 use crate::service::Target;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -48,6 +48,7 @@ const HANDSHAKE: u8 = 1;
 
 pub(super) enum Stream {
     Client(NamedPipeClient),
+    #[cfg(feature = "server")]
     Server(NamedPipeServer),
 }
 
@@ -59,6 +60,7 @@ impl AsyncRead for Stream {
     ) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Self::Client(pipe) => Pin::new(pipe).poll_read(cx, buf),
+            #[cfg(feature = "server")]
             Self::Server(pipe) => Pin::new(pipe).poll_read(cx, buf),
         }
     }
@@ -72,6 +74,7 @@ impl AsyncWrite for Stream {
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
             Self::Client(pipe) => Pin::new(pipe).poll_write(cx, buf),
+            #[cfg(feature = "server")]
             Self::Server(pipe) => Pin::new(pipe).poll_write(cx, buf),
         }
     }
@@ -79,6 +82,7 @@ impl AsyncWrite for Stream {
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Self::Client(pipe) => Pin::new(pipe).poll_flush(cx),
+            #[cfg(feature = "server")]
             Self::Server(pipe) => Pin::new(pipe).poll_flush(cx),
         }
     }
@@ -86,6 +90,7 @@ impl AsyncWrite for Stream {
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Self::Client(pipe) => Pin::new(pipe).poll_shutdown(cx),
+            #[cfg(feature = "server")]
             Self::Server(pipe) => Pin::new(pipe).poll_shutdown(cx),
         }
     }
@@ -130,6 +135,7 @@ pub(super) async fn connect(target: &Target) -> io::Result<Stream> {
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "named-pipe connection timed out"))?
 }
 
+#[cfg(feature = "server")]
 pub(super) struct Listener {
     target: Target,
     path: String,
@@ -137,6 +143,7 @@ pub(super) struct Listener {
     pending: NamedPipeServer,
 }
 
+#[cfg(feature = "server")]
 impl Listener {
     /// # Errors
     /// Rejects invalid targets, occupied names, and security/pipe creation errors.
@@ -228,6 +235,7 @@ impl Drop for LocalAllocation {
 
 /// # Errors
 /// Returns Windows security descriptor or named-pipe creation errors.
+#[cfg(feature = "server")]
 fn create_pipe(path: &str, user: &str, first: bool) -> io::Result<NamedPipeServer> {
     // Protected DACL: no inherited access, and no Everyone/Administrators ACE.
     // GA includes FILE_CREATE_PIPE_INSTANCE, needed by our subsequent instances.
@@ -416,8 +424,10 @@ fn verify_pipe_owner(pipe: &NamedPipeClient, expected: &str) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "server")]
 struct Impersonation;
 
+#[cfg(feature = "server")]
 impl Drop for Impersonation {
     fn drop(&mut self) {
         // SAFETY: used only on the thread that successfully impersonated, without
@@ -431,6 +441,7 @@ impl Drop for Impersonation {
 
 /// # Errors
 /// Rejects anonymous clients, failed impersonation, and other users' tokens.
+#[cfg(feature = "server")]
 fn verify_client(pipe: &NamedPipeServer, expected: &str) -> io::Result<()> {
     // SAFETY: live pipe with a just-read authentication message.
     // https://learn.microsoft.com/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient

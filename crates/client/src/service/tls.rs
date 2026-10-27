@@ -7,9 +7,10 @@ use std::{fmt, path::PathBuf, str::FromStr, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tonic::transport::{
-    Certificate, Channel, ClientTlsConfig, Endpoint, Identity, ServerTlsConfig,
-};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
+
+#[cfg(feature = "server")]
+use tonic::transport::ServerTlsConfig;
 
 use super::Target;
 
@@ -23,6 +24,7 @@ pub struct ClientTls {
     pub server_name: Option<String>,
 }
 
+#[cfg(feature = "server")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServerTls {
     pub client_ca: PathBuf,
@@ -89,6 +91,7 @@ impl ClientTls {
     }
 }
 
+#[cfg(feature = "server")]
 impl ServerTls {
     /// # Errors
     /// Returns file read errors. Tonic validates the material when configuring

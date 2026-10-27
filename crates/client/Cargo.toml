@@ -1,0 +1,66 @@
+[package]
+name = "bas-client"
+version = "0.1.0"
+edition = "2024"
+description = "BAS protocol models and authenticated RPC clients"
+repository = "https://github.com/4t145/bas"
+license = "MIT"
+publish = false
+
+[lib]
+name = "bas_client"
+path = "src/lib.rs"
+
+[features]
+default = []
+server = []
+test-support = ["server"]
+
+[dependencies]
+agent-client-protocol = { version = "=3.3.0", features = ["process", "schemars", "unstable", "unstable_protocol_v2"] }
+anyhow = "1"
+dirs = "6"
+email_address = { version = "0.2", default-features = false }
+futures = "0.3"
+hyper-util = { version = "0.1", features = ["tokio"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "stream"] }
+regex = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+sha2 = "0.10"
+tempfile = "3"
+prost = "0.14"
+prost-types = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+strum = { version = "0.28", features = ["derive"] }
+thiserror = { version = "2" }
+time = { version = "0.3", features = ["parsing", "macros"] }
+tokio = { version = "1", features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+tokio-stream = { version = "0.1", features = ["net", "sync"] }
+tonic = { version = "0.14", features = ["tls-ring", "gzip"] }
+tonic-prost = "0.14"
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4", "v7"] }
+[build-dependencies]
+protoc-bin-vendored = "3"
+tonic-prost-build = "0.14"
+
+[dev-dependencies]
+rcgen = "=0.13.2"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["fs", "poll", "process", "signal", "term", "user"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_Threading"] }

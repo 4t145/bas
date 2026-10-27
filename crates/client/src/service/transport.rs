@@ -2,16 +2,17 @@
 
 use std::{
     io,
-    net::SocketAddr,
     pin::Pin,
     task::{Context, Poll},
 };
 
 use hyper_util::rt::TokioIo;
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    net::{TcpListener, TcpStream},
-};
+#[cfg(feature = "server")]
+use std::net::SocketAddr;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+#[cfg(feature = "server")]
+use tokio::net::{TcpListener, TcpStream};
+#[cfg(feature = "server")]
 use tonic::transport::server::Connected;
 
 use super::Target;
@@ -27,12 +28,14 @@ use unix as platform;
 use windows as platform;
 
 /// Identity established by the transport, not by RPC metadata.
+#[cfg(feature = "server")]
 #[derive(Clone, Debug)]
 pub struct ConnectionInfo {
     same_user: bool,
     tcp_peer: Option<SocketAddr>,
 }
 
+#[cfg(feature = "server")]
 impl ConnectionInfo {
     /// True only after the local IPC implementation verified the OS user.
     pub fn is_same_user(&self) -> bool {
@@ -46,17 +49,20 @@ impl ConnectionInfo {
 }
 
 /// A bound listener. Owns any local endpoint's lock and cleanup lifecycle.
+#[cfg(feature = "server")]
 pub struct Listener {
     target: Target,
     inner: ListenerKind,
 }
 
+#[cfg(feature = "server")]
 enum ListenerKind {
     Tcp(TcpListener),
     #[cfg(any(unix, windows))]
     Local(platform::Listener),
 }
 
+#[cfg(feature = "server")]
 impl Listener {
     /// Binds one explicitly selected transport; never opens a fallback listener.
     ///
@@ -108,6 +114,7 @@ impl Listener {
                 let (stream, address) = listener.accept().await?;
                 Ok(Connection {
                     io: Stream::Tcp(stream),
+                    #[cfg(feature = "server")]
                     info: ConnectionInfo {
                         same_user: false,
                         tcp_peer: Some(address),
@@ -161,6 +168,7 @@ pub(super) fn connector(
                 let stream = platform::connect(&target).await?;
                 Ok(TokioIo::new(Connection {
                     io: Stream::Local(stream),
+                    #[cfg(feature = "server")]
                     info: ConnectionInfo {
                         same_user: true,
                         tcp_peer: None,
@@ -179,15 +187,18 @@ pub(super) fn connector(
 /// I/O whose connection information cannot be supplied by an RPC caller.
 pub struct Connection {
     io: Stream,
+    #[cfg(feature = "server")]
     info: ConnectionInfo,
 }
 
 enum Stream {
+    #[cfg(feature = "server")]
     Tcp(TcpStream),
     #[cfg(any(unix, windows))]
     Local(platform::Stream),
 }
 
+#[cfg(feature = "server")]
 impl Connected for Connection {
     type ConnectInfo = ConnectionInfo;
 
@@ -203,6 +214,7 @@ impl AsyncRead for Connection {
         buffer: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match &mut self.get_mut().io {
+            #[cfg(feature = "server")]
             Stream::Tcp(stream) => Pin::new(stream).poll_read(cx, buffer),
             #[cfg(any(unix, windows))]
             Stream::Local(stream) => Pin::new(stream).poll_read(cx, buffer),
@@ -217,6 +229,7 @@ impl AsyncWrite for Connection {
         buffer: &[u8],
     ) -> Poll<io::Result<usize>> {
         match &mut self.get_mut().io {
+            #[cfg(feature = "server")]
             Stream::Tcp(stream) => Pin::new(stream).poll_write(cx, buffer),
             #[cfg(any(unix, windows))]
             Stream::Local(stream) => Pin::new(stream).poll_write(cx, buffer),
@@ -225,6 +238,7 @@ impl AsyncWrite for Connection {
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut self.get_mut().io {
+            #[cfg(feature = "server")]
             Stream::Tcp(stream) => Pin::new(stream).poll_flush(cx),
             #[cfg(any(unix, windows))]
             Stream::Local(stream) => Pin::new(stream).poll_flush(cx),
@@ -233,6 +247,7 @@ impl AsyncWrite for Connection {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut self.get_mut().io {
+            #[cfg(feature = "server")]
             Stream::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
             #[cfg(any(unix, windows))]
             Stream::Local(stream) => Pin::new(stream).poll_shutdown(cx),

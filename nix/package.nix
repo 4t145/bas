@@ -38,7 +38,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
       ../build_metadata.rs
       ../build_metadata
       ../src
-      ../proto
+      ../crates
       ../assets
       ../tests
     ];

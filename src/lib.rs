@@ -9,14 +9,5 @@
 //! Backend drivers, session management, runtime configuration, notifications, and the
 //! gRPC service implementation belong to the `bas` binary.
 
-pub mod authentication;
 pub mod config;
-pub mod management;
-pub mod model;
-pub mod service;
-
-/// ACP wire schema used by external agents and persisted session events.
-pub use agent_client_protocol::schema::v1 as acp;
-
-/// ACP v2 presentation types; external-agent connections still negotiate v1.
-pub use agent_client_protocol::schema::v2 as acp_v2;
+pub use bas_client::{acp, acp_v2, authentication, management, model, service};
